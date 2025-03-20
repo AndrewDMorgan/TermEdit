@@ -3,11 +3,9 @@
 
 use tokio::io::{self, AsyncReadExt};
 use vte::{Parser, Perform};
-//use std::io;
 
 use crossterm::terminal::enable_raw_mode;
 
-//use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
 use ratatui::text::Span;
 use ratatui::{
     buffer::Buffer,
@@ -162,7 +160,9 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
                 "if" | "for" | "while" | "in" | "else" |
                     "break" | "loop" | "match" | "return" | "std" |
                     "const" | "static" | "dyn" | "type" | "continue" |
-                    "use" | "mod" | "None" | "Some" | "Ok" | "Err" => TokenType::Keyword,
+                    "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
+                    "async" | "await" | "default" | "derive" | "new" |
+                    "as" => TokenType::Keyword,
                 " " => TokenType::Null,
                 "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
                     "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
@@ -440,6 +440,34 @@ impl CodeTab {
 
         self.cursor.1 - newCursor
     }
+
+    pub fn FindTokenPosRight (&mut self) -> usize {
+        if self.lines[self.cursor.0].is_empty() {  return 0;  }
+
+        self.cursor.1 = std::cmp::min (
+            self.cursor.1,
+            self.lines[self.cursor.0].len()
+        );
+        let mut newCursor = self.cursor.1;
+
+        while newCursor < self.lines[self.cursor.0].len()-1 &&
+            self.lines[self.cursor.0].get(newCursor..newCursor + 1).unwrap_or("") == " "
+        {
+            
+            newCursor += 1;
+        }
+
+        let mut totalLine = String::new();
+        for (_token, name) in &self.lineTokens[self.cursor.0] {
+            if totalLine.len() + name.len() > newCursor {
+                newCursor = totalLine.len() + name.len();
+                break;
+            }
+            totalLine.push_str(name);
+        }
+
+        newCursor - self.cursor.1
+    }
     
     pub fn MoveCursorRightToken (&mut self) {
         let mut totalLine = String::new();
@@ -650,22 +678,23 @@ impl CodeTab {
             )
         );
 
+        let mut newCursor = self.cursor.1;
+        if cursorOffset == 0 {
+            newCursor = self.cursor.1.saturating_sub(numDel);
+        }
+
         self.lines[self.cursor.0]
             .replace_range(
-                self.cursor.1
-                    .saturating_sub(numDel)
-                    .saturating_add(cursorOffset)
+                newCursor
                     ..
                     std::cmp::min(
                         self.cursor.1.saturating_add(cursorOffset),
                         length
                 ),
                 ""
-            );
-        self.cursor = (
-            self.cursor.0,
-            self.cursor.1.saturating_sub(1)
         );
+
+        self.cursor.1 = newCursor;
 
         self.RecalcTokens(self.cursor.0);
 
@@ -1302,6 +1331,22 @@ impl Perform for KeyParser {
             } else if numbers == [3, 3] {
                 self.keyEvents.insert(KeyCode::Delete, true);
                 self.keyModifiers.push(KeyModifiers::Option);
+            } else if numbers == [3, 4] {
+                self.keyEvents.insert(KeyCode::Left, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            } else if numbers == [3, 5] {
+                self.keyEvents.insert(KeyCode::Right, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            } else if numbers == [3, 6] {
+                self.keyEvents.insert(KeyCode::Up, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            } else if numbers == [3, 7] {
+                self.keyEvents.insert(KeyCode::Down, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            } else if numbers == [3, 8] {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Option);
+                self.keyModifiers.push(KeyModifiers::Shift);
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
@@ -1524,23 +1569,50 @@ impl App {
 
                         if keyEvents.ContainsKeyCode(KeyCode::Delete) {
                             let mut numDel = 1;
+                            let mut offset = 0;
 
                             if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
-                                numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
+                                if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosRight();
+                                    offset = numDel;
+                                } else {
+                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
+                                }
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                                offset = numDel;
                             }
 
                             self.codeTabs.tabs[
                                 self.codeTabs.currentTab
-                            ].DelChars(numDel, 0);
+                            ].DelChars(numDel, offset);
                         } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                // checking if it's the true first value or not
+                                let mut indentIndex = 0usize;
+                                let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
+                                for chr in self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].chars() {                                    
+                                    if chr != ' ' {
+                                        break;
+                                    } indentIndex += 1;
+                                }
+
+                                if self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 <= indentIndex {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 = 0;
+                                } else {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 = indentIndex;
+                                }
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 =
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].len();
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1);
                             }
@@ -1552,6 +1624,8 @@ impl App {
                                 tab.JumpCursor( 
                                     tab.scopes.GetNode(&mut jumps).start, 1
                                 );
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 0;
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp();
                             }
@@ -1561,6 +1635,9 @@ impl App {
                                 let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
                                 jumps.reverse();
                                 tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].lines.len() - 1;
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown();
                             }
@@ -1598,278 +1675,6 @@ impl App {
             }
         }
     }
-
-    /*
-    fn HandleEvents(&mut self) -> io::Result<()> {
-        let event = event::read()?;
-
-        /*if let Event::Key(KeyEvent { code, .. }) = event {
-            match code {
-                KeyCode::Esc => {
-                    self.escapeSeq.clear();
-                    self.escapeSeq.push('\x1B'); // Start buffering
-                }
-                KeyCode::Char(c) => {
-                    self.escapeSeq.push(c);
-                    if self.escapeSeq == "\x1B[3;2~" {
-                        println!("Shift+Delete detected!");
-                        self.escapeSeq.clear();
-                    } else if !self.escapeSeq.starts_with("\x1B[") {
-                        self.escapeSeq.clear(); // Reset if it doesn't match
-                    }
-                }
-                _ => {
-                    self.escapeSeq.clear(); // Reset buffer for unrelated keys
-                }
-            }
-        }*/
-
-        match event {//event::read()? {
-            // it's important to check that the event is a key press event as
-            // crossterm also emits key release and repeat events on Windows.
-            Event::Key(key_event) if key_event.kind == KeyEventKind::Press => {
-                self.HandleKeyEvent(key_event)
-            }
-            _ => {}
-        };
-        Ok(())
-    }
-
-    fn HandleKeyEvent(&mut self, key_event: KeyEvent) {
-        /*
-        match key_event.code {
-            KeyCode::Esc => {
-                self.escapeSeq.clear();
-                self.escapeSeq.push('\x1B');
-            }
-            KeyCode::Char(character) => {
-                self.escapeSeq.push(character);
-            },
-            _ => {}
-        }  // \x1B[3;2~*/
-        //println!(" | {} |", self.escapeSeq);
-
-        //let mut validSeq = false;
-        //if self.escapeSeq.contains(&"\x1B[3;2~".to_string()) {  validSeq = true;  }
-
-        /*
-        //println!("Key Event: {:?}", key_event); // Debugging output
-        match key_event.code {
-            KeyCode::Esc => {
-                //println!("Escape key detected! Waiting for additional input...");
-                self.escapeSeq.clear();
-                self.escapeSeq.push('\x1B'); // Store the escape prefix
-            },
-            KeyCode::Char(c) => {
-                //println!("Character detected: '{}'", c);
-                if !self.escapeSeq.is_empty() {
-                    self.escapeSeq.push(c);
-
-                    //println!("Esc Seq: {}", self.escapeSeq);
-                    if self.escapeSeq.trim() == "\x1B[3;2~" {
-                        println!("Shift+Delete detected!");
-                        self.escapeSeq.clear(); // Reset buffer
-                    }
-                }
-            },
-            _ => {
-                self.escapeSeq.clear();
-            },
-        };
-        //println!("Current escape sequence: {:?}", self.escapeSeq);// */
-
-        match key_event.code {
-            KeyCode::Enter if matches!(self.appState, AppState::CommandPrompt) && self.currentCommand.len() > 0 => {
-                if self.currentCommand == "q" {
-                    self.Exit();
-                }
-
-                if self.currentCommand.chars().next().unwrap() == '[' {
-                    // jumping up
-                    if let Some(numberString) = self.currentCommand.get(1..) {
-                        let number = numberString.parse:: <usize>();
-                        if number.is_ok() {
-                            let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                            self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                cursor.saturating_sub(number.unwrap()), 1
-                            );
-                        }
-                    }
-                }
-                if self.currentCommand.chars().next().unwrap() == ']' {
-                    // jumping down
-                    if let Some(numberString) = self.currentCommand.get(1..) {
-                        let number = numberString.parse:: <usize>();
-                        if number.is_ok() {
-                            let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                            self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                cursor.saturating_add(number.unwrap()), 1
-                            );
-                        }
-                    }
-                }
-
-                self.currentCommand = "".to_string();
-            }
-            KeyCode::Left if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
-                } else {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1);
-                }
-            },
-            KeyCode::Right if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
-                } else {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1);
-                }
-            },
-            
-            KeyCode::Left if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    self.codeTabs.MoveTabLeft()
-                } else {
-                    self.codeTabs.TabLeft();
-                }
-            },
-            KeyCode::Right if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    self.codeTabs.MoveTabRight()
-                } else {
-                    self.codeTabs.TabRight();
-                }
-            },
-            
-            KeyCode::Down if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) =>
-                self.fileBrowser.MoveCursorDown(
-                        &self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes,
-                        &self.codeTabs.tabs[self.codeTabs.currentTab].scopes),
-            KeyCode::Up if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) =>
-                self.fileBrowser.MoveCursorUp(),
-
-            KeyCode::Backspace => {
-                if matches!(self.appState, AppState::CommandPrompt) {
-                    if self.currentCommand.len() > 0 {
-                        self.currentCommand.pop();
-                    } else if matches!(self.tabState, TabState::Tabs) {
-                        self.codeTabs.CloseTab();
-                    }
-                } else if matches!(self.tabState, TabState::Code) {
-                    let numDel = 1;
-
-                    /*println!("Key: {}", key_event.modifiers);
-                    if key_event.modifiers.contains(KeyModifiers::ALT) {
-                        numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
-                    }*/  // not working for some reason; option isn't sent when using delete :(
-
-                    self.codeTabs.tabs[
-                        self.codeTabs.currentTab
-                    ].DelChars(numDel, 0);
-                }
-            },
-            KeyCode::Esc => {
-                self.appState = match self.appState {
-                    AppState::Tabs => {
-                        self.tabState = TabState::Files;
-
-                        AppState::CommandPrompt
-                    },
-                    AppState::CommandPrompt => {
-                        if matches!(self.tabState, TabState::Files | TabState::Tabs) {
-                            self.tabState = TabState::Code;
-                        }
-
-                        AppState::Tabs
-                    },
-                }
-            },
-            KeyCode::Enter if matches!(self.appState, AppState::CommandPrompt) && !matches!(self.tabState, TabState::Files) => {
-                self.appState = AppState::Tabs;
-                self.tabState = TabState::Code;
-            },
-            KeyCode::BackTab => {
-                if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].UnIndent();
-                } else if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
-                    self.fileBrowser.fileTab = match self.fileBrowser.fileTab {
-                        FileTabs::Files => FileTabs::Outline,
-                        FileTabs::Outline => FileTabs::Files,
-                    }
-                }
-            },
-            KeyCode::Tab => {
-                if matches!(self.appState, AppState::Tabs) {
-                    // inside the code editor
-                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                        .InsertChars("    ".to_string());
-                } else {
-                    // switching between tabs
-                    self.tabState = match self.tabState {
-                        TabState::Code => TabState::Files,
-                        TabState::Files => TabState::Tabs,
-                        TabState::Tabs => TabState::Code,
-                    }
-                }
-            }
-            KeyCode::Down if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                    let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                    jumps.reverse();
-                    tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
-                } else {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown();
-                }
-            },
-            KeyCode::Up if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {
-                if key_event.modifiers.contains(KeyModifiers::ALT) {
-                    let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                    let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                    jumps.reverse();
-                    tab.JumpCursor( 
-                        tab.scopes.GetNode(&mut jumps).start, 1
-                    );
-                } else {
-                    self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp();
-                }
-            },
-            KeyCode::Enter if matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {
-                /*if key_event.modifiers.contains(KeyModifiers::SUPER) {  // command; alt == option; super == command
-                    if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                        self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakBefore();
-                    } else {
-                        self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakAfter();
-                    }
-                } else */{
-                    self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn();
-                }
-            },
-            KeyCode::Enter if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) && matches!(self.fileBrowser.fileTab, FileTabs::Outline) => {
-                // getting the line number the cursor is one
-                let mut nodePath = self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
-                    self.fileBrowser.outlineCursor].clone();
-                nodePath.reverse();
-                let node = self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
-                        &mut nodePath
-                );
-                let start = node.start;
-                self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(start, 1);
-            },
-            // these are good, i just removed escapeSeq and don't want errors. Keep these when converting to the new handler
-            /*KeyCode::Char(to_insert) if self.escapeSeq.is_empty() && matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) => {// && !validSeq => {
-                self.codeTabs.tabs[self.codeTabs.currentTab]
-                    .InsertChars(to_insert.to_string());
-            }
-            KeyCode::Char(to_insert) if self.escapeSeq.is_empty() && matches!(self.appState, AppState::CommandPrompt) => {// && !validSeq => {
-                self.currentCommand.push(to_insert);
-            }*/
-            _ => {}
-        }
-
-        //if validSeq {  self.escapeSeq.clear();  }
-    }
-    */
 
     fn Exit(&mut self) {
         self.exit = true;
