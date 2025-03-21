@@ -1,7 +1,9 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
-use tokio::io::{self, AsyncReadExt};
+use std::default;
+
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use vte::{Parser, Perform};
 
 use crossterm::terminal::enable_raw_mode;
@@ -64,6 +66,8 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
     // move this to a json file so it can be customized by the user if they so chose to
     let lineBreaks = [
         " ".to_string(),
+        "?".to_string(),
+        "=".to_string(),
         "|".to_string(),
         "#".to_string(),
         ".".to_string(),
@@ -120,12 +124,13 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
     for (index, token) in tokenStrs.iter().enumerate() {
         let emptyString = &"".to_string();
         let nextToken = tokenStrs.get(index + 1).unwrap_or(emptyString).as_str();
+        let prevToken = tokenStrs.get(index.saturating_sub(1)).unwrap_or(emptyString);
         
         let newFlag =
             match token.as_str() {
                 "/" if nextToken == "/" || nextToken == "*" => TokenFlags::Comment,
                 "*" if nextToken == "/" => TokenFlags::Null,
-                "\"" if !matches!(currentFlag, TokenFlags::Comment) => {
+                "\"" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::Char) && prevToken != "\\" => {
                     if matches!(currentFlag, TokenFlags::String) {  TokenFlags::Null}
                     else {  TokenFlags::String}
                 },
@@ -162,7 +167,7 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
                     "const" | "static" | "dyn" | "type" | "continue" |
                     "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
                     "async" | "await" | "default" | "derive" | "new" |
-                    "as" => TokenType::Keyword,
+                    "as" | "?" => TokenType::Keyword,
                 " " => TokenType::Null,
                 "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
                     "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
@@ -170,21 +175,26 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
                     "str" | "Vec" | "bool" | "char" | "Result" |
                     "Option" => TokenType::Primative,
                 "[" | "]" => TokenType::Bracket,
-                "{" | "}" | "|" => TokenType::SquirlyBracket,
                 "(" | ")" => TokenType::Parentheses,
                 "#" => TokenType::Macro,
                 _s if nextToken == "!" => TokenType::Macro,
+                ":" => TokenType::Member,
                 //"" => TokenType::Variable,
                 s if s.chars().next().map_or(false, |c| {
                     c.is_ascii_digit()
                 }) => TokenType::Number,
+                "=" | "-" if nextToken == ">" => TokenType::Keyword,
+                ">" if prevToken == "=" => TokenType::Keyword,
+                ">" if prevToken == "-" => TokenType::Keyword,
                 "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
                 s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
                 s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
-                ">" | "<" | "false" | "true" => TokenType::Logic,
+                ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
+                "=" if nextToken == "=" => TokenType::Logic,
                 "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
                 "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
                 "+" | "-" | "*" | "/" => TokenType::Math,
+                "{" | "}" | "|" => TokenType::SquirlyBracket,
                 "let" | "=" | "mut" => TokenType::Assignment,
                 ";" => TokenType::Endl,
                 "&" => TokenType::Barrow,
@@ -192,8 +202,8 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
                 _s if matches!(flags[index], TokenFlags::Generic) && prevToken == "'" => TokenType::Lifetime,
                 "a" | "b" if prevToken == "'" && (nextToken == "," || nextToken == ">" || nextToken == " ") => TokenType::Lifetime,
                 "\"" | "'" => TokenType::String,
+                "enum" | "pub" | "struct" | "impl" | "self" | "Self" => TokenType::Object,
                 _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-                "enum" | "pub" | "struct" | "impl" | "self" => TokenType::Object,
                 _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
                 _s if prevToken == "." => TokenType::Member,
                 "fn" => TokenType::Function,
@@ -294,14 +304,17 @@ pub fn GenerateScopes (tokenLines: &Vec <Vec <(TokenType, String)>>) -> (ScopeNo
         // track the depth; if odd than based on the type of bracket add scope; if even do nothing (scope opened and closed on the same line)
         // use the same on functions to determin if the scope needs to continue or end on that line
         for (index, (token, name)) in tokens.iter().enumerate() {
-            // checking bracket depth
-            if matches!(token, TokenType::SquirlyBracket) {
+            let (_lastToken, lastName) = {
+                if index == 0 {  &(TokenType::Null, "".to_string())  }
+                else {  &tokens[index - 1]  }
+            };
+            if !(matches!(token, TokenType::Comment) || (lastName == "\"" || lastName == "'") && matches!(token, TokenType::String)) {
+                // checking bracket depth
                 if name == "{" {
                     bracketDepth += 1;
-                } else {
+                } else if name == "}" {
                     bracketDepth -= 1;
                 }
-                continue;
             }
 
             // checking for something to define the name
@@ -309,25 +322,31 @@ pub fn GenerateScopes (tokenLines: &Vec <Vec <(TokenType, String)>>) -> (ScopeNo
                 if !(VALID_NAMES_NEXT.contains(&name.trim()) || VALID_NAMES_TAKE.contains(&name.trim())) {
                     continue;
                 }
-
-                // check bracketdepth here so any overlapping marks are accounted for
-                if bracketDepth < 0 {  // not pushing any jumps bc/ it'll be done later
-                    let mut scopeCopy = currentScope.clone();
-                    scopeCopy.reverse();
-                    rootNode.SetEnd(&mut scopeCopy, lineNumber);
-                    currentScope.pop();
-                }
                 
                 // checking the scope to see if ti continues or ends on the same line
                 let mut brackDepth = 0isize;
                 for (indx, (token, name)) in tokens.iter().enumerate() {
-                    if indx > index && matches!(token, TokenType::SquirlyBracket) {
+                    let (_lastToken, lastName) = {
+                        if indx == 0 {  &(TokenType::Null, "".to_string())  }
+                        else {  &tokens[indx - 1]  }
+                    };
+                    if !(matches!(token, TokenType::Comment) || lastName == "\"" && matches!(token, TokenType::String)) &&
+                        indx > index 
+                    {
                         if name == "{" {
                             brackDepth += 1;
-                        } else {
+                        } else if name == "}" {
                             brackDepth -= 1;
                         }
                     }
+                }
+
+                // check bracketdepth here so any overlapping marks are accounted for
+                if bracketDepth < 0 && brackDepth > 0 {  // not pushing any jumps bc/ it'll be done later
+                    let mut scopeCopy = currentScope.clone();
+                    scopeCopy.reverse();
+                    rootNode.SetEnd(&mut scopeCopy, lineNumber);
+                    currentScope.pop();
                 }
                 
                 // adding the new scope if necessary
@@ -392,12 +411,15 @@ pub struct CodeTab {
     scopes: ScopeNode,
     linearScopes: Vec <Vec <usize>>,
     scrolled: usize,
+    mouseScrolled: isize,
+    mouseScrolledFlt: f64,
     name: String,
 }
 
 impl CodeTab {
 
     pub fn MoveCursorLeftToken (&mut self) {
+        self.mouseScrolled = 0;
         self.cursor.1 = std::cmp::min (
             self.cursor.1,
             self.lines[self.cursor.0].len()
@@ -470,6 +492,7 @@ impl CodeTab {
     }
     
     pub fn MoveCursorRightToken (&mut self) {
+        self.mouseScrolled = 0;
         let mut totalLine = String::new();
         for (_token, name) in &self.lineTokens[self.cursor.0] {
             if *name != " " && totalLine.len() + name.len() > self.cursor.1 {
@@ -481,7 +504,8 @@ impl CodeTab {
     }
     
     pub fn MoveCursorLeft (&mut self, amount: usize) {
-        if self.cursor.1 == 0 && self.cursor.0 > 0 {
+        self.mouseScrolled = 0;
+        if (self.cursor.1 == 0 || self.lines[self.cursor.0].is_empty()) && self.cursor.0 > 0 {
             self.cursor.0 -= 1;
             self.cursor.1 = self.lines[self.cursor.0].len();
             return;
@@ -497,7 +521,8 @@ impl CodeTab {
     }
 
     pub fn MoveCursorRight (&mut self, amount: usize) {
-        if self.cursor.1 == self.lines[self.cursor.0].len() && self.cursor.0 < self.lines.len() - 1 {
+        self.mouseScrolled = 0;
+        if self.cursor.1 >= self.lines[self.cursor.0].len() && self.cursor.0 < self.lines.len() - 1 {
             self.cursor.0 += 1;
             self.cursor.1 = 0;
             return;
@@ -510,6 +535,7 @@ impl CodeTab {
     }
 
     pub fn InsertChars (&mut self, chs: String) {
+        self.mouseScrolled = 0;
         let length = self.lines[self.cursor.0]
             .len();
         self.lines[self.cursor.0].insert_str(
@@ -534,6 +560,7 @@ impl CodeTab {
     }
 
     pub fn UnIndent (&mut self) {
+        self.mouseScrolled = 0;
         // checking for 4 spaces at the start
         if let Some(charSet) = &self.lines[self.cursor.0].get(..4) {
             if *charSet == "    " {
@@ -548,6 +575,7 @@ impl CodeTab {
     }
 
     pub fn CursorUp (&mut self) {
+        self.mouseScrolled = 0;
         self.cursor = (
             self.cursor.0.saturating_sub(1),
             self.cursor.1
@@ -555,6 +583,7 @@ impl CodeTab {
     }
 
     pub fn CursorDown (&mut self) {
+        self.mouseScrolled = 0;
         self.cursor = (
             std::cmp::min(
                 self.cursor.0.saturating_add(1),
@@ -565,6 +594,7 @@ impl CodeTab {
     }
 
     pub fn JumpCursor (&mut self, position: usize, scalar01: usize) {
+        self.mouseScrolled = 0;
         self.cursor.0 =
             std::cmp::min(
                 position,
@@ -585,14 +615,8 @@ impl CodeTab {
         );
     }
 
-    pub fn LineBreakBefore (&mut self) {  // correctly deal with tokens here......
-        self.lines.insert(
-            self.cursor.0,
-            "".to_string(),
-        );
-    }
-
     pub fn LineBreakIn (&mut self) {
+        self.mouseScrolled = 0;
         let length = self.lines[self.cursor.0].len();
 
         if length == 0 {
@@ -631,25 +655,11 @@ impl CodeTab {
 
     }
 
-    pub fn LineBreakAfter (&mut self) {  // correctly deal with tokens here......
-        if self.cursor.0 >= self.lines[self.cursor.0].len() {
-            self.lines.push("".to_string());
-            self.cursor.1 = 0;
-            self.CursorDown();
-            return;
-        }
-        self.lines.insert(
-            self.cursor.0 + 1,
-            "".to_string(),
-        );
-        self.cursor.1 = 0;
-        self.CursorDown();
-    }
-
     // cursorOffset can be used to delete in multiple directions
     // if the cursorOffset is equal to numDel, it'll delete to the right
     // cursorOffset = 0 is default and dels to the left
     pub fn DelChars (&mut self, numDel: usize, cursorOffset: usize) {
+        self.mouseScrolled = 0;
         let length = self.lines[self.cursor.0]
             .len();
 
@@ -726,7 +736,7 @@ impl CodeTab {
                 text.light_cyan()
             },
             TokenType::Object => {
-                text.light_red()
+                text.light_red().bold()
             },
             TokenType::Function => {
                 text.light_magenta()
@@ -750,13 +760,13 @@ impl CodeTab {
                 text.white()
             },
             TokenType::Macro => {
-                text.blue()
+                text.blue().italic()
             },
             TokenType::Const => {
-                text.cyan()
+                text.cyan().italic()
             },
             TokenType::Barrow => {
-                text.light_green()
+                text.light_green().italic()
             },
             TokenType::Lifetime => {
                 text.light_blue()
@@ -774,7 +784,7 @@ impl CodeTab {
                 text.light_yellow()
             },
             TokenType::Keyword => {
-                text.light_red()
+                text.light_red().bold()
             }
         }
     } 
@@ -803,21 +813,13 @@ impl CodeTab {
                 self.scrolled = (self.cursor.0 + SCROLL_BOUNDS).saturating_sub(area.height as usize - 12);
             }
         }
+
+        let scroll = std::cmp::max(self.scrolled as isize + self.mouseScrolled, 0) as usize;
         
         let mut tabText = vec![];
         
-        for lineNumber in self.scrolled..(self.scrolled + area.height as usize - 10) {
+        for lineNumber in scroll..(scroll + area.height as usize - 10) {
             if lineNumber >= self.lines.len() {  continue;  }
-
-            /*let mut currentLineLeft = self.lines.get(lineNumber)
-                .unwrap_or(&"".to_string())
-                    .clone();
-            let mut currentLineRight = ""
-                .to_string();
-            
-            if lineNumber == self.cursor.0 {
-                currentLineRight = currentLineLeft.split_off(std::cmp::min(self.cursor.1, currentLineLeft.len()));
-            }*/
 
             let mut lineNumberText = format!("{}: ", (lineNumber as isize - self.cursor.0 as isize).unsigned_abs());
             if self.cursor.0 == lineNumber {
@@ -832,13 +834,13 @@ impl CodeTab {
                 }
             }
 
-            let mut coloredLeft: Vec <Span> = vec!();
-            let mut coloredRight: Vec <Span> = vec!();
+            let mut coloredLeft: Vec <(usize, Span)> = vec!();
+            let mut coloredRight: Vec <(usize, Span)> = vec!();
 
             if lineNumber == self.cursor.0 {
-                coloredLeft.push(lineNumberText.red().bold().add_modifier(Modifier::UNDERLINED));
+                coloredLeft.push((lineNumberText.len(), lineNumberText.red().bold().add_modifier(Modifier::UNDERLINED)));
             } else {
-                coloredLeft.push(lineNumberText.white().italic());
+                coloredLeft.push((lineNumberText.len(), lineNumberText.gray().italic()));
             }
 
             let mut currentCharNum = 0;
@@ -846,70 +848,58 @@ impl CodeTab {
                 if lineNumber == self.cursor.0 && currentCharNum + text.len() > self.cursor.1 {
                     if currentCharNum >= self.cursor.1 {
                         if currentCharNum == self.cursor.1 && editingCode {
-                            coloredLeft.push("|".to_string().white().bold());
+                            coloredLeft.push((1, "|".to_string().white().bold()));
                         }
-                        coloredRight.push(self.GenerateColor(token, text.as_str()));
+                        coloredRight.push((text.len(), self.GenerateColor(token, text.as_str())));
                     } else {
-                        coloredLeft.push(
-                            self.GenerateColor(token,
-                            &text[0..text.len() - (
+                        let txt = &text[0..text.len() - (
+                            currentCharNum + text.len() - self.cursor.1
+                        )];
+                        coloredLeft.push((
+                            txt.len(),
+                            self.GenerateColor(token, txt)
+                        ));
+                        if editingCode {  coloredLeft.push((1, "|".to_string().white().bold()))  };
+                        let txt = &text[
+                            text.len() - (
                                 currentCharNum + text.len() - self.cursor.1
-                            )])
-                        );
-                        if editingCode {  coloredLeft.push("|".to_string().white().bold())  };
-                        coloredRight.push(
-                            self.GenerateColor(token,
-                            &text[
-                                text.len() - (
-                                    currentCharNum + text.len() - self.cursor.1
-                                )..text.len()
-                            ])
-                        );
+                            )..text.len()
+                        ];
+                        coloredRight.push((
+                            txt.len(),
+                            self.GenerateColor(token, txt)
+                        ));
                     }
                 } else {
-                    coloredLeft.push(self.GenerateColor(token, text.as_str()));
-                    //coloredLeft.push("|".to_string().white());  // shows the individual tokens
+                    coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str())));
                 }
 
                 currentCharNum += text.len();
             }
             if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
-                coloredLeft.push("|".to_string().white().bold());
+                coloredLeft.push((1, "|".to_string().white().bold()));
             }
 
+            let mut charCount = 0usize;
             let mut finalColText: Vec <Span> = vec!();
-            for col in coloredLeft {
+            for (size, col) in coloredLeft {
+                if charCount + size >= (area.width - 29) as usize {  break;  }
                 finalColText.push(col);
-            } for col in coloredRight {
+                charCount += size;
+            } for (size, col) in coloredRight {
+                if charCount + size >= (area.width - 29) as usize {  break;  }
                 finalColText.push(col);
+                charCount += size;
             }
 
             if self.cursor.0 == lineNumber && editingCode{
                 tabText.push(Line::from(
                     finalColText
                 ).add_modifier(Modifier::UNDERLINED));
-                /*tabText.push(Line::from(vec![
-                    lineNumberText.red().bold().add_modifier(Modifier::UNDERLINED),
-                    currentLineLeft.white().add_modifier(Modifier::UNDERLINED),
-                    "|".to_string().white().bold().slow_blink().add_modifier(Modifier::UNDERLINED),
-                    currentLineRight.white().add_modifier(Modifier::UNDERLINED),
-                    {
-                        let mut string = "".to_string();
-                        for _ in 27+(self.lines[self.cursor.0].len() as u16)..area.width {
-                            string.push(' ');
-                        }
-                        string
-                    }.add_modifier(Modifier::UNDERLINED),
-                ]));*/
             } else {
                 tabText.push(Line::from(
                     finalColText
                 ));
-                /*tabText.push(Line::from(vec![
-                    lineNumberText.white().italic(),
-                    currentLineLeft.white(),
-                    currentLineRight.white(),
-                ]));*/
             }
         }
 
@@ -932,6 +922,8 @@ impl Default for CodeTab {
             },
             linearScopes: vec![],
             scrolled: 0,
+            mouseScrolled: 0,
+            mouseScrolledFlt: 0.0,
             name: "Welcome.txt"
                 .to_string(),
         }
@@ -1051,41 +1043,16 @@ impl CodeTabs {
 
 impl Default for CodeTabs {
     fn default() -> Self {
-        let mut tabs = CodeTabs {
-            tabFileNames: vec![
-                "main.rs".to_string()
-            ],
+        CodeTabs {
+            tabFileNames: vec![],
             tabs: vec![
                 CodeTab {
                     cursor: (0, 0),
-                    lines: {
-                        // temporary
-                        let mut lines: Vec <String> = vec!();
-                        
-                        let contents = std::fs::read_to_string("src/main.rs").unwrap();
-                        let mut current = String::new();
-                        for chr in contents.chars() {
-                            if chr == '\n' {
-                                lines.push(current.clone());
-                                current.clear();
-                            } else {
-                                current.push(chr);
-                            }
-                        }
-
-                        lines
-                    },
+                    lines: vec!(),
                     lineTokens: vec![],
                     scopeJumps: vec![],
                     scopes: ScopeNode {
-                        children: vec![
-                            ScopeNode {
-                                children: vec![],
-                                name: "fn main".to_string(),
-                                start: 0,
-                                end: 2,
-                            }
-                        ],
+                        children: vec![],
                         name: "Root".to_string(),
                         start: 0,
                         end: 2,
@@ -1094,90 +1061,14 @@ impl Default for CodeTabs {
                         vec![0]
                     ],
                     scrolled: 0,
+                    mouseScrolled: 0,
+                    mouseScrolledFlt: 0.0,
                     name: "main.rs".to_string(),
                 }
 
             ],  // put a tab here or something idk
             currentTab: 0
-         };
-
-         for tab in &mut tabs.tabs {
-            tab.lineTokens.clear();
-            for (index, line) in tab.lines.iter().enumerate() {
-                tab.lineTokens.push(
-                    GenerateTokens(line.clone())
-                );
-            }
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
         }
-
-        tabs
-            /*tabFileNames: vec![
-                "Welcome.txt".to_string(),
-                "HelloWorld.rs".to_string()
-            ],
-            tabs: vec![
-                CodeTab {
-                    cursor: (0, 0),
-                    lines: vec![
-                        "Welcome! Please open or create a file...".to_string()
-                    ],
-                    lineTokens: vec![
-                        GenerateTokens("Welcome! Please open or create a file...".to_string())
-                    ],
-                    scopeJumps: vec![
-                        vec![]
-                    ],
-                    scopes: ScopeNode {
-                        children: vec![],
-                        name: "Root".to_string(),
-                        start: 0,
-                        end: 0,
-                    },
-                    linearScopes: vec![],
-                    scrolled: 0,
-                    name: "Welcome.txt".to_string(),
-                },
-                CodeTab {
-                    cursor: (0, 0),
-                    lines: vec![
-                        "fn main () {".to_string(),
-                        "    println!(\"Hello World!\");".to_string(),
-                        "}".to_string(),
-                    ],
-                    lineTokens: vec![
-                        GenerateTokens("fn main () {".to_string()),
-                        GenerateTokens("    println!(\"Hello World!\");".to_string()),
-                        GenerateTokens("}".to_string())
-                    ],
-                    scopeJumps: vec![
-                        vec![0],
-                        vec![0],
-                        vec![0],
-                    ],
-                    scopes: ScopeNode {
-                        children: vec![
-                            ScopeNode {
-                                children: vec![],
-                                name: "fn main".to_string(),
-                                start: 0,
-                                end: 2,
-                            }
-                        ],
-                        name: "Root".to_string(),
-                        start: 0,
-                        end: 2,
-                    },
-                    linearScopes: vec![
-                        vec![0]
-                    ],
-                    scrolled: 0,
-                    name: "HelloWorld.rs".to_string(),
-                }
-
-            ],  // put a tab here or something idk
-            currentTab: 0
-        }*/
     }
 }
 
@@ -1192,7 +1083,6 @@ pub enum FileTabs {
 #[derive(Debug, Default)]
 pub struct FileBrowser {
     files: Vec <String>,  // stores the names
-    currentFile: usize,  // stores the index of the file and it's name
 
     fileTab: FileTabs,
     fileCursor: usize,
@@ -1200,7 +1090,55 @@ pub struct FileBrowser {
 }
 
 impl FileBrowser {
-    pub fn MoveCursorDown (&mut self, outline: &Vec < Vec<usize>>, _rootNode: &ScopeNode) {
+    pub fn LoadFilePath (&mut self, pathInput: &str, codeTabs: &mut CodeTabs) {
+        self.files.clear();
+        codeTabs.tabs.clear();
+        if let Ok(paths) = std::fs::read_dir(pathInput) {
+            for path in paths.flatten() {
+                if std::fs::FileType::is_file(&path.file_type().unwrap()) {
+                    let name = path.file_name().to_str().unwrap_or("").to_string();
+                    self.files.push(name.clone());
+                    
+                    // loading the file's contents
+                    let mut lines: Vec <String> = vec!();
+                    
+                    let mut fullPath = pathInput.to_string();
+                    fullPath.push_str(&name);
+
+                    let msg = fullPath.as_str().trim();  // temporary for debugging
+                    let contents = std::fs::read_to_string(&fullPath).expect(msg);
+                    let mut current = String::new();
+                    for chr in contents.chars() {
+                        if chr == '\n' {
+                            lines.push(current.clone());
+                            current.clear();
+                        } else {
+                            current.push(chr);
+                        }
+                    }
+                    lines.push(current);
+
+                    let mut tab = CodeTab {
+                        lines,
+                        ..Default::default()
+                    };
+
+                    tab.lineTokens.clear();
+                    for line in tab.lines.iter() {
+                        tab.lineTokens.push(
+                            GenerateTokens(line.clone())
+                        );
+                    }
+                    (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
+
+                    codeTabs.tabs.push(tab);
+                    codeTabs.tabFileNames.push(name.clone());
+                }
+            }
+        }
+    }
+
+    pub fn MoveCursorDown (&mut self, outline: &[Vec<usize>], _rootNode: &ScopeNode) {
         if matches!(self.fileTab, FileTabs::Outline) {
             self.outlineCursor = std::cmp::min(
                 self.outlineCursor + 1,
@@ -1253,11 +1191,36 @@ pub enum KeyCode {
     Escape,
 }
 
+pub enum MouseEventType {
+    Null,
+    Left,
+    Right,
+    Middle,
+    Down,
+    Up,
+}
+
+pub enum MouseState {
+    Release,
+    Press,
+    Hold,
+    Null,
+}
+
+pub struct MouseEvent {
+    eventType: MouseEventType,
+    position: (u16, u16),
+    state: MouseState,
+}
+
 #[derive(Default)]
 pub struct KeyParser {
     keyModifiers: Vec <KeyModifiers>,
     keyEvents: std::collections::HashMap <KeyCode, bool>,
     charEvents: Vec <char>,
+    inEscapeSeq: bool,
+    bytes: usize,
+    mouseEvent: Option <MouseEvent>,
 }
 
 impl KeyParser {
@@ -1275,6 +1238,9 @@ impl KeyParser {
             ]),
             keyModifiers: vec!(),
             charEvents: vec!(),
+            inEscapeSeq: false,
+            bytes: 0,
+            mouseEvent: None,
         }
     }
 
@@ -1282,6 +1248,25 @@ impl KeyParser {
         self.charEvents.clear();
         self.keyModifiers.clear();
         self.keyEvents.clear();
+        self.inEscapeSeq = false;
+
+        if let Some(event) = &mut self.mouseEvent {
+            match event.state {
+                MouseState::Press => {
+                    event.state = MouseState::Hold;
+                },
+                MouseState::Hold if matches!(event.eventType, MouseEventType::Down | MouseEventType::Up) => {
+                    event.state = MouseState::Release;
+                },
+                MouseState::Release => {
+                    event.state = MouseState::Null;
+                    event.eventType = MouseEventType::Null;
+                },
+                MouseState::Hold => {
+                },
+                _ => {},
+            }
+        }
     }
 
     pub fn ContainsChar (&self, chr: char) -> bool {
@@ -1298,9 +1283,27 @@ impl KeyParser {
 
 }
 
+async fn enableMouseCapture() {
+    let mut stdout = tokio::io::stdout();
+    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h").await;
+    let _ = stdout.write_all(b"\x1B[?1000h").await; // Enable basic mouse mode
+    let _ = stdout.write_all(b"\x1B[?1003h").await; // Enable all motion events
+    std::mem::drop(stdout);
+}
+
+async fn disableMouseCapture() {
+    let mut stdout = tokio::io::stdout();
+    let _ = stdout.write_all(b"\x1B[?1000l").await; // Disable mouse mode
+    let _ = stdout.write_all(b"\x1B[?1003l").await; // Disable motion events
+    std::mem::drop(stdout);
+}
+
 impl Perform for KeyParser {
     fn execute(&mut self, byte: u8) {
         match byte {
+            0x1B => {
+                self.inEscapeSeq = true;
+            },
             0x0D => {  // return aka \n
                 self.keyEvents.insert(KeyCode::Return, true);
             },
@@ -1313,16 +1316,60 @@ impl Perform for KeyParser {
     }
     
     fn print(&mut self, chr: char) {
+        if self.inEscapeSeq || self.bytes > 1 {  return;  }
+
         if chr as u8 == 0x7F {
             self.keyEvents.insert(KeyCode::Delete, true);
             return;
         }
+        if !(chr.is_ascii_graphic() || chr.is_whitespace()) {  return;  }
         //println!("char {}: '{}'", chr as u8, chr);
         self.charEvents.push(chr);
     }
     
     fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, c: char) {
+        self.inEscapeSeq = false;  // resetting the escape sequence
+
         let numbers: Vec<u16> = params.iter().map(|p| p[0]).collect();
+
+        // mouse handling
+        if c == 'M' || c == 'm' {
+            if let Some([byte, x, y]) = numbers.get(0..3) {
+                let button = byte & 0b11; // Mask lowest 2 bits (button type)
+
+                // adding key press modifiers
+                if (byte & 32) != 0 {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } if (byte & 64) != 0 {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } if (byte & 128) != 0 {
+                    self.keyModifiers.push(KeyModifiers::Control);
+                }
+
+                let is_scroll = (byte & 64) != 0;
+                let eventType = match (is_scroll, button) {
+                    (true, 0) => MouseEventType::Up,   // 1???? ig so
+                    (true, 1) => MouseEventType::Down, // 2???? ig so
+                    (false, 0) => MouseEventType::Left,
+                    (false, 1) => MouseEventType::Middle,
+                    (false, 2) => MouseEventType::Right,
+                    _ => MouseEventType::Null,
+                };
+                self.mouseEvent = Some(MouseEvent {
+                    eventType,
+                    position: (*x, *y),
+                    state: {
+                        match c {
+                            'M' => MouseState::Press,
+                            'm' => MouseState::Release,
+                            _ => MouseState::Null,
+                        }
+                    },
+                });
+
+            }
+        }
+
         //for number in &numbers {println!("{}", number);}
         if c == '~' {  // this section is for custom escape codes
             if numbers == [3, 2] {
@@ -1346,6 +1393,13 @@ impl Perform for KeyParser {
             } else if numbers == [3, 8] {
                 self.keyEvents.insert(KeyCode::Delete, true);
                 self.keyModifiers.push(KeyModifiers::Option);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 9] {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            } else if numbers == [3, 10] {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Command);
                 self.keyModifiers.push(KeyModifiers::Shift);
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
@@ -1393,6 +1447,9 @@ pub struct App {
     codeTabs: CodeTabs,
     currentCommand: String,
     fileBrowser: FileBrowser,
+    area: Rect,
+
+    debugInfo: String,
 }
 
 impl App {
@@ -1404,9 +1461,13 @@ impl App {
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
+        self.fileBrowser.LoadFilePath("src/", &mut self.codeTabs);
+        self.fileBrowser.fileCursor = 1;
+        self.codeTabs.currentTab = 1;
+
         let mut parser = Parser::new();
         let mut keyParser = KeyParser::new();
-        let mut buffer = [0; 10];
+        let mut buffer = [0; 128];//[0; 10];
         let mut stdin = tokio::io::stdin();
         
         while !self.exit {
@@ -1419,6 +1480,8 @@ impl App {
             tokio::select! {
                 result = stdin.read(&mut buffer) => {
                     if let Ok(n) = result {
+                        keyParser.bytes = n;
+                        
                         if n == 1 && buffer[0] == 0x1B {
                             keyParser.keyEvents.insert(KeyCode::Escape, true);
                         } else {
@@ -1429,7 +1492,7 @@ impl App {
                         break;
                     }
                 },
-                _ = tokio::time::sleep(std::time::Duration::from_millis(16)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis(0)) => {
                     terminal.draw(|frame| self.draw(frame))?;
                     if self.exit {
                         break;
@@ -1437,7 +1500,9 @@ impl App {
                 },
             }
 
+            self.area = terminal.get_frame().area();  // ig this is a thing
             self.HandleKeyEvents(&keyParser);
+            self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed but i think it should work? idk
             keyParser.ClearEvents();
         }
 
@@ -1448,54 +1513,61 @@ impl App {
         frame.render_widget(self, frame.area());
     }
 
+    pub fn HandleMouseEvents (&mut self, events: &KeyParser) {
+        if let Some(event) = &events.mouseEvent {
+            match event.eventType {
+                MouseEventType::Down => {
+                    if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt += 1./3.;  // change based on the speed of scrolling to allow fast scrolling
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
+                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
+                    }
+                },
+                MouseEventType::Up => {
+                    if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt -= 1./3.;  // change based on the speed of scrolling to allow fast scrolling
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
+                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
+                    }
+                },
+                MouseEventType::Left => {
+                    // checking for code selection
+                    if matches!(event.state, MouseState::Release) {
+                        if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                                event.position.1.saturating_sub(4) as usize,
+                                event.position.0.saturating_sub(37) as usize);
+                            tab.cursor = (
+                                std::cmp::min(
+                                    linePos.0,
+                                    tab.lines.len() - 1
+                                ),
+                                linePos.1.saturating_sub( {
+                                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                                        1
+                                    } else {  0  }
+                                } )
+                            );
+                            tab.mouseScrolled = 0;
+                        } else {
+                            // todo!
+                        }
+                    }
+                },
+                MouseEventType::Middle => {},
+                MouseEventType::Right => {},
+                _ => {},
+            }
+        }
+    }
+
     fn HandleKeyEvents (&mut self, keyEvents: &KeyParser) {
 
         match self.appState {
             AppState::CommandPrompt => {
                 for chr in &keyEvents.charEvents {
                     self.currentCommand.push(*chr);
-                }
-
-                if !self.currentCommand.is_empty() {
-                    // quiting
-                    if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                        if self.currentCommand == "q" {
-                            self.Exit();
-                        }
-
-                        // jumping command
-                        if self.currentCommand.starts_with('[') {
-                            // jumping up
-                            if let Some(numberString) = self.currentCommand.get(1..) {
-                                let number = numberString.parse:: <usize>();
-                                if number.is_ok() {
-                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                        cursor.saturating_sub(number.unwrap()), 1
-                                    );
-
-                                    self.currentCommand.clear();
-                                }
-                            }
-                        } else if self.currentCommand.starts_with(']') {
-                            // jumping down
-                            if let Some(numberString) = self.currentCommand.get(1..) {
-                                let number = numberString.parse:: <usize>();
-                                if number.is_ok() {
-                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                        cursor.saturating_add(number.unwrap()), 1
-                                    );
-
-                                    self.currentCommand.clear();
-                                }
-                            }
-                        }
-
-                        self.currentCommand.clear();
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-                        self.currentCommand.pop();
-                    }
                 }
 
                 if keyEvents.ContainsKeyCode(KeyCode::Tab) {
@@ -1522,21 +1594,23 @@ impl App {
                         }
                     },
                     TabState::Files => {
-                        if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                            let mut nodePath = self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
-                                self.fileBrowser.outlineCursor].clone();
-                            nodePath.reverse();
-                            let node = self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
-                                    &mut nodePath
-                            );
-                            let start = node.start;
-                            self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(start, 1);
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
-                            self.fileBrowser.MoveCursorUp();
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
-                            self.fileBrowser.MoveCursorDown(
-                                &self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes,
-                                &self.codeTabs.tabs[self.codeTabs.currentTab].scopes);
+                        if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
+                            if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
+                                let mut nodePath = self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
+                                    self.fileBrowser.outlineCursor].clone();
+                                nodePath.reverse();
+                                let node = self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
+                                        &mut nodePath
+                                );
+                                let start = node.start;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(start, 1);
+                            } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+                                self.fileBrowser.MoveCursorUp();
+                            } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+                                self.fileBrowser.MoveCursorDown(
+                                    &self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes,
+                                    &self.codeTabs.tabs[self.codeTabs.currentTab].scopes);
+                            }
                         }
                     },
                     TabState::Tabs => {
@@ -1558,6 +1632,44 @@ impl App {
                         }
                     },
                 }
+
+                if !self.currentCommand.is_empty() {
+                    // quiting
+                    if keyEvents.ContainsKeyCode(KeyCode::Return) {
+                        if self.currentCommand == "q" {
+                            self.Exit();
+                        }
+
+                        // jumping command
+                        if self.currentCommand.starts_with('[') {
+                            // jumping up
+                            if let Some(numberString) = self.currentCommand.get(1..) {
+                                let number = numberString.parse:: <usize>();
+                                if number.is_ok() {
+                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
+                                        cursor.saturating_sub(number.unwrap()), 1
+                                    );
+                                }
+                            }
+                        } else if self.currentCommand.starts_with(']') {
+                            // jumping down
+                            if let Some(numberString) = self.currentCommand.get(1..) {
+                                let number = numberString.parse:: <usize>();
+                                if number.is_ok() {
+                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
+                                        cursor.saturating_add(number.unwrap()), 1
+                                    );
+                                }
+                            }
+                        }
+
+                        self.currentCommand.clear();
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+                        self.currentCommand.pop();
+                    }
+                }
             },
             AppState::Tabs => {
                 match self.tabState {
@@ -1577,6 +1689,15 @@ impl App {
                                     offset = numDel;
                                 } else {
                                     numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
+                                }
+                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].lines[
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+                                    ].len() - self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
+                                    offset = numDel;
+                                } else {
+                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
                                 }
                             } else if keyEvents.ContainsModifier(KeyModifiers::Shift) {
                                 offset = numDel;
@@ -1685,7 +1806,7 @@ impl App {
 
 impl Widget for &mut App {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        
+
         // ============================================= file block here =============================================
         let mut tabBlock = Block::bordered()
             .border_set(border::THICK);
@@ -1740,7 +1861,7 @@ impl Widget for &mut App {
             .render(Rect {
                 x: area.x + 29,
                 y: area.y + 2,
-                width: area.width - 20,
+                width: area.width - 29,
                 height: area.height - 10
         }, buf);
 
@@ -1758,6 +1879,9 @@ impl Widget for &mut App {
         let fileText: Text;
 
         if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
+            let mut newScroll = self.fileBrowser.outlineCursor;
+            let mut scrolled = 0;
+            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
             for scopeIndex in &self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps {
                 if {
                     let mut valid = true;
@@ -1777,7 +1901,16 @@ impl Widget for &mut App {
                         scopes.push(*index);
                         scope = &scope.children[*index];
                     }
-                    if scopeIndex.len() == 0 {  continue;  }
+                    if scopeIndex.is_empty() {  continue;  }
+                    scrolled += 1;
+                    if *scopeIndex ==
+                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                        .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
+                        matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
+                
+                        newScroll = scrolled - 1;
+                    }
+                    if scrolled < scrollTo {  continue;  }
                     fileStringText.push(
                         Line::from(vec![
                             {
@@ -1809,13 +1942,13 @@ impl Widget for &mut App {
                                     matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
                                     
                                     match scopeIndex.len() {
-                                        1 => scope.name.clone().light_blue().underlined(),
-                                        2 => scope.name.clone().light_magenta().underlined(),
-                                        3 => scope.name.clone().light_red().underlined(),
-                                        4 => scope.name.clone().light_yellow().underlined(),
-                                        5 => scope.name.clone().light_green().underlined(),
-                                        _ => scope.name.clone().white().underlined(),
-                                    }
+                                        1 => scope.name.clone().light_blue(),
+                                        2 => scope.name.clone().light_magenta(),
+                                        3 => scope.name.clone().light_red(),
+                                        4 => scope.name.clone().light_yellow(),
+                                        5 => scope.name.clone().light_green(),
+                                        _ => scope.name.clone().white(),
+                                    }.underlined()
                                 } else if
                                     matches!(self.appState, AppState::CommandPrompt) &&
                                     matches!(self.tabState, TabState::Files) &&
@@ -1847,22 +1980,22 @@ impl Widget for &mut App {
                     );
                 }
             }
+            self.fileBrowser.outlineCursor = newScroll;
             fileText = Text::from(fileStringText);
         } else {
-            fileText = Text::from(vec![
-                Line::from(vec![
-                    "Testing.rs".to_string().white()
-                ]),
-                Line::from(vec![
-                    "main.rs".to_string().white()
-                ]),
-                Line::from(vec![
-                    "whyIsThisHere.rs".to_string().white()
-                ]),
-                Line::from(vec![
-                    "Failed.rs".to_string().white()
-                ])
-            ]);
+            let mut allFiles = vec!();
+            for (index, file) in self.fileBrowser.files.iter().enumerate() {
+                allFiles.push(Line::from(vec![
+                    {
+                        if index == self.fileBrowser.fileCursor {
+                            file.clone().white().underlined()
+                        } else {
+                            file.clone().white()
+                        }
+                    }
+                ]));
+            }
+            fileText = Text::from(allFiles);
         }
 
         Paragraph::new(fileText)
@@ -1881,7 +2014,8 @@ impl Widget for &mut App {
         
         let errorText = Text::from(vec![
             Line::from(vec![
-                "Error: callback on line 5".to_string().red().bold()
+                format!("Debug: {}", self.debugInfo).red().bold()
+                //"Error: callback on line 5".to_string().red().bold()
             ])
         ]);
 
@@ -2002,7 +2136,9 @@ Suggestions appear on the very bottom as to not obstruct the code being written
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
+    enableMouseCapture().await;
     let app_result = App::default().run(&mut terminal).await;
+    disableMouseCapture().await;
     ratatui::restore();
     app_result
 }
