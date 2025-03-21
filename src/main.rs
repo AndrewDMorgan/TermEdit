@@ -414,12 +414,25 @@ pub struct CodeTab {
     mouseScrolled: isize,
     mouseScrolledFlt: f64,
     name: String,
+    fileName: String
 }
 
 impl CodeTab {
 
+    pub fn Save (&self) {
+        let mut fileContents = String::new();
+        for line in &self.lines {
+            fileContents.push_str(line.as_str());
+            fileContents.push('\n');
+        }
+        fileContents.pop();  // popping the final \n so it doesn't gradually expand over time
+        
+        std::fs::write(&self.fileName, fileContents).expect("Unable to write file");
+    }
+
     pub fn MoveCursorLeftToken (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         self.cursor.1 = std::cmp::min (
             self.cursor.1,
             self.lines[self.cursor.0].len()
@@ -493,6 +506,7 @@ impl CodeTab {
     
     pub fn MoveCursorRightToken (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         let mut totalLine = String::new();
         for (_token, name) in &self.lineTokens[self.cursor.0] {
             if *name != " " && totalLine.len() + name.len() > self.cursor.1 {
@@ -505,6 +519,7 @@ impl CodeTab {
     
     pub fn MoveCursorLeft (&mut self, amount: usize) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         if (self.cursor.1 == 0 || self.lines[self.cursor.0].is_empty()) && self.cursor.0 > 0 {
             self.cursor.0 -= 1;
             self.cursor.1 = self.lines[self.cursor.0].len();
@@ -522,6 +537,7 @@ impl CodeTab {
 
     pub fn MoveCursorRight (&mut self, amount: usize) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         if self.cursor.1 >= self.lines[self.cursor.0].len() && self.cursor.0 < self.lines.len() - 1 {
             self.cursor.0 += 1;
             self.cursor.1 = 0;
@@ -536,6 +552,7 @@ impl CodeTab {
 
     pub fn InsertChars (&mut self, chs: String) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0]
             .len();
         self.lines[self.cursor.0].insert_str(
@@ -561,6 +578,7 @@ impl CodeTab {
 
     pub fn UnIndent (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         // checking for 4 spaces at the start
         if let Some(charSet) = &self.lines[self.cursor.0].get(..4) {
             if *charSet == "    " {
@@ -576,6 +594,7 @@ impl CodeTab {
 
     pub fn CursorUp (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         self.cursor = (
             self.cursor.0.saturating_sub(1),
             self.cursor.1
@@ -584,6 +603,7 @@ impl CodeTab {
 
     pub fn CursorDown (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         self.cursor = (
             std::cmp::min(
                 self.cursor.0.saturating_add(1),
@@ -595,6 +615,7 @@ impl CodeTab {
 
     pub fn JumpCursor (&mut self, position: usize, scalar01: usize) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         self.cursor.0 =
             std::cmp::min(
                 position,
@@ -617,6 +638,7 @@ impl CodeTab {
 
     pub fn LineBreakIn (&mut self) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0].len();
 
         if length == 0 {
@@ -660,6 +682,7 @@ impl CodeTab {
     // cursorOffset = 0 is default and dels to the left
     pub fn DelChars (&mut self, numDel: usize, cursorOffset: usize) {
         self.mouseScrolled = 0;
+        self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0]
             .len();
 
@@ -926,6 +949,7 @@ impl Default for CodeTab {
             mouseScrolledFlt: 0.0,
             name: "Welcome.txt"
                 .to_string(),
+            fileName: "".to_string(),
         }
     }
 }
@@ -1064,6 +1088,7 @@ impl Default for CodeTabs {
                     mouseScrolled: 0,
                     mouseScrolledFlt: 0.0,
                     name: "main.rs".to_string(),
+                    fileName: "".to_string(),
                 }
 
             ],  // put a tab here or something idk
@@ -1122,6 +1147,8 @@ impl FileBrowser {
                         lines,
                         ..Default::default()
                     };
+
+                    tab.fileName = fullPath;
 
                     tab.lineTokens.clear();
                     for line in tab.lines.iter() {
@@ -1401,6 +1428,9 @@ impl Perform for KeyParser {
                 self.keyEvents.insert(KeyCode::Delete, true);
                 self.keyModifiers.push(KeyModifiers::Command);
                 self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 11] {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('s');  // command + s
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
@@ -1448,6 +1478,7 @@ pub struct App {
     currentCommand: String,
     fileBrowser: FileBrowser,
     area: Rect,
+    lastScrolled: u128,
 
     debugInfo: String,
 }
@@ -1492,7 +1523,7 @@ impl App {
                         break;
                     }
                 },
-                _ = tokio::time::sleep(std::time::Duration::from_millis(0)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_nanos(0)) => {
                     terminal.draw(|frame| self.draw(frame))?;
                     if self.exit {
                         break;
@@ -1518,16 +1549,47 @@ impl App {
             match event.eventType {
                 MouseEventType::Down => {
                     if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt += 1./3.;  // change based on the speed of scrolling to allow fast scrolling
+                        let currentTime = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .expect("Time went backwards...")
+                            .as_millis();
+                        //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
+                        let acceleration = {
+                            let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
+                            if v1 > 1.0/4.0 {  v1  }
+                            else {  1.0/4.0  }
+                        };
+                        
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt += acceleration;  // change based on the speed of scrolling to allow fast scrolling
                         self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
                             self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
+                        
+                        self.lastScrolled = currentTime;
                     }
                 },
                 MouseEventType::Up => {
                     if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt -= 1./3.;  // change based on the speed of scrolling to allow fast scrolling
+                        let currentTime = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .expect("Time went backwards...")
+                            .as_millis();
+                        //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
+                        let acceleration = {
+                            let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
+                            if v1 > 1.0/4.0 {  v1  }
+                            else {  1.0/4.0  }
+                        };
+
+                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = {
+                            let v1 = self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt - acceleration;
+                            let v2 = (self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 + self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as usize) as f64 * -1.0;
+                            if v1 > v2 {  v1  }
+                            else {  v2  }
+                        };  // change based on the speed of scrolling to allow fast scrolling
                         self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
                             self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
+                        
+                        self.lastScrolled = currentTime;
                     }
                 },
                 MouseEventType::Left => {
@@ -1550,6 +1612,7 @@ impl App {
                                 } )
                             );
                             tab.mouseScrolled = 0;
+                            tab.mouseScrolledFlt = 0.0;
                         } else {
                             // todo!
                         }
@@ -1674,9 +1737,12 @@ impl App {
             AppState::Tabs => {
                 match self.tabState {
                     TabState::Code => {
-                        for chr in &keyEvents.charEvents {
-                            self.codeTabs.tabs[self.codeTabs.currentTab]
-                                .InsertChars(chr.to_string());
+                        // making sure command + s or other commands are being pressed
+                        if !keyEvents.ContainsModifier(KeyModifiers::Command) {
+                            for chr in &keyEvents.charEvents {
+                                self.codeTabs.tabs[self.codeTabs.currentTab]
+                                    .InsertChars(chr.to_string());
+                            }
                         }
 
                         if keyEvents.ContainsKeyCode(KeyCode::Delete) {
@@ -1710,6 +1776,8 @@ impl App {
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                                 // checking if it's the true first value or not
                                 let mut indentIndex = 0usize;
                                 let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
@@ -1731,6 +1799,9 @@ impl App {
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
+
                                 let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 =
                                     self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].len();
@@ -1746,6 +1817,8 @@ impl App {
                                     tab.scopes.GetNode(&mut jumps).start, 1
                                 );
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 0;
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp();
@@ -1757,6 +1830,8 @@ impl App {
                                 jumps.reverse();
                                 tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
+                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
                                     self.codeTabs.tabs[self.codeTabs.currentTab].lines.len() - 1;
                             } else {
@@ -1771,6 +1846,11 @@ impl App {
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
                             self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn();
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                            keyEvents.ContainsChar('s') {
+                            
+                            // saving the program
+                            self.codeTabs.tabs[self.codeTabs.currentTab].Save();
                         }
                     },
                     _ => {}  // the other two shouldn't be accessable during the tab state (only during command-line)
@@ -2016,7 +2096,7 @@ impl Widget for &mut App {
             Line::from(vec![
                 format!("Debug: {}", self.debugInfo).red().bold()
                 //"Error: callback on line 5".to_string().red().bold()
-            ])
+            ]),
         ]);
 
         Paragraph::new(errorText)
@@ -2056,21 +2136,21 @@ impl Widget for &mut App {
 
 
 /*
-Commands: <esc>
-    <enter> -> exit commands
-    <q> + <enter> -> exit application
-    <tab> -> switch tabs:
+Commands: √ <esc>
+    √ <enter> -> exit commands
+    √ <q> + <enter> -> exit application
+    √ <tab> -> switch tabs:
 
         * code editor:
             <cmd> + <1 - 9> -> switch to corresponding code tab
             
-            <left/right/up/down> -> movement in the open file
-            <option> + <left/right> -> jump to next token
-            <option> + <up/down> -> jump to end/start of current scope
-            <cmnd> + <left/right> -> jump to start/end of line
-                - first left jumps to the indented start
-                - second left jumps to the true start
-            <cmnd> + <up/down> -> jump to start/end of file
+            √ <left/right/up/down> -> movement in the open file
+            √ <option> + <left/right> -> jump to next token
+            √ <option> + <up/down> -> jump to end/start of current scope
+            √ <cmnd> + <left/right> -> jump to start/end of line
+                √ - first left jumps to the indented start
+                √ - second left jumps to the true start
+            √ <cmnd> + <up/down> -> jump to start/end of file
             <shift> + any line movement/jump -> highlight all text selected (including jumps from line # inputs)
             <ctrl> + <[> -> temporarily opens command line to input number of lines to jump up
             <ctrl> + <]> -> temporarily opens command line to input number of lines to jump down
@@ -2082,13 +2162,13 @@ Commands: <esc>
             <cmnd> + <c> -> copy (either selection or whole line when none)
             <cmnd> + <v> -> paste to current level (align relative indentation to the cursor's)
 
-            <del> -> deletes the character the cursor is on
-            <del> + <option> -> delete the token the cursor is on
-            <del> + <cmnd> -> delete the entire line
-            <del> + <shift> + <cmnd/option/none> -> does the same as specified before execpt to the right instead
+            √ <del> -> deletes the character the cursor is on
+            √ <del> + <option> -> delete the token the cursor is on
+            √ <del> + <cmnd> -> delete the entire line
+            √ <del> + <shift> + <cmnd/option/none> -> does the same as specified before execpt to the right instead
 
             <tab> -> indents the line up to the predicted indentation
-            <tab> + <shift> -> unindents the line by one
+            √ <tab> + <shift> -> unindents the line by one
             <enter> -> creates a new line
             <enter> + <cmnd> -> creates a new line starting at the end of the current
             <enter> + <cmnd> + <shift> -> creates a new line starting before the current
@@ -2101,15 +2181,15 @@ Commands: <esc>
                 <enter> -> edit setting
                 <left> -> close menu
             
-            <shift> + <tab> -> cycle between pg outline and file broswer
+            √ <shift> + <tab> -> cycle between pg outline and file broswer
 
             outline:
-                - shows all functions/methods/classes/etc... so they can easily be acsess without needed the mouse and without wasting time scrolling
+                √ - shows all functions/methods/classes/etc... so they can easily be acsess without needed the mouse and without wasting time scrolling
 
-                <enter> -> jumps the cursor to that section in the code
+                √ <enter> -> jumps the cursor to that section in the code
                 <shift> + <enter> -> jumps the cursor to the section and switches to code editing
                 
-                <down/up> -> moves down or up one
+                √ <down/up> -> moves down or up one
                 <option> + <down/up> -> moves up or down to the start/end of the current scope
                 <cmnd> + <down>/<up> -> moves to the top or bottom of the outline
                 
@@ -2117,9 +2197,9 @@ Commands: <esc>
                 <ctrl> + <right> -> uncollapse the scope
 
         * code tabs:
-            <left/right> -> change tab
-            <option> + <left/right> -> move current tab left/right
-            <del> -> close current tab
+            √ <left/right> -> change tab
+            √ <option> + <left/right> -> move current tab left/right
+            √ <del> -> close current tab
 
 the bottom bar is 4 lines tall (maybe this could be a custom parameter?)
 the side bar appears behind the bottom bar and pops outward shifting the text
