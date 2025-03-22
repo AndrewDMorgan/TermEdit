@@ -25,6 +25,18 @@ const SCROLL_BOUNDS: usize = 12;
 const CENTER_BOUNDS: usize = 0;
 
 
+// language file types for syntax highlighting
+pub enum Languages {
+    Rust,
+    Cpp
+}
+
+const LANGS: [(Languages, &str); 3] = [
+    (Languages::Cpp , "cpp"),
+    (Languages::Cpp , "hpp"),
+    (Languages::Rust, "rs" )
+];
+
 
 // token / syntax highlighting stuff idk
 #[derive(Debug)]
@@ -62,7 +74,7 @@ pub enum TokenFlags {
     Null,
 }
 
-pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
+pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)> {
     // move this to a json file so it can be customized by the user if they so chose to
     let lineBreaks = [
         " ".to_string(),
@@ -158,57 +170,107 @@ pub fn GenerateTokens (text: String) -> Vec <(TokenType, String)> {
             } else {  &"".to_string()  }
         };
         
+        let mut language = Languages::Rust;  // the default
+        for (lang, extension) in LANGS {
+            if extension == fileType {
+                language = lang;
+                break;
+            }
+        }
+
         tokens.push((
-            match strToken.as_str() {
-                _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
-                _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
-                "if" | "for" | "while" | "in" | "else" |
-                    "break" | "loop" | "match" | "return" | "std" |
-                    "const" | "static" | "dyn" | "type" | "continue" |
-                    "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
-                    "async" | "await" | "default" | "derive" | "new" |
-                    "as" | "?" => TokenType::Keyword,
-                " " => TokenType::Null,
-                "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
-                    "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
-                    "f16" | "f32" | "f64" | "f128" | "String" |
-                    "str" | "Vec" | "bool" | "char" | "Result" |
-                    "Option" => TokenType::Primative,
-                "[" | "]" => TokenType::Bracket,
-                "(" | ")" => TokenType::Parentheses,
-                "#" => TokenType::Macro,
-                _s if nextToken == "!" => TokenType::Macro,
-                ":" => TokenType::Member,
-                //"" => TokenType::Variable,
-                s if s.chars().next().map_or(false, |c| {
-                    c.is_ascii_digit()
-                }) => TokenType::Number,
-                "=" | "-" if nextToken == ">" => TokenType::Keyword,
-                ">" if prevToken == "=" => TokenType::Keyword,
-                ">" if prevToken == "-" => TokenType::Keyword,
-                "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
-                s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
-                s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
-                ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
-                "=" if nextToken == "=" => TokenType::Logic,
-                "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
-                "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
-                "+" | "-" | "*" | "/" => TokenType::Math,
-                "{" | "}" | "|" => TokenType::SquirlyBracket,
-                "let" | "=" | "mut" => TokenType::Assignment,
-                ";" => TokenType::Endl,
-                "&" => TokenType::Barrow,
-                "'" if matches!(flags[index], TokenFlags::Generic) => TokenType::Lifetime,
-                _s if matches!(flags[index], TokenFlags::Generic) && prevToken == "'" => TokenType::Lifetime,
-                "a" | "b" if prevToken == "'" && (nextToken == "," || nextToken == ">" || nextToken == " ") => TokenType::Lifetime,
-                "\"" | "'" => TokenType::String,
-                "enum" | "pub" | "struct" | "impl" | "self" | "Self" => TokenType::Object,
-                _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-                _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
-                _s if prevToken == "." => TokenType::Member,
-                "fn" => TokenType::Function,
-                _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
-                _ => TokenType::Null,
+            match language {
+                Languages::Cpp => match strToken.as_str() {
+                    _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
+                    _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
+                    "if" | "for" | "while" | "in" | "else" |
+                        "break" | "loop" | "goto" | "return" | "std" |
+                        "const" | "static" | "template" | "continue" |
+                        "include" | "#" | "alloc" | "malloc" |
+                        "using" | "namespace" => TokenType::Keyword,
+                    " " => TokenType::Null,
+                    "int" | "float" | "double" | "string" | "char" | "short" |
+                        "long" | "bool" | "unsigned" => TokenType::Primative,
+                    "[" | "]" => TokenType::Bracket,
+                    "(" | ")" => TokenType::Parentheses,
+                    ":" => TokenType::Member,
+                    s if s.chars().next().map_or(false, |c| {
+                        c.is_ascii_digit()
+                    }) => TokenType::Number,
+                    "=" | "-" if nextToken == ">" => TokenType::Keyword,
+                    ">" if prevToken == "=" => TokenType::Keyword,
+                    ">" if prevToken == "-" => TokenType::Keyword,
+                    "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
+                    s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
+                    s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
+                    ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
+                    "=" if nextToken == "=" => TokenType::Logic,
+                    "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
+                    "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
+                    "+" | "-" | "*" | "/" => TokenType::Math,
+                    "{" | "}" | "|" => TokenType::SquirlyBracket,
+                    "=" => TokenType::Assignment,
+                    ";" => TokenType::Endl,
+                    "&" => TokenType::Barrow,
+                    "\"" | "'" => TokenType::String,
+                    "public" | "private" | "this" | "class" | "struct" => TokenType::Object,
+                    _s if strToken.to_uppercase() == *strToken => TokenType::Const,
+                    _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
+                    _s if prevToken == "." => TokenType::Member,
+                    _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
+                    _ => TokenType::Null,
+                }
+                _ => match strToken.as_str() {  // rust
+                    _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
+                    _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
+                    "if" | "for" | "while" | "in" | "else" |
+                        "break" | "loop" | "match" | "return" | "std" |
+                        "const" | "static" | "dyn" | "type" | "continue" |
+                        "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
+                        "async" | "await" | "default" | "derive" | "new" |
+                        "as" | "?" => TokenType::Keyword,
+                    " " => TokenType::Null,
+                    "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
+                        "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
+                        "f16" | "f32" | "f64" | "f128" | "String" |
+                        "str" | "Vec" | "bool" | "char" | "Result" |
+                        "Option" => TokenType::Primative,
+                    "[" | "]" => TokenType::Bracket,
+                    "(" | ")" => TokenType::Parentheses,
+                    "#" => TokenType::Macro,
+                    _s if nextToken == "!" => TokenType::Macro,
+                    ":" => TokenType::Member,
+                    //"" => TokenType::Variable,
+                    s if s.chars().next().map_or(false, |c| {
+                        c.is_ascii_digit()
+                    }) => TokenType::Number,
+                    "=" | "-" if nextToken == ">" => TokenType::Keyword,
+                    ">" if prevToken == "=" => TokenType::Keyword,
+                    ">" if prevToken == "-" => TokenType::Keyword,
+                    "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
+                    s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
+                    s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
+                    ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
+                    "=" if nextToken == "=" => TokenType::Logic,
+                    "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
+                    "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
+                    "+" | "-" | "*" | "/" => TokenType::Math,
+                    "{" | "}" | "|" => TokenType::SquirlyBracket,
+                    "let" | "=" | "mut" => TokenType::Assignment,
+                    ";" => TokenType::Endl,
+                    "&" => TokenType::Barrow,
+                    "'" if matches!(flags[index], TokenFlags::Generic) => TokenType::Lifetime,
+                    _s if matches!(flags[index], TokenFlags::Generic) && prevToken == "'" => TokenType::Lifetime,
+                    "a" | "b" if prevToken == "'" && (nextToken == "," || nextToken == ">" || nextToken == " ") => TokenType::Lifetime,
+                    "\"" | "'" => TokenType::String,
+                    "enum" | "pub" | "struct" | "impl" | "self" | "Self" => TokenType::Object,
+                    _s if strToken.to_uppercase() == *strToken => TokenType::Const,
+                    _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
+                    _s if prevToken == "." => TokenType::Member,
+                    "fn" => TokenType::Function,
+                    _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
+                    _ => TokenType::Null,
+                },
             },
         strToken.clone()));
     }
@@ -737,7 +799,8 @@ impl CodeTab {
     pub fn RecalcTokens (&mut self, lineNumber: usize) {
         self.lineTokens[lineNumber].clear();
 
-        let newTokens = GenerateTokens(self.lines[lineNumber].clone());
+        let ending = self.fileName.split('.').last().unwrap_or("");
+        let newTokens = GenerateTokens(self.lines[lineNumber].clone(), ending);
         self.lineTokens[lineNumber] = newTokens;
     }
 
@@ -783,7 +846,7 @@ impl CodeTab {
                 text.white()
             },
             TokenType::Macro => {
-                text.blue().italic()
+                text.light_green().italic().bold()
             },
             TokenType::Const => {
                 text.cyan().italic()
@@ -798,7 +861,8 @@ impl CodeTab {
                 text.yellow()
             },
             TokenType::Comment => {
-                text.green()
+                if text == "todo" || text == "!" || text == "error" || text == "condition" || text == "conditions" {  text.green()  }  // basic but it kinda does stuff idk
+                else {  text.green().dim()  }
             },
             TokenType::Null => {
                 text.white()
@@ -810,7 +874,7 @@ impl CodeTab {
                 text.light_red().bold()
             }
         }
-    } 
+    }
 
     pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool) -> Vec <ratatui::text::Line> {
         // using the known area to adjust the scrolled position
@@ -1153,7 +1217,10 @@ impl FileBrowser {
                     tab.lineTokens.clear();
                     for line in tab.lines.iter() {
                         tab.lineTokens.push(
-                            GenerateTokens(line.clone())
+                            {
+                                let ending = tab.fileName.split('.').last().unwrap_or("");
+                                GenerateTokens(line.clone(), ending)
+                            }
                         );
                     }
                     (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
@@ -1595,7 +1662,7 @@ impl App {
                 MouseEventType::Left => {
                     // checking for code selection
                     if matches!(event.state, MouseState::Release) {
-                        if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+                        if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
                             let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                             let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
                                 event.position.1.saturating_sub(4) as usize,
@@ -1611,10 +1678,42 @@ impl App {
                                     } else {  0  }
                                 } )
                             );
+                            tab.cursor.1 = std::cmp::min(
+                                tab.cursor.1,
+                                tab.lines[tab.cursor.0].len()
+                            );
                             tab.mouseScrolled = 0;
                             tab.mouseScrolledFlt = 0.0;
-                        } else {
-                            // todo!
+                            self.appState = AppState::Tabs;
+                            self.tabState = TabState::Code;
+                        } else if event.position.0 <= 29 && event.position.1 < self.area.height - 10  {
+                            // getting the line clicked on and jumping to it if it's in range
+                            // account for the line scrolling/shifting... (not as bad as I thought it would be)
+                            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
+                            let line = std::cmp::min(
+                                event.position.1.saturating_sub(3) as usize + scrollTo,
+                                self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes.len() - 1
+                            );
+                            self.fileBrowser.outlineCursor = line;
+                            let scopes = &mut self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
+                                line].clone();
+                            scopes.reverse();
+                            self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
+                                self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
+                                    scopes
+                            ).start;
+                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
+                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
+                        } else if event.position.0 > 29 && event.position.1 <= 2 {
+                            // tallying the size till the correct tab is found
+                            let mut sizeCounted = 29usize;
+                            for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
+                                sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
+                                if sizeCounted >= event.position.0 as usize {
+                                    self.codeTabs.currentTab = index;
+                                    break;
+                                }
+                            }
                         }
                     }
                 },
@@ -1692,6 +1791,10 @@ impl App {
                         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
                             self.appState = AppState::Tabs;
                             self.tabState = TabState::Code;
+                        } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+                            self.codeTabs.tabs.remove(self.codeTabs.currentTab);
+                            self.codeTabs.tabFileNames.remove(self.codeTabs.currentTab);
+                            self.codeTabs.currentTab = self.codeTabs.currentTab.saturating_sub(1);
                         }
                     },
                 }
@@ -2107,7 +2210,6 @@ impl Widget for &mut App {
                 width: area.width,
                 height: 8
             }, buf);
-
         
         // ============================================= Commandline =============================================
         let commandText = Text::from(vec![
