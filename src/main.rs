@@ -476,7 +476,9 @@ pub struct CodeTab {
     mouseScrolled: isize,
     mouseScrolledFlt: f64,
     name: String,
-    fileName: String
+    fileName: String,
+    cursorEnd: (usize, usize),  // for text highlighting
+    highlighting: bool,
 }
 
 impl CodeTab {
@@ -580,6 +582,11 @@ impl CodeTab {
     }
     
     pub fn MoveCursorLeft (&mut self, amount: usize) {
+        /*if self.highlighting && self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            self.highlighting = false;
+            return;
+        } else if self.highlighting {  self.highlighting = false; return;  }*/
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         if (self.cursor.1 == 0 || self.lines[self.cursor.0].is_empty()) && self.cursor.0 > 0 {
@@ -598,6 +605,11 @@ impl CodeTab {
     }
 
     pub fn MoveCursorRight (&mut self, amount: usize) {
+        /*if self.highlighting && self.cursor.0 < self.cursorEnd.0 || self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 {
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            self.highlighting = false;
+            return;
+        } else if self.highlighting {  self.highlighting = false; return;  }*/
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         if self.cursor.1 >= self.lines[self.cursor.0].len() && self.cursor.0 < self.lines.len() - 1 {
@@ -613,6 +625,8 @@ impl CodeTab {
     }
 
     pub fn InsertChars (&mut self, chs: String) {
+        self.HandleHighlight();  // doesn't need to exit bc/ chars should still be added
+
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0]
@@ -655,6 +669,10 @@ impl CodeTab {
     }
 
     pub fn CursorUp (&mut self) {
+        /*if self.highlighting && self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            self.highlighting = false;
+        } else if self.highlighting {  self.highlighting = false;  }*/
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         self.cursor = (
@@ -664,6 +682,16 @@ impl CodeTab {
     }
 
     pub fn CursorDown (&mut self) {
+        /*if self.highlighting && self.cursor.0 < self.cursorEnd.0 || self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 {
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            self.highlighting = false;
+        } else if self.highlighting {  self.highlighting = false;  }*/
+        /*
+        if self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            self.highlighting = false;
+        } */
+
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         self.cursor = (
@@ -739,10 +767,52 @@ impl CodeTab {
 
     }
 
+    pub fn HandleHighlight (&mut self) -> bool {
+        if self.highlighting && self.cursorEnd != self.cursor {
+            if self.cursorEnd.0 < self.cursor.0 ||
+                 self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1
+            {
+                if self.cursorEnd.0 == self.cursor.0 {
+                    self.lines[self.cursorEnd.0].replace_range(self.cursorEnd.1..self.cursor.1, "");
+                    self.RecalcTokens(self.cursor.0);
+                } else {
+                    self.lines[self.cursorEnd.0].replace_range(self.cursorEnd.1.., "");
+                    self.RecalcTokens(self.cursorEnd.0);
+                    self.lines[self.cursor.0].replace_range(..self.cursor.1, "");
+                    self.RecalcTokens(self.cursor.0);
+                    // go through any inbetween lines and delete them. Also delete one extra line so there aren't to blanks?
+                    let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
+                    for _ in 0..numBetween {
+                        self.lines.remove(self.cursorEnd.0 + 1);
+                        self.lineTokens.remove(self.cursorEnd.0 + 1);
+                    }
+                    // push the next line onto the first...
+                    let nextLine = self.lines[self.cursorEnd.0 + 1].clone();
+                    self.lines[self.cursorEnd.0].push_str(nextLine.as_str());
+                    self.RecalcTokens(self.cursorEnd.0);
+                    self.lines.remove(self.cursorEnd.0 + 1);
+                    self.lineTokens.remove(self.cursorEnd.0 + 1);
+                }
+                
+                self.highlighting = false;
+                self.cursor = self.cursorEnd;
+                (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens);
+                return true;
+            } else {
+                // swapping the cursor and ending points so the other calculations work
+                (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+                return self.HandleHighlight();
+            }
+        } false
+    }
+
     // cursorOffset can be used to delete in multiple directions
     // if the cursorOffset is equal to numDel, it'll delete to the right
     // cursorOffset = 0 is default and dels to the left
     pub fn DelChars (&mut self, numDel: usize, cursorOffset: usize) {
+        // deleting characters from scrolling
+        if self.HandleHighlight() {  return;  }
+
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0]
@@ -937,25 +1007,117 @@ impl CodeTab {
                         if currentCharNum == self.cursor.1 && editingCode {
                             coloredLeft.push((1, "|".to_string().white().bold()));
                         }
-                        coloredRight.push((text.len(), self.GenerateColor(token, text.as_str())));
+                        if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
+                            if self.highlighting && (lineNumber == self.cursorEnd.0 && currentCharNum+text.len() <= self.cursorEnd.1 ||
+                                lineNumber == self.cursor.0 && currentCharNum >= self.cursor.1) && self.cursor.0 != self.cursorEnd.0 ||
+                                (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
+                                (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
+                                currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
+                            {
+                                coloredRight.push((text.len(), self.GenerateColor(token, text.as_str()).on_dark_gray()));
+                            } else if self.highlighting && currentCharNum+text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                                let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
+                                let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
+                                coloredRight.push((text.len(), self.GenerateColor(token, txtLeft).on_dark_gray()));
+                                coloredRight.push((text.len(), self.GenerateColor(token, txtRight)));
+                            } else {
+                                coloredRight.push((text.len(), self.GenerateColor(token, text.as_str())));
+                            }
+                        } else {
+                            coloredRight.push((text.len(), self.GenerateColor(token, text.as_str())));
+                        }
                     } else {
                         let txt = &text[0..text.len() - (
                             currentCharNum + text.len() - self.cursor.1
                         )];
-                        coloredLeft.push((
-                            txt.len(),
-                            self.GenerateColor(token, txt)
-                        ));
+                        let leftSize = txt.len();
+                        if self.highlighting && (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) {
+                            if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < text.len() &&
+                                self.cursor.0 == self.cursorEnd.0
+                            {
+                                coloredLeft.push((
+                                    self.cursorEnd.1 - currentCharNum,  // this is greater than the text length.....
+                                    self.GenerateColor(token, &txt[..self.cursorEnd.1 - currentCharNum])
+                                ));
+                                coloredLeft.push((
+                                    txt.len() - (self.cursorEnd.1 - currentCharNum),
+                                    self.GenerateColor(token, &txt[self.cursorEnd.1 - currentCharNum..]).on_dark_gray()
+                                ));
+                            } else {
+                                coloredLeft.push((
+                                    txt.len(),
+                                    self.GenerateColor(token, txt).on_dark_gray()
+                                ));
+                            }
+                        } else {
+                            coloredLeft.push((
+                                txt.len(),
+                                self.GenerateColor(token, txt)
+                            ));
+                        }
                         if editingCode {  coloredLeft.push((1, "|".to_string().white().bold()))  };
                         let txt = &text[
                             text.len() - (
                                 currentCharNum + text.len() - self.cursor.1
                             )..text.len()
                         ];
-                        coloredRight.push((
-                            txt.len(),
-                            self.GenerateColor(token, txt)
-                        ));
+                        if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
+                            if self.cursorEnd.1 > currentCharNum+leftSize && self.cursorEnd.1 < currentCharNum + text.len() {
+                                coloredRight.push((
+                                    self.cursorEnd.1 - (currentCharNum+leftSize),
+                                    self.GenerateColor(token, &txt[..self.cursorEnd.1 - (currentCharNum+leftSize)]).on_dark_gray()
+                                ));
+                                coloredRight.push((
+                                    txt.len() - (self.cursorEnd.1 - (currentCharNum+leftSize)),
+                                    self.GenerateColor(token, &txt[self.cursorEnd.1 - (currentCharNum+leftSize)..])
+                                ));
+                            } else {
+                                coloredRight.push((
+                                    txt.len(),
+                                    self.GenerateColor(token, txt).on_dark_gray()
+                                ));
+                            }
+                        } else {
+                            coloredRight.push((
+                                txt.len(),
+                                self.GenerateColor(token, txt)
+                            ));
+                        }
+                    }
+                } else if (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) && self.highlighting {
+                    if (lineNumber > self.cursorEnd.0 && lineNumber < self.cursor.0) ||
+                        (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
+                        currentCharNum >= self.cursorEnd.1 && currentCharNum + text.len() <= self.cursor.1)
+                    {
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str()).on_dark_gray()));
+                    } else if currentCharNum+text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                        let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
+                        let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft)));
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight).on_dark_gray()));
+                    } else if (lineNumber == self.cursor.0 && currentCharNum+text.len() <= self.cursor.1 ||
+                        lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
+                    {
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str()).on_dark_gray()));
+                    } else {
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str())));
+                    }
+                } else if self.highlighting {
+                    if (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
+                        (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
+                        currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
+                    {
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str()).on_dark_gray()));
+                    } else if currentCharNum+text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                        let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
+                        let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft).on_dark_gray()));
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight)));
+                    } else if (lineNumber == self.cursorEnd.0 && currentCharNum <= self.cursorEnd.1 ||
+                            lineNumber == self.cursor.0 && currentCharNum >= self.cursor.1) && self.cursorEnd.0 != self.cursor.0 {
+                                coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str()).on_dark_gray()));
+                    } else {
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str())));
                     }
                 } else {
                     coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str())));
@@ -1014,6 +1176,8 @@ impl Default for CodeTab {
             name: "Welcome.txt"
                 .to_string(),
             fileName: "".to_string(),
+            cursorEnd: (0, 0),
+            highlighting: false,
         }
     }
 }
@@ -1153,6 +1317,8 @@ impl Default for CodeTabs {
                     mouseScrolledFlt: 0.0,
                     name: "main.rs".to_string(),
                     fileName: "".to_string(),
+                    cursorEnd: (0, 0),
+                    highlighting: false,
                 }
 
             ],  // put a tab here or something idk
@@ -1315,6 +1481,7 @@ pub struct KeyParser {
     inEscapeSeq: bool,
     bytes: usize,
     mouseEvent: Option <MouseEvent>,
+    mouseModifiers: Vec <KeyModifiers>,
 }
 
 impl KeyParser {
@@ -1335,12 +1502,14 @@ impl KeyParser {
             inEscapeSeq: false,
             bytes: 0,
             mouseEvent: None,
+            mouseModifiers: vec!(),
         }
     }
 
     pub fn ClearEvents (&mut self) {
         self.charEvents.clear();
         self.keyModifiers.clear();
+        self.mouseModifiers.clear();
         self.keyEvents.clear();
         self.inEscapeSeq = false;
 
@@ -1367,8 +1536,12 @@ impl KeyParser {
         self.charEvents.contains(&chr)
     }
 
-    pub fn ContainsModifier (&self, modifider: KeyModifiers) -> bool {
-        self.keyModifiers.contains(&modifider)
+    pub fn ContainsModifier (&self, modifier: KeyModifiers) -> bool {
+        self.keyModifiers.contains(&modifier)
+    }
+
+    pub fn ContainsMouseModifier (&self, modifier: KeyModifiers) -> bool {
+        self.mouseModifiers.contains(&modifier)
     }
 
     pub fn ContainsKeyCode (&self, key: KeyCode) -> bool {
@@ -1430,6 +1603,7 @@ impl Perform for KeyParser {
         if c == 'M' || c == 'm' {
             if let Some([byte, x, y]) = numbers.get(0..3) {
                 let button = byte & 0b11; // Mask lowest 2 bits (button type)
+                //println!("button: {}, numbers: {:?}", button, numbers);
 
                 // adding key press modifiers
                 if (byte & 32) != 0 {
@@ -1440,15 +1614,33 @@ impl Perform for KeyParser {
                     self.keyModifiers.push(KeyModifiers::Control);
                 }
 
-                let is_scroll = (byte & 64) != 0;
-                let eventType = match (is_scroll, button) {
+                //println!("Code: {:?} / {}", numbers, c);
+
+                let isScroll = (byte & 64) != 0;
+                let eventType = match (isScroll, button) {
                     (true, 0) => MouseEventType::Up,   // 1???? ig so
                     (true, 1) => MouseEventType::Down, // 2???? ig so
                     (false, 0) => MouseEventType::Left,
                     (false, 1) => MouseEventType::Middle,
                     (false, 2) => MouseEventType::Right,
-                    _ => MouseEventType::Null,
+                    _ => MouseEventType::Null
                 };
+
+                if matches!(eventType, MouseEventType::Left) && numbers[0] == 4 {
+                    self.mouseModifiers.push(KeyModifiers::Shift);
+                }
+
+                if let Some(event) = &mut self.mouseEvent {
+                    if matches!(eventType, MouseEventType::Left) &&
+                        event.position != (*x, *y) &&
+                        matches!(event.state, MouseState::Hold) &&
+                        c == 'M'
+                    {
+                        event.position = (*x, *y);
+                        return;
+                    }
+                }
+
                 self.mouseEvent = Some(MouseEvent {
                     eventType,
                     position: (*x, *y),
@@ -1462,6 +1654,8 @@ impl Perform for KeyParser {
                 });
 
             }
+
+            return;
         }
 
         //for number in &numbers {println!("{}", number);}
@@ -1498,6 +1692,22 @@ impl Perform for KeyParser {
             } else if numbers == [3, 11] {
                 self.keyModifiers.push(KeyModifiers::Command);
                 self.charEvents.push('s');  // command + s
+            } else if numbers == [3, 12] {  // lrud
+                self.keyEvents.insert(KeyCode::Left, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 13] {
+                self.keyEvents.insert(KeyCode::Right, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 14] {
+                self.keyEvents.insert(KeyCode::Up, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 15] {
+                self.keyEvents.insert(KeyCode::Down, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
@@ -1509,24 +1719,44 @@ impl Perform for KeyParser {
                     self.keyEvents.insert(KeyCode::Left, true);
                     if numbers == [1, 3] {
                         self.keyModifiers.push(KeyModifiers::Option);
+                    } else if numbers == [1, 2] {
+                        self.keyModifiers.push(KeyModifiers::Shift);
+                    } else if numbers == [1, 4] {
+                        self.keyModifiers.push(KeyModifiers::Option);
+                        self.keyModifiers.push(KeyModifiers::Shift);
                     }
                 },
                 0x43 => {
                     self.keyEvents.insert(KeyCode::Right, true);
                     if numbers == [1, 3] {
                         self.keyModifiers.push(KeyModifiers::Option);
+                    } else if numbers == [1, 2] {
+                        self.keyModifiers.push(KeyModifiers::Shift);
+                    } else if numbers == [1, 4] {
+                        self.keyModifiers.push(KeyModifiers::Option);
+                        self.keyModifiers.push(KeyModifiers::Shift);
                     }
                 },
                 0x41 => {
                     self.keyEvents.insert(KeyCode::Up, true);
                     if numbers == [1, 3] {
                         self.keyModifiers.push(KeyModifiers::Option);
+                    } else if numbers == [1, 2] {
+                        self.keyModifiers.push(KeyModifiers::Shift);
+                    } else if numbers == [1, 4] {
+                        self.keyModifiers.push(KeyModifiers::Option);
+                        self.keyModifiers.push(KeyModifiers::Shift);
                     }
                 },
                 0x42 => {
                     self.keyEvents.insert(KeyCode::Down, true);
                     if numbers == [1, 3] {
                         self.keyModifiers.push(KeyModifiers::Option);
+                    } else if numbers == [1, 2] {
+                        self.keyModifiers.push(KeyModifiers::Shift);
+                    } else if numbers == [1, 4] {
+                        self.keyModifiers.push(KeyModifiers::Option);
+                        self.keyModifiers.push(KeyModifiers::Shift);
                     }
                 },
                 _ => {},
@@ -1661,12 +1891,16 @@ impl App {
                 },
                 MouseEventType::Left => {
                     // checking for code selection
-                    if matches!(event.state, MouseState::Release) {
+                    if matches!(event.state, MouseState::Release | MouseState::Hold) {
                         if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
+                            // updating the highlighting position
+                            let cursorEnding = self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+
                             let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
                             let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
                                 event.position.1.saturating_sub(4) as usize,
-                                event.position.0.saturating_sub(37) as usize);
+                                event.position.0.saturating_sub(lineSize as u16) as usize);
                             tab.cursor = (
                                 std::cmp::min(
                                     linePos.0,
@@ -1686,7 +1920,56 @@ impl App {
                             tab.mouseScrolledFlt = 0.0;
                             self.appState = AppState::Tabs;
                             self.tabState = TabState::Code;
-                        } else if event.position.0 <= 29 && event.position.1 < self.area.height - 10  {
+
+                            if cursorEnding != tab.cursor && !tab.highlighting
+                            {
+                                if !tab.highlighting {
+                                    tab.cursorEnd = cursorEnding;
+                                    tab.highlighting = true;
+                                }
+                            } else if !tab.highlighting {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
+                        }
+                    } else if matches!(event.state, MouseState::Press) {
+                        if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
+                            // updating the highlighting position
+                            if events.ContainsMouseModifier(KeyModifiers::Shift)
+                            {
+                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
+                                }
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
+
+                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+                            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                                event.position.1.saturating_sub(4) as usize,
+                                event.position.0.saturating_sub(lineSize as u16) as usize);
+                            tab.cursor = (
+                                std::cmp::min(
+                                    linePos.0,
+                                    tab.lines.len() - 1
+                                ),
+                                linePos.1.saturating_sub( {
+                                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                                        1
+                                    } else {  0  }
+                                } )
+                            );
+                            tab.cursor.1 = std::cmp::min(
+                                tab.cursor.1,
+                                tab.lines[tab.cursor.0].len()
+                            );
+                            tab.mouseScrolled = 0;
+                            tab.mouseScrolledFlt = 0.0;
+                            self.appState = AppState::Tabs;
+                            self.tabState = TabState::Code;
+                        } else if event.position.0 <= 29 && event.position.1 < self.area.height - 10 && matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
                             // getting the line clicked on and jumping to it if it's in range
                             // account for the line scrolling/shifting... (not as bad as I thought it would be)
                             let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
@@ -1876,6 +2159,16 @@ impl App {
                                 self.codeTabs.currentTab
                             ].DelChars(numDel, offset);
                         } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
+                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            {
+                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
+                                }
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
@@ -1899,6 +2192,16 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            {
+                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
+                                }
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
@@ -1912,6 +2215,16 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            {
+                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
+                                }
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
@@ -1927,6 +2240,16 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp();
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            {
+                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
+                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
+                                }
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                            }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
@@ -2197,7 +2520,7 @@ impl Widget for &mut App {
         
         let errorText = Text::from(vec![
             Line::from(vec![
-                format!("Debug: {}", self.debugInfo).red().bold()
+                format!("Debug: {}", self.debugInfo).red().bold(),
                 //"Error: callback on line 5".to_string().red().bold()
             ]),
         ]);
