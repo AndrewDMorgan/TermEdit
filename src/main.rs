@@ -854,6 +854,7 @@ impl CodeTab {
             }
         } else {
             occumulation.push_str(self.lines[self.cursor.0].clone().as_str());
+            occumulation.push('\n');  // fix this so that it always forces it to be pushed to a new line before
         }
 
         occumulation
@@ -1781,6 +1782,9 @@ impl Perform for KeyParser {
             } else if numbers == [3, 17] {
                 self.keyModifiers.push(KeyModifiers::Command);
                 self.charEvents.push('v');
+            } else if numbers == [3, 18] {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('x');
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
@@ -2376,31 +2380,39 @@ impl App {
                             let text = self.codeTabs.tabs[self.codeTabs.currentTab].GetSelection();
                             let _ = clipBoard.set_text(text);
                         } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        keyEvents.charEvents.contains(&'x')
+                        {
+                            // get the highlighted section of text.... or the line if none
+                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                            let text = tab.GetSelection();
+                            let _ = clipBoard.set_text(text);
+
+                            // clearing the rest of the selection
+                            if tab.highlighting {
+                                tab.DelChars(0, 0);
+                            } else {
+                                tab.lines[tab.cursor.0].clear();
+                                tab.RecalcTokens(tab.cursor.0);
+                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
+                            }
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
                         keyEvents.charEvents.contains(&'v')
                         {
                             // pasting in the text
                             if let Ok(text) = clipBoard.get_text() {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                let rightText = tab.lines[tab.cursor.0].split_off(tab.cursor.1);
-
                                 let splitText = text.split('\n');
                                 let splitLength = splitText.clone().count() - 1;
                                 for (i, line) in splitText.enumerate() {
+                                    if line.is_empty() {  continue;  }
                                     tab.InsertChars(
                                         line.to_string()
                                     );
                                     if i < splitLength {
-                                        let preCursor = tab.cursor.0;
                                         // why does highlight need to be set to true?????? This makes noooo sense??? I give up
                                         tab.LineBreakIn(true);
-                                        if preCursor == tab.cursor.0 {
-                                            self.debugInfo = "NOOOOOO".to_string();
-                                        }
                                     }
                                 }
-                                let preCursor = tab.cursor.1;
-                                tab.InsertChars(rightText);
-                                tab.cursor.1 = preCursor;
                             }
                         }
                     },
