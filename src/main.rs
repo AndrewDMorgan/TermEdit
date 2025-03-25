@@ -1,12 +1,11 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
-use std::default;
-
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
 use vte::{Parser, Perform};
 
 use crossterm::terminal::enable_raw_mode;
+use arboard::Clipboard;
 
 use ratatui::text::Span;
 use ratatui::{
@@ -348,7 +347,7 @@ const VALID_NAMES_TAKE: [&str; 6] = [
     "loop",
 ];
 
-pub fn GenerateScopes (tokenLines: &Vec <Vec <(TokenType, String)>>) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
+pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>]) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
     // tracking the scope (functions = new scope; struct/enums = new scope; for/while = new scope)
     let mut rootNode = ScopeNode {
         children: vec![],
@@ -479,6 +478,7 @@ pub struct CodeTab {
     fileName: String,
     cursorEnd: (usize, usize),  // for text highlighting
     highlighting: bool,
+    pauseScroll: u128,
 }
 
 impl CodeTab {
@@ -581,12 +581,14 @@ impl CodeTab {
         }
     }
     
-    pub fn MoveCursorLeft (&mut self, amount: usize) {
-        /*if self.highlighting && self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
+    pub fn MoveCursorLeft (&mut self, amount: usize, highlight: bool) {
+        if self.highlighting && !highlight && self.cursor.0 > self.cursorEnd.0 ||
+            self.cursor.1 > self.cursorEnd.1 && !highlight
+        {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
             return;
-        } else if self.highlighting {  self.highlighting = false; return;  }*/
+        } else if self.highlighting && !highlight {  self.highlighting = false; return;  }
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         if (self.cursor.1 == 0 || self.lines[self.cursor.0].is_empty()) && self.cursor.0 > 0 {
@@ -604,12 +606,14 @@ impl CodeTab {
         );
     }
 
-    pub fn MoveCursorRight (&mut self, amount: usize) {
-        /*if self.highlighting && self.cursor.0 < self.cursorEnd.0 || self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 {
+    pub fn MoveCursorRight (&mut self, amount: usize, highlight: bool) {
+        if self.highlighting && !highlight && self.cursor.0 < self.cursorEnd.0 ||
+            self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 && !highlight
+        {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
             return;
-        } else if self.highlighting {  self.highlighting = false; return;  }*/
+        } else if self.highlighting && !highlight {  self.highlighting = false; return;  }
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         if self.cursor.1 >= self.lines[self.cursor.0].len() && self.cursor.0 < self.lines.len() - 1 {
@@ -668,11 +672,13 @@ impl CodeTab {
         }
     }
 
-    pub fn CursorUp (&mut self) {
-        /*if self.highlighting && self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
+    pub fn CursorUp (&mut self, highlight: bool) {
+        if self.highlighting && !highlight && self.cursor.0 > self.cursorEnd.0 ||
+            self.cursor.1 > self.cursorEnd.1 && !highlight
+        {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
-        } else if self.highlighting {  self.highlighting = false;  }*/
+        } else if self.highlighting && !highlight {  self.highlighting = false;  }
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         self.cursor = (
@@ -681,16 +687,13 @@ impl CodeTab {
         );
     }
 
-    pub fn CursorDown (&mut self) {
-        /*if self.highlighting && self.cursor.0 < self.cursorEnd.0 || self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 {
+    pub fn CursorDown (&mut self, highlight: bool) {
+        if self.highlighting && !highlight && self.cursor.0 < self.cursorEnd.0 ||
+            self.cursor.1 < self.cursorEnd.1 && self.cursor.0 == self.cursorEnd.1 && !highlight
+        {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
-        } else if self.highlighting {  self.highlighting = false;  }*/
-        /*
-        if self.cursor.0 > self.cursorEnd.0 || self.cursor.1 > self.cursorEnd.1 {
-            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
-            self.highlighting = false;
-        } */
+        } else if self.highlighting && !highlight {  self.highlighting = false;  }
 
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
@@ -726,7 +729,7 @@ impl CodeTab {
         );
     }
 
-    pub fn LineBreakIn (&mut self) {
+    pub fn LineBreakIn (&mut self, highlight: bool) {
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         let length = self.lines[self.cursor.0].len();
@@ -739,7 +742,7 @@ impl CodeTab {
             (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens);
 
             self.cursor.1 = 0;
-            self.CursorDown();
+            self.CursorDown(highlight);
             return;
         }
 
@@ -761,7 +764,7 @@ impl CodeTab {
         self.RecalcTokens(self.cursor.0);
         self.RecalcTokens(self.cursor.0 + 1);
         self.cursor.1 = 0;
-        self.CursorDown();
+        self.CursorDown(highlight);
         
         (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens);
 
@@ -804,6 +807,56 @@ impl CodeTab {
                 return self.HandleHighlight();
             }
         } false
+    }
+
+    pub fn GetSelection (&self) -> String {
+        let mut occumulation = String::new();
+
+        if self.highlighting && self.cursor != self.cursorEnd {
+            if self.cursorEnd.0 == self.cursor.0 {
+                if self.cursorEnd.1 < self.cursor.1 {  // cursor on the smae line
+                    let selection = &self.lines[self.cursor.0][self.cursorEnd.1..self.cursor.1];
+                    occumulation.push_str(selection);
+                } else {
+                    let selection = &self.lines[self.cursor.0][self.cursor.1..self.cursorEnd.1];
+                    occumulation.push_str(selection);
+                }
+            } else if self.cursor.0 > self.cursorEnd.0 {  // cursor highlighting downwards
+                let selection = &self.lines[self.cursorEnd.0][self.cursorEnd.1..];
+                occumulation.push_str(selection);
+                occumulation.push('\n');
+
+                // getting the center section
+                let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
+                for i in 0..numBetween {
+                    let selection = &self.lines[self.cursorEnd.0 + 1 + i];
+                    occumulation.push_str(selection.clone().as_str());
+                    occumulation.push('\n');
+                }
+
+                let selection = &self.lines[self.cursor.0][..self.cursor.1];
+                occumulation.push_str(selection);
+            } else {  // cursor highlighting upwards
+                let selection = &self.lines[self.cursor.0][self.cursor.1..];
+                occumulation.push_str(selection);
+                occumulation.push('\n');
+
+                // getting the center section
+                let numBetween = self.cursorEnd.0 - self.cursor.0 - 1;
+                for i in 0..numBetween {
+                    let selection = &self.lines[self.cursor.0 + 1 + i];
+                    occumulation.push_str(selection.clone().as_str());
+                    occumulation.push('\n');
+                }
+
+                let selection = &self.lines[self.cursorEnd.0][..self.cursorEnd.1];
+                occumulation.push_str(selection);
+            }
+        } else {
+            occumulation.push_str(self.lines[self.cursor.0].clone().as_str());
+        }
+
+        occumulation
     }
 
     // cursorOffset can be used to delete in multiple directions
@@ -947,27 +1000,39 @@ impl CodeTab {
     }
 
     pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool) -> Vec <ratatui::text::Line> {
-        // using the known area to adjust the scrolled position
-        if self.scrolled + SCROLL_BOUNDS >= self.cursor.0 {
-            if self.scrolled.saturating_sub(CENTER_BOUNDS) >= self.cursor.0 {
-                let center = std::cmp::min(
-                    self.cursor.0.saturating_sub((area.height as usize).saturating_sub(10) / 2),
-                    self.lines.len() - 1
-                );
-                self.scrolled = center;
-            } else {
-                self.scrolled = self.cursor.0.saturating_sub(SCROLL_BOUNDS);
+        // using the known area to adjust the scrolled position (even though this can now be done elsewise..... too lazy to move it)
+        let currentTime = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards...")
+            .as_millis();
+        if currentTime.saturating_sub(self.pauseScroll) > 125 {
+            if self.scrolled + SCROLL_BOUNDS >= self.cursor.0 {
+                if self.scrolled.saturating_sub(CENTER_BOUNDS) >= self.cursor.0 && !self.highlighting {
+                    let center = std::cmp::min(
+                        self.cursor.0.saturating_sub((area.height as usize).saturating_sub(10) / 2),
+                        self.lines.len() - 1
+                    );
+                    self.scrolled = center;
+                } else {
+                    self.scrolled = self.cursor.0.saturating_sub(SCROLL_BOUNDS);
+                    if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
+                        std::thread::sleep(std::time::Duration::from_millis(75));
+                    }
+                }
             }
-        }
-        if (self.scrolled + area.height as usize - 12).saturating_sub(SCROLL_BOUNDS) <= self.cursor.0 {
-            if self.scrolled + area.height as usize + CENTER_BOUNDS <= self.cursor.0 {
-                let center = std::cmp::min(
-                    self.cursor.0.saturating_sub((area.height as usize).saturating_sub(10) / 2),
-                    self.lines.len() - 1
-                );
-                self.scrolled = center;
-            } else {
-                self.scrolled = (self.cursor.0 + SCROLL_BOUNDS).saturating_sub(area.height as usize - 12);
+            if (self.scrolled + area.height as usize - 12).saturating_sub(SCROLL_BOUNDS) <= self.cursor.0 {
+                if self.scrolled + area.height as usize + CENTER_BOUNDS <= self.cursor.0 && !self.highlighting {
+                    let center = std::cmp::min(
+                        self.cursor.0.saturating_sub((area.height as usize).saturating_sub(10) / 2),
+                        self.lines.len() - 1
+                    );
+                    self.scrolled = center;
+                } else {
+                    self.scrolled = (self.cursor.0 + SCROLL_BOUNDS).saturating_sub(area.height as usize - 12);
+                    if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
+                        std::thread::sleep(std::time::Duration::from_millis(75));
+                    }
+                }
             }
         }
 
@@ -1178,6 +1243,7 @@ impl Default for CodeTab {
             fileName: "".to_string(),
             cursorEnd: (0, 0),
             highlighting: false,
+            pauseScroll: 0,
         }
     }
 }
@@ -1319,6 +1385,7 @@ impl Default for CodeTabs {
                     fileName: "".to_string(),
                     cursorEnd: (0, 0),
                     highlighting: false,
+                    pauseScroll: 0,
                 }
 
             ],  // put a tab here or something idk
@@ -1708,6 +1775,12 @@ impl Perform for KeyParser {
                 self.keyEvents.insert(KeyCode::Down, true);
                 self.keyModifiers.push(KeyModifiers::Command);
                 self.keyModifiers.push(KeyModifiers::Shift);
+            } else if numbers == [3, 16] {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('c');
+            } else if numbers == [3, 17] {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('v');
             }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
@@ -1789,6 +1862,8 @@ impl App {
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
+        let mut clipboard = Clipboard::new().unwrap();
+
         self.fileBrowser.LoadFilePath("src/", &mut self.codeTabs);
         self.fileBrowser.fileCursor = 1;
         self.codeTabs.currentTab = 1;
@@ -1829,7 +1904,7 @@ impl App {
             }
 
             self.area = terminal.get_frame().area();  // ig this is a thing
-            self.HandleKeyEvents(&keyParser);
+            self.HandleKeyEvents(&keyParser, &mut clipboard);
             self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed but i think it should work? idk
             keyParser.ClearEvents();
         }
@@ -1933,6 +2008,11 @@ impl App {
                         }
                     } else if matches!(event.state, MouseState::Press) {
                         if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
+                            let currentTime = std::time::SystemTime::now()
+                                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                                .expect("Time went backwards...")
+                                .as_millis();
+                            self.codeTabs.tabs[self.codeTabs.currentTab].pauseScroll = currentTime;
                             // updating the highlighting position
                             if events.ContainsMouseModifier(KeyModifiers::Shift)
                             {
@@ -2007,7 +2087,7 @@ impl App {
         }
     }
 
-    fn HandleKeyEvents (&mut self, keyEvents: &KeyParser) {
+    fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
 
         match self.appState {
             AppState::CommandPrompt => {
@@ -2159,15 +2239,18 @@ impl App {
                                 self.codeTabs.currentTab
                             ].DelChars(numDel, offset);
                         } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
+                            let highlight;
                             if keyEvents.ContainsModifier(KeyModifiers::Shift)
                             {
+                                highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
                                     self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
                                         self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
                                     self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
                                 }
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                //self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                highlight = false;
                             }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
@@ -2189,18 +2272,21 @@ impl App {
                                     self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 = indentIndex;
                                 }
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1);
+                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1, highlight);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+                            let highlight;
                             if keyEvents.ContainsModifier(KeyModifiers::Shift)
                             {
+                                highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
                                     self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
                                         self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
                                     self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
                                 }
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                //self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                highlight = false;
                             }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
@@ -2212,18 +2298,21 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 =
                                     self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].len();
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1);
+                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1, highlight);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+                            let highlight;
                             if keyEvents.ContainsModifier(KeyModifiers::Shift)
                             {
+                                highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
                                     self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
                                         self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
                                     self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
                                 }
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                //self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                highlight = false;
                             }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
@@ -2237,18 +2326,21 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 0;
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp();
+                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp(highlight);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+                            let highlight;
                             if keyEvents.ContainsModifier(KeyModifiers::Shift)
                             {
+                                highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
                                     self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
                                         self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
                                     self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
                                 }
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                //self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
+                                highlight = false;
                             }
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
@@ -2261,7 +2353,7 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
                                     self.codeTabs.tabs[self.codeTabs.currentTab].lines.len() - 1;
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown();
+                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown(highlight);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
                             if keyEvents.ContainsModifier(KeyModifiers::Shift) {
@@ -2271,12 +2363,45 @@ impl App {
                                     .InsertChars("    ".to_string());
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                            self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn();
+                            self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn(false);  // can't be highlighting if breaking?
                         } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
                             keyEvents.ContainsChar('s') {
                             
                             // saving the program
                             self.codeTabs.tabs[self.codeTabs.currentTab].Save();
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                            keyEvents.charEvents.contains(&'c')
+                        {
+                            // get the highlighted section of text.... or the line if none
+                            let text = self.codeTabs.tabs[self.codeTabs.currentTab].GetSelection();
+                            let _ = clipBoard.set_text(text);
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        keyEvents.charEvents.contains(&'v')
+                        {
+                            // pasting in the text
+                            if let Ok(text) = clipBoard.get_text() {
+                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                                let rightText = tab.lines[tab.cursor.0].split_off(tab.cursor.1);
+
+                                let splitText = text.split('\n');
+                                let splitLength = splitText.clone().count() - 1;
+                                for (i, line) in splitText.enumerate() {
+                                    tab.InsertChars(
+                                        line.to_string()
+                                    );
+                                    if i < splitLength {
+                                        let preCursor = tab.cursor.0;
+                                        // why does highlight need to be set to true?????? This makes noooo sense??? I give up
+                                        tab.LineBreakIn(true);
+                                        if preCursor == tab.cursor.0 {
+                                            self.debugInfo = "NOOOOOO".to_string();
+                                        }
+                                    }
+                                }
+                                let preCursor = tab.cursor.1;
+                                tab.InsertChars(rightText);
+                                tab.cursor.1 = preCursor;
+                            }
                         }
                     },
                     _ => {}  // the other two shouldn't be accessable during the tab state (only during command-line)
@@ -2576,7 +2701,7 @@ Commands: √ <esc>
                 √ - first left jumps to the indented start
                 √ - second left jumps to the true start
             √ <cmnd> + <up/down> -> jump to start/end of file
-            <shift> + any line movement/jump -> highlight all text selected (including jumps from line # inputs)
+            √ <shift> + any line movement/jump -> highlight all text selected (including jumps from line # inputs)
             <ctrl> + <[> -> temporarily opens command line to input number of lines to jump up
             <ctrl> + <]> -> temporarily opens command line to input number of lines to jump down
             <ctrl> + <1-9> -> jump up that many positions
