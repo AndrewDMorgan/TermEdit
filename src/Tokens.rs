@@ -3,18 +3,20 @@
 // language file types for syntax highlighting
 pub enum Languages {
     Rust,
-    Cpp
+    Cpp,
+    Python,
 }
 
-const LANGS: [(Languages, &str); 3] = [
+const LANGS: [(Languages, &str); 4] = [
     (Languages::Cpp , "cpp"),
     (Languages::Cpp , "hpp"),
-    (Languages::Rust, "rs" )
+    (Languages::Rust, "rs" ),
+    (Languages::Python, "py"),
 ];
 
 
 // token / syntax highlighting stuff idk
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum TokenType {
     Bracket,
     SquirlyBracket,
@@ -36,23 +38,102 @@ pub enum TokenType {
     String,
     Comment,
     Null,
-    Primative,
+    Primitive,
     Keyword,
 }
+
+
+// tracking both the next line flags, but also individual token flags for variable/outline generation (auto complete stuff ig)
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineTokenFlags {
+    Comment,
+    Parameter,
+    Generic,
+    List,
+    String,
+    // Expression,  // leaving this out for now (not sure if brackets matter here)
+}
+
+#[derive(Debug, Clone)]
+pub enum OutlineType {
+    Variable,
+    Struct,
+    Enum,
+    Variant,  // the variant of enum
+    Method,
+    Function,
+    Member,
+    Generic,
+    Lifetime,
+}
+
+#[derive(Debug, Clone)]
+pub struct OutlineKeyword {
+    pub keyword: String,
+    pub kwType: OutlineType,
+    pub typedType: Option <String>,  // only for explicitly annotated types -- basic error tracking?
+    pub resultType: Option <String>,  // for function outputs
+    pub childKeywords: Vec <OutlineKeyword>,
+    pub scope: Vec <usize>,  // for tracking private/public methods and members
+    pub public: Option <bool>,  // true == public; false == private (or None)
+    pub mutable: bool,  // false == no; true == yes
+
+    // name, type; the type has to be explicitly annotated for this to be picked up
+    pub parameters: Option <Vec <(String, Option <String>)>>,
+    pub lineNumber: usize,
+}
+
+impl OutlineKeyword {
+    pub fn EditScopes (outline: &mut Vec <OutlineKeyword>, scope: &Vec <usize>, lineNumber: usize) {
+        for keyword in outline {
+            if keyword.lineNumber == lineNumber {
+                keyword.scope = scope.clone();
+                if matches!(keyword.kwType, OutlineType::Function | OutlineType::Enum) {
+                    keyword.scope.pop();  // seems to fix things? idk
+                }
+                return;
+            }
+        }
+    }
+
+    pub fn GetValidScoped (outline: &Vec <OutlineKeyword>, scope: &Vec <usize>) -> Vec <OutlineKeyword> {
+        let mut valid: Vec <OutlineKeyword> = vec!();
+        for keyword in outline {
+            if keyword.scope.is_empty() || scope.as_slice().starts_with(&keyword.scope.as_slice()) {
+                valid.push(keyword.clone());
+            }
+        } valid
+    }
+
+    pub fn TryFindKeyword (outline: &Vec <OutlineKeyword>, queryWord: String) -> Option <OutlineKeyword> {
+        for keyword in outline {
+            if queryWord == keyword.keyword {
+                return Some(keyword.clone());
+            }
+        }
+        None
+    }
+}
+
 
 #[derive(Clone)]
 pub enum TokenFlags {
     Comment,  // has priority of everything including strings which overrule everything else
     String,  // has priority over everything (including chars)
-    Char,  // has 2nd priority (over rules generics)
+    Char,  // has 2nd priority (overrules generics)
     Generic,
     Null,
 }
 
-pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)> {
+pub fn GenerateTokens (text: String, fileType: &str,
+                       lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
+                       lineNumber: usize,
+                       outline: &mut Vec<OutlineKeyword>,
+) -> Vec <(TokenType, String)> {
     // move this to a json file so it can be customized by the user if they so chose to
     let lineBreaks = [
         " ".to_string(),
+        "@".to_string(),
         "?".to_string(),
         "=".to_string(),
         "|".to_string(),
@@ -123,10 +204,10 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
                 },
                 "<" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::String | TokenFlags::Char) => TokenFlags::Generic,
                 //">" if matches!(currentFlag, TokenFlags::Generic) => TokenFlags::Null,  (unfortunately the lifetimes are needed... not sure how to fix it properly without tracking more info)
-                "'" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::String | TokenFlags::Generic) => {
+                /*"'" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::String | TokenFlags::Generic) => {
                     if matches!(currentFlag, TokenFlags::Char) {  TokenFlags::Null}
                     else {  TokenFlags::Char  }
-                },
+                },*/
                 _ => currentFlag,
         };
 
@@ -137,6 +218,7 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
     // track strings and track chars and generic inputs (this might allow for detecting lifetimes properly)
     let mut tokens: Vec <(TokenType, String)> = vec!();
     for (index, strToken) in tokenStrs.iter().enumerate() {
+        if strToken.is_empty() && index > 0 { continue;  }
         let emptyString = &"".to_string();
         let nextToken = tokenStrs.get(index + 1).unwrap_or(emptyString).as_str();
         let prevToken = {
@@ -153,8 +235,49 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
             }
         }
 
+        let nullCase = &(TokenType::Null, "".to_string());
+        let lastToken = &tokens.last().unwrap_or(
+            nullCase
+        ).0;
         tokens.push((
             match language {
+                Languages::Python => match strToken.as_str() {
+                    _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
+                    _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
+                    "if" | "for" | "while" | "in" | "else" |
+                    "break" | "elif" | "return" | "continue" |
+                    "import" | "and" | "not" | "or" | "@" |
+                    "try" | "except" => TokenType::Keyword,
+                    "def" => TokenType::Function,
+                    " " => TokenType::Null,
+                    "int" | "float" | "string" | "bool" | "list" |
+                    "range" | "round" | "min" | "max" | "abs" => TokenType::Primitive,
+                    "[" | "]" => TokenType::Bracket,
+                    "(" | ")" => TokenType::Parentheses,
+                    ":" => TokenType::SquirlyBracket,
+                    s if s.chars().next().map_or(false, |c| {
+                        c.is_ascii_digit()
+                    }) => TokenType::Number,
+                    "=" | "-" if nextToken == ">" => TokenType::Keyword,
+                    ">" if prevToken == "=" => TokenType::Keyword,
+                    ">" if prevToken == "-" => TokenType::Keyword,
+                    "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
+                    s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
+                    s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
+                    ">" | "<" | "False" | "True" | "!" => TokenType::Logic,
+                    "=" if nextToken == "=" => TokenType::Logic,
+                    "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
+                    "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
+                    "+" | "-" | "*" | "/" => TokenType::Math,
+                    "=" => TokenType::Assignment,
+                    "\"" | "'" => TokenType::String,
+                    "class" | "self" | "super" => TokenType::Object,
+                    _s if strToken.to_uppercase() == *strToken => TokenType::Const,
+                    _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
+                    _s if prevToken == "." => TokenType::Member,
+                    _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
+                    _ => TokenType::Null,
+                },
                 Languages::Cpp => match strToken.as_str() {
                     _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
                     _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
@@ -165,7 +288,7 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
                         "using" | "namespace" => TokenType::Keyword,
                     " " => TokenType::Null,
                     "int" | "float" | "double" | "string" | "char" | "short" |
-                        "long" | "bool" | "unsigned" => TokenType::Primative,
+                        "long" | "bool" | "unsigned" => TokenType::Primitive,
                     "[" | "]" => TokenType::Bracket,
                     "(" | ")" => TokenType::Parentheses,
                     ":" => TokenType::Member,
@@ -198,18 +321,20 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
                 _ => match strToken.as_str() {  // rust
                     _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
                     _s if matches!(flags[index], TokenFlags::String | TokenFlags::Char) => TokenType::String,
+                    "!" if matches!(lastToken, TokenType::Macro) => TokenType::Macro,
                     "if" | "for" | "while" | "in" | "else" |
                         "break" | "loop" | "match" | "return" | "std" |
                         "const" | "static" | "dyn" | "type" | "continue" |
                         "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
-                        "async" | "await" | "default" | "derive" | "new" |
-                        "as" | "?" => TokenType::Keyword,
+                        "async" | "await" | "default" | "derive" |
+                        "as" | "?" | "unsafe" => TokenType::Keyword,
                     " " => TokenType::Null,
                     "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
                         "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
                         "f16" | "f32" | "f64" | "f128" | "String" |
                         "str" | "Vec" | "bool" | "char" | "Result" |
-                        "Option" => TokenType::Primative,
+                        "Option" | "Debug" | "Clone" | "Copy" | "Default" |
+                        "new" => TokenType::Primitive,
                     "[" | "]" => TokenType::Bracket,
                     "(" | ")" => TokenType::Parentheses,
                     "#" => TokenType::Macro,
@@ -234,14 +359,18 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
                     "let" | "=" | "mut" => TokenType::Assignment,
                     ";" => TokenType::Endl,
                     "&" => TokenType::Barrow,
-                    "'" if matches!(flags[index], TokenFlags::Generic) => TokenType::Lifetime,
-                    _s if matches!(flags[index], TokenFlags::Generic) && prevToken == "'" => TokenType::Lifetime,
-                    "a" | "b" if prevToken == "'" && (nextToken == "," || nextToken == ">" || nextToken == " ") => TokenType::Lifetime,
+                    // checking if this token and the one after the next are ' or not (lifetime vs. char)
+                    "'" if index + 2 < tokenStrs.len() && tokenStrs[index + 2] != "'" && tokenStrs[index.saturating_sub(2)] != "'" => TokenType::Lifetime,
+                    _ if prevToken == "'" && nextToken != "'" => TokenType::Lifetime,
+                    //"'" if matches!(flags[index], TokenFlags::Generic) => TokenType::Lifetime,
+                    //_s if matches!(flags[index], TokenFlags::Generic) && prevToken == "'" => TokenType::Lifetime,
+                    //"a" | "b" if prevToken == "'" && (nextToken == "," || nextToken == ">" || nextToken == " ") => TokenType::Lifetime,
                     "\"" | "'" => TokenType::String,
+                    _ if prevToken == "'" => TokenType::String,
                     "enum" | "pub" | "struct" | "impl" | "self" | "Self" => TokenType::Object,
                     _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-                    _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
-                    _s if prevToken == "." => TokenType::Member,
+                    _s if (prevToken == "." || prevToken == ":") && strToken[..1].to_uppercase() == strToken[..1] => TokenType::Method,
+                    _s if prevToken == "." || prevToken == ":" => TokenType::Member,
                     "fn" => TokenType::Function,
                     _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
                     _ => TokenType::Null,
@@ -250,10 +379,214 @@ pub fn GenerateTokens (text: String, fileType: &str) -> Vec <(TokenType, String)
         strToken.clone()));
     }
 
+    // dealing with the line token stuff
+    while lineTokenFlags.len() < lineNumber + 1 {
+        lineTokenFlags.push(vec!());  // new line
+    }
+
+    let line: Vec <Vec <LineTokenFlags>>;
+    let previousFlagSet: &Vec <LineTokenFlags> = {
+        if lineNumber == 0 || lineTokenFlags[lineNumber - 1].len() == 0 {  &vec!()  }
+        else {
+            line = lineTokenFlags[lineNumber - 1].clone();
+            line.last().unwrap()
+        }
+    };
+
+    lineTokenFlags[lineNumber].clear();
+    
+    // generating the new set
+    let mut currentFlags = previousFlagSet.clone();
+    for (index, (token, tokenText)) in tokens.iter().enumerate() {
+        let lastTokenText = tokens[index.saturating_sub(1)].1.clone();
+        let nextTokenText = {
+            if index >= tokens.len() - 1 { "".to_string() } else { tokens[index + 1].1.clone() }
+        };
+        // not a great system for generics, but hopefully it'll work for now
+        match tokenText.as_str() {
+            // generics
+            "<" => { currentFlags.push(LineTokenFlags::Generic); }
+            ">" if currentFlags.contains(&LineTokenFlags::Generic) => {
+                RemoveLineFlag(&mut currentFlags, LineTokenFlags::Generic);
+            }
+
+            // strings (and char-strings ig)
+            "\"" | "'" => {
+                if currentFlags.contains(&LineTokenFlags::String) {
+                    RemoveLineFlag(&mut currentFlags, LineTokenFlags::String);
+                } else { currentFlags.push(LineTokenFlags::Generic); }
+            }
+
+            // Parameters
+            "(" => { currentFlags.push(LineTokenFlags::Parameter); }
+            ")" if currentFlags.contains(&LineTokenFlags::Parameter) => {
+                RemoveLineFlag(&mut currentFlags, LineTokenFlags::Parameter);
+            }
+
+            // List
+            "[" => { currentFlags.push(LineTokenFlags::List); }
+            "]" if currentFlags.contains(&LineTokenFlags::List) => {
+                RemoveLineFlag(&mut currentFlags, LineTokenFlags::List);
+            }
+
+            // Comments (only /* && * /  not //)
+            "*" if lastTokenText == "/" => { currentFlags.push(LineTokenFlags::Comment); }
+            "/" if lastTokenText == "*" && currentFlags.contains(&LineTokenFlags::Comment) => {
+                RemoveLineFlag(&mut currentFlags, LineTokenFlags::Comment);
+            }
+
+            _ => {}
+        }
+        lineTokenFlags[lineNumber].push(currentFlags.clone());
+    }
+
+    let mut nonSet = false;
+    let mut passedEq = false;
+    let mut prevTokens: Vec <&TokenType> = vec!();
+    let mut currentContainer: Option <OutlineKeyword> = None;
+    for (index, (token, tokenText)) in tokens.iter().enumerate() {
+        // dealing with the outline portion now... (does this need to be in another for-loop?)
+        if !nonSet {
+            match tokenText.as_str() {
+                "=" => {  passedEq = true;  },
+                "enum" => {
+                    let keyword = OutlineKeyword {
+                        keyword: String::new(),
+                        kwType: OutlineType::Enum,
+                        typedType: None,
+                        resultType: None,
+                        childKeywords: vec!(),
+                        scope: vec!(),
+                        public: Some(text.contains("pub")),
+                        mutable: false,
+                        parameters: None,
+                        lineNumber,
+                    };
+                    currentContainer = Some(keyword);
+                },
+                "let" if currentContainer.is_none() => {
+                    let keyword = OutlineKeyword {
+                        keyword: String::new(),
+                        kwType: OutlineType::Variable,
+                        typedType: None,
+                        resultType: None,
+                        childKeywords: vec!(),  // figure this out :(    no clue how to track the children
+                        scope: vec!(),
+                        public: None,
+                        mutable: false,
+                        parameters: None,
+                        lineNumber,
+                    };
+                    currentContainer = Some(keyword);
+                },
+                "fn" if currentContainer.is_none() => {
+                    let keyword = OutlineKeyword {
+                        keyword: String::new(),
+                        kwType: OutlineType::Function,
+                        typedType: None,
+                        resultType: None,
+                        childKeywords: vec!(),  // figure this out :(    no clue how to track the children
+                        scope: vec!(),
+                        public: Some(text.contains("pub")),
+                        mutable: false,
+                        parameters: None,
+                        lineNumber,
+                    };
+                    currentContainer = Some(keyword);
+                },
+                "mut"  if currentContainer.is_some() => {
+                    match &mut currentContainer {
+                        Some(keyword) => {
+                            keyword.mutable = true;
+                        },
+                        _ => {}
+                    }
+                },
+                // the conditions seem to screen fine when doing an if or while let
+                txt if !matches!(txt, " " | "(" | "Some" | "Ok") && currentContainer.is_some() => {
+                    if txt.get(0..1).unwrap_or("") == "_"  {
+                        currentContainer = None;
+                        nonSet = true;
+                    }
+
+                    match &mut currentContainer {
+                        Some(keyword) => {
+                            if keyword.keyword.is_empty() {
+                                keyword.keyword = tokenText.clone();
+                            } else if prevTokens.len() > 1 &&
+                                tokens[index.saturating_sub(2)].1 == ":" &&
+                                !passedEq && keyword.typedType == None
+                            {
+                                if matches!(keyword.kwType, OutlineType::Function) {
+                                    if lineTokenFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) {
+                                        if keyword.parameters.is_none() {  keyword.parameters = Some(vec!());  }
+                                        match &mut keyword.parameters {
+                                            Some(parameters) => {
+                                                parameters.push((
+                                                    tokens[index.saturating_sub(3)].1.clone(),
+                                                    Some({  // collecting all terms until the parameter field ends or a ','
+                                                        let mut text = tokenText.clone();
+                                                        for nextIndex in index+1..tokens.len() {
+                                                            if tokens[nextIndex].1 == "," ||
+                                                               !lineTokenFlags[lineNumber][nextIndex]
+                                                                   .contains(&LineTokenFlags::Parameter)
+                                                            {  break;  }
+                                                            text.push_str(&tokens[nextIndex].1.clone());
+                                                        }
+                                                        text
+                                                    })
+                                                ));
+                                            },
+                                            _ => {}
+                                        }
+                                    }
+                                } else {
+                                    keyword.typedType = Some(tokenText.to_string());
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                },
+                _ => {}
+            }
+        }
+
+        prevTokens.push(token);
+    }
+    let mut newOutline: Vec <OutlineKeyword> = vec!();
+    for keyWord in outline.iter() {
+        if keyWord.lineNumber != lineNumber {
+            newOutline.push(keyWord.clone());
+        }
+    }
+
+    outline.clear();
+    for keyWord in newOutline {
+        outline.push(keyWord);
+    }
+
+    if let Some(container) = currentContainer {
+        outline.push(container);
+    }
+
+    for i in 0..tokens.len() {
+        if lineTokenFlags[lineNumber][i].contains(&LineTokenFlags::Comment) {
+            tokens[i].0 = TokenType::Comment;
+        }
+    }
+    
     tokens
 }
 
-
+fn RemoveLineFlag(currentFlags: &mut Vec<LineTokenFlags>, removeFlag: LineTokenFlags) {
+    for (i, flag) in currentFlags.iter().enumerate() {
+        if *flag == removeFlag {
+            currentFlags.remove(i);
+            break;
+        }
+    }
+}
 
 // application stuff
 #[derive(Debug)]
@@ -303,11 +636,82 @@ impl ScopeNode {
     }
 }
 
-const VALID_NAMES_NEXT: [&str; 4] = [
+pub fn UpdateKeywordOutline (tokenLines: &[Vec <(TokenType, String)>],
+                             lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+                             outline: &mut Vec<OutlineKeyword>,
+                             scopeJumps: &Vec <Vec <usize>>,
+                             root: &ScopeNode)
+{
+    let mut newKeywords: Vec <OutlineKeyword> = Vec::new();
+    for keyword in outline.iter_mut() {
+        match keyword.kwType {
+            OutlineType::Enum => {
+                // getting the following members
+                for lineNumber in
+                    keyword.lineNumber+1..
+                    ({
+                        let mut scope = scopeJumps[keyword.lineNumber].clone();
+                        scope.reverse();
+                        root.GetNode(&mut scope).end
+                    })
+                {
+                    let mut currentContainer: Option <OutlineKeyword> = None;
+                    for (index, (token, text)) in tokenLines[lineNumber].iter().enumerate() {
+                        if !matches!(token, TokenType::Comment | TokenType::String) {
+                            if lineFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) && currentContainer.is_some() {
+                                let mut parameterType = String::new();
+                                if text == "(" {
+                                    // getting the parameters type
+                                    for newCharIndex in index + 1..tokenLines[lineNumber].len() {
+                                        if !lineFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) {
+                                            break;
+                                        }
+                                        parameterType.push_str(&tokenLines[lineNumber][newCharIndex].1.clone());
+                                    }
+                                    match &mut currentContainer {
+                                        Some(container) => {
+                                            container.parameters = Some(vec![("".to_string(), Some(parameterType))]);
+                                        },
+                                        _ => {}
+                                    }
+                                }
+                            } else if !matches!(text.as_str(), " " | "(" | "Some" | "Ok" | "_" | "" | ",") && currentContainer.is_none() {
+                                let newKey = OutlineKeyword {
+                                    keyword: text.clone(),
+                                    kwType: OutlineType::Variant,
+                                    typedType: None,
+                                    resultType: None,
+                                    childKeywords: vec!(),
+                                    scope: scopeJumps[keyword.lineNumber].clone(),
+                                    public: None,  // it inherits the parents publicity
+                                    mutable: false,
+                                    parameters: None,
+                                    lineNumber,
+                                };
+                                currentContainer = Some(newKey);
+                            }
+                        }
+                    }
+                    if let Some(container) = currentContainer {
+                        newKeywords.push(container.clone());
+                        keyword.childKeywords.push(container);  // adding the variant
+                    }
+                }
+            },
+            _ => {}
+        }
+    }
+    while let Some(newKeyword) = newKeywords.pop() {
+        outline.push(newKeyword);
+    }
+}
+
+const VALID_NAMES_NEXT: [&str; 5] = [
     "fn",
     "struct",
     "enum",
     "impl",
+    "mod",
 ];
 
 const VALID_NAMES_TAKE: [&str; 6] = [
@@ -319,7 +723,11 @@ const VALID_NAMES_TAKE: [&str; 6] = [
     "loop",
 ];
 
-pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>]) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
+pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>],
+                       lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+                       outline: &mut Vec <OutlineKeyword>
+                       ) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>)
+{
     // tracking the scope (functions = new scope; struct/enums = new scope; for/while = new scope)
     let mut rootNode = ScopeNode {
         children: vec![],
@@ -335,7 +743,7 @@ pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>]) -> (ScopeNode, 
     for (lineNumber, tokens) in tokenLines.iter().enumerate() {
         let mut bracketDepth = 0isize;
         // track the depth; if odd than based on the type of bracket add scope; if even do nothing (scope opened and closed on the same line)
-        // use the same on functions to determin if the scope needs to continue or end on that line
+        // use the same on functions to determine if the scope needs to continue or end on that line
         for (index, (token, name)) in tokens.iter().enumerate() {
             let (_lastToken, lastName) = {
                 if index == 0 {  &(TokenType::Null, "".to_string())  }
@@ -374,7 +782,7 @@ pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>]) -> (ScopeNode, 
                     }
                 }
 
-                // check bracketdepth here so any overlapping marks are accounted for
+                // check bracket-depth here so any overlapping marks are accounted for
                 if bracketDepth < 0 && brackDepth > 0 {  // not pushing any jumps bc/ it'll be done later
                     let mut scopeCopy = currentScope.clone();
                     scopeCopy.reverse();
@@ -415,22 +823,30 @@ pub fn GenerateScopes (tokenLines: &[Vec <(TokenType, String)>]) -> (ScopeNode, 
         
         // updating the scope based on the brackets
         if bracketDepth > 0 {
+            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
             let mut scopeCopy = currentScope.clone();
             scopeCopy.reverse();
             let newScope = rootNode.Push(&mut scopeCopy, "{ ... }".to_string(), lineNumber);
             currentScope.push(newScope);
-            linearized.push(currentScope.clone());
             jumps.push(currentScope.clone());
+            linearized.push(currentScope.clone());
         } else if bracketDepth < 0 {
             jumps.push(currentScope.clone());
+            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
             let mut scopeCopy = currentScope.clone();
             scopeCopy.reverse();
             rootNode.SetEnd(&mut scopeCopy, lineNumber);
             currentScope.pop();
         } else {
             jumps.push(currentScope.clone());
+            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
         }
     }
 
+    // updating the keywords outline
+    UpdateKeywordOutline(tokenLines, lineFlags, outline, &jumps, &rootNode);
+
     (rootNode, jumps, linearized)
 }
+
+

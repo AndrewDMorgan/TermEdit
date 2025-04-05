@@ -1,18 +1,19 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
-use tokio::io::{self, AsyncReadExt, AsyncWriteExt};
-use vte::{Parser, Perform};
+use tokio::io::{self, AsyncReadExt};
+use vte::Parser;
 
 use crossterm::terminal::enable_raw_mode;
 use arboard::Clipboard;
 
 mod CodeTabs;
 mod Tokens;
+mod eventHandler;
 
+use eventHandler::*;
 use CodeTabs::*;
 use Tokens::*;
-
 
 use ratatui::{
     buffer::Buffer,
@@ -23,7 +24,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
-
+use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 
 #[derive(Debug, Default)]
 pub enum FileTabs {
@@ -77,15 +78,23 @@ impl FileBrowser {
                     tab.fileName = fullPath;
 
                     tab.lineTokens.clear();
+                    let mut lineNumber = 0;
+                    let ending = tab.fileName.split('.').last().unwrap_or("");
                     for line in tab.lines.iter() {
+                        tab.lineTokenFlags.push(vec!());
                         tab.lineTokens.push(
                             {
-                                let ending = tab.fileName.split('.').last().unwrap_or("");
-                                GenerateTokens(line.clone(), ending)
+                                GenerateTokens(line.clone(),
+                                               ending,
+                                               &mut tab.lineTokenFlags,
+                                               lineNumber,
+                                               &mut tab.outlineKeywords
+                                )
                             }
                         );
+                        lineNumber += 1;
                     }
-                    (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
+                    (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
 
                     codeTabs.tabs.push(tab);
                     codeTabs.tabFileNames.push(name.clone());
@@ -127,349 +136,6 @@ pub enum AppState {
     CommandPrompt,
 }
 
-#[derive(PartialEq)]
-pub enum KeyModifiers {
-    Shift,
-    Command,
-    Option,
-    Control,
-}
-
-#[derive(PartialEq, Eq, Hash, Clone, Copy)]
-pub enum KeyCode {
-    Delete,
-    Tab,
-    Left,
-    Right,
-    Up,
-    Down,
-    Return,
-    Escape,
-}
-
-pub enum MouseEventType {
-    Null,
-    Left,
-    Right,
-    Middle,
-    Down,
-    Up,
-}
-
-pub enum MouseState {
-    Release,
-    Press,
-    Hold,
-    Null,
-}
-
-pub struct MouseEvent {
-    eventType: MouseEventType,
-    position: (u16, u16),
-    state: MouseState,
-}
-
-#[derive(Default)]
-pub struct KeyParser {
-    keyModifiers: Vec <KeyModifiers>,
-    keyEvents: std::collections::HashMap <KeyCode, bool>,
-    charEvents: Vec <char>,
-    inEscapeSeq: bool,
-    bytes: usize,
-    mouseEvent: Option <MouseEvent>,
-    mouseModifiers: Vec <KeyModifiers>,
-}
-
-impl KeyParser {
-    pub fn new () -> Self {
-        KeyParser {
-            keyEvents: std::collections::HashMap::from([
-                (KeyCode::Delete, false),
-                (KeyCode::Tab, false),
-                (KeyCode::Left, false),
-                (KeyCode::Right, false),
-                (KeyCode::Up, false),
-                (KeyCode::Down, false),
-                (KeyCode::Return, false),
-                (KeyCode::Escape, false),
-            ]),
-            keyModifiers: vec!(),
-            charEvents: vec!(),
-            inEscapeSeq: false,
-            bytes: 0,
-            mouseEvent: None,
-            mouseModifiers: vec!(),
-        }
-    }
-
-    pub fn ClearEvents (&mut self) {
-        self.charEvents.clear();
-        self.keyModifiers.clear();
-        self.mouseModifiers.clear();
-        self.keyEvents.clear();
-        self.inEscapeSeq = false;
-
-        if let Some(event) = &mut self.mouseEvent {
-            match event.state {
-                MouseState::Press => {
-                    event.state = MouseState::Hold;
-                },
-                MouseState::Hold if matches!(event.eventType, MouseEventType::Down | MouseEventType::Up) => {
-                    event.state = MouseState::Release;
-                },
-                MouseState::Release => {
-                    event.state = MouseState::Null;
-                    event.eventType = MouseEventType::Null;
-                },
-                MouseState::Hold => {
-                },
-                _ => {},
-            }
-        }
-    }
-
-    pub fn ContainsChar (&self, chr: char) -> bool {
-        self.charEvents.contains(&chr)
-    }
-
-    pub fn ContainsModifier (&self, modifier: KeyModifiers) -> bool {
-        self.keyModifiers.contains(&modifier)
-    }
-
-    pub fn ContainsMouseModifier (&self, modifier: KeyModifiers) -> bool {
-        self.mouseModifiers.contains(&modifier)
-    }
-
-    pub fn ContainsKeyCode (&self, key: KeyCode) -> bool {
-        *self.keyEvents.get(&key).unwrap_or(&false)
-    }
-
-}
-
-async fn enableMouseCapture() {
-    let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h").await;
-    let _ = stdout.write_all(b"\x1B[?1000h").await; // Enable basic mouse mode
-    let _ = stdout.write_all(b"\x1B[?1003h").await; // Enable all motion events
-    std::mem::drop(stdout);
-}
-
-async fn disableMouseCapture() {
-    let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(b"\x1B[?1000l").await; // Disable mouse mode
-    let _ = stdout.write_all(b"\x1B[?1003l").await; // Disable motion events
-    std::mem::drop(stdout);
-}
-
-impl Perform for KeyParser {
-    fn execute(&mut self, byte: u8) {
-        match byte {
-            0x1B => {
-                self.inEscapeSeq = true;
-            },
-            0x0D => {  // return aka \n
-                self.keyEvents.insert(KeyCode::Return, true);
-            },
-            0x09 => {
-                self.keyEvents.insert(KeyCode::Tab, true);
-            },
-            _ => {},
-        }
-        //println!("byte {}: '{}'", byte, byte as char);
-    }
-    
-    fn print(&mut self, chr: char) {
-        if self.inEscapeSeq || self.bytes > 1 {  return;  }
-
-        if chr as u8 == 0x7F {
-            self.keyEvents.insert(KeyCode::Delete, true);
-            return;
-        }
-        if !(chr.is_ascii_graphic() || chr.is_whitespace()) {  return;  }
-        //println!("char {}: '{}'", chr as u8, chr);
-        self.charEvents.push(chr);
-    }
-    
-    fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, c: char) {
-        self.inEscapeSeq = false;  // resetting the escape sequence
-
-        let numbers: Vec<u16> = params.iter().map(|p| p[0]).collect();
-
-        // mouse handling
-        if c == 'M' || c == 'm' {
-            if let Some([byte, x, y]) = numbers.get(0..3) {
-                let button = byte & 0b11; // Mask lowest 2 bits (button type)
-                //println!("button: {}, numbers: {:?}", button, numbers);
-
-                // adding key press modifiers
-                if (byte & 32) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                } if (byte & 64) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Option);
-                } if (byte & 128) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                }
-
-                //println!("Code: {:?} / {}", numbers, c);
-
-                let isScroll = (byte & 64) != 0;
-                let eventType = match (isScroll, button) {
-                    (true, 0) => MouseEventType::Up,   // 1???? ig so
-                    (true, 1) => MouseEventType::Down, // 2???? ig so
-                    (false, 0) => MouseEventType::Left,
-                    (false, 1) => MouseEventType::Middle,
-                    (false, 2) => MouseEventType::Right,
-                    _ => MouseEventType::Null
-                };
-
-                if matches!(eventType, MouseEventType::Left) && numbers[0] == 4 {
-                    self.mouseModifiers.push(KeyModifiers::Shift);
-                }
-
-                if let Some(event) = &mut self.mouseEvent {
-                    if matches!(eventType, MouseEventType::Left) &&
-                        event.position != (*x, *y) &&
-                        matches!(event.state, MouseState::Hold) &&
-                        c == 'M'
-                    {
-                        event.position = (*x, *y);
-                        return;
-                    }
-                }
-
-                self.mouseEvent = Some(MouseEvent {
-                    eventType,
-                    position: (*x, *y),
-                    state: {
-                        match c {
-                            'M' => MouseState::Press,
-                            'm' => MouseState::Release,
-                            _ => MouseState::Null,
-                        }
-                    },
-                });
-
-            }
-
-            return;
-        }
-
-        //for number in &numbers {println!("{}", number);}
-        if c == '~' {  // this section is for custom escape codes
-            if numbers == [3, 2] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 3] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Option);
-            } else if numbers == [3, 4] {
-                self.keyEvents.insert(KeyCode::Left, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 5] {
-                self.keyEvents.insert(KeyCode::Right, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 6] {
-                self.keyEvents.insert(KeyCode::Up, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 7] {
-                self.keyEvents.insert(KeyCode::Down, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 8] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Option);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 9] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 10] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 11] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('s');  // command + s
-            } else if numbers == [3, 12] {  // lrud
-                self.keyEvents.insert(KeyCode::Left, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 13] {
-                self.keyEvents.insert(KeyCode::Right, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 14] {
-                self.keyEvents.insert(KeyCode::Up, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 15] {
-                self.keyEvents.insert(KeyCode::Down, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 16] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('c');
-            } else if numbers == [3, 17] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('v');
-            } else if numbers == [3, 18] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('x');
-            }
-        } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
-            match c as u8 {
-                0x5A => {
-                    self.keyEvents.insert(KeyCode::Tab, true);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                },
-                0x44 => {
-                    self.keyEvents.insert(KeyCode::Left, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                0x43 => {
-                    self.keyEvents.insert(KeyCode::Right, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                0x41 => {
-                    self.keyEvents.insert(KeyCode::Up, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                0x42 => {
-                    self.keyEvents.insert(KeyCode::Down, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                _ => {},
-            }
-        }
-    }
-}
-
 
 #[derive(Debug, Default)]
 pub struct App {
@@ -502,7 +168,7 @@ impl App {
 
         let mut parser = Parser::new();
         let mut keyParser = KeyParser::new();
-        let mut buffer = [0; 128];//[0; 10];
+        let mut buffer = [0; 128];  // [0; 10]; not sure how much the larger buffer is actually helping
         let mut stdin = tokio::io::stdin();
         
         while !self.exit {
@@ -511,7 +177,7 @@ impl App {
             }
 
             buffer.fill(0);
-            
+
             tokio::select! {
                 result = stdin.read(&mut buffer) => {
                     if let Ok(n) = result {
@@ -527,17 +193,25 @@ impl App {
                         break;
                     }
                 },
-                _ = tokio::time::sleep(std::time::Duration::from_nanos(0)) => {
+                _ = tokio::time::sleep(std::time::Duration::from_millis({
+                    let currentTime = std::time::SystemTime::now()
+                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                            .expect("Time went backwards...")
+                            .as_millis();
+                    if currentTime - self.lastScrolled < 200 {10}
+                    else if currentTime - keyParser.lastPress > 750 {50}  // hopefully this will help with cpu usage
+                    else {5}  // this bit of code is a mess...
+                })) => {
                     terminal.draw(|frame| self.draw(frame))?;
                     if self.exit {
                         break;
                     }
                 },
             }
-
+            
             self.area = terminal.get_frame().area();  // ig this is a thing
             self.HandleKeyEvents(&keyParser, &mut clipboard);
-            self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed but i think it should work? idk
+            self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed, but I think it should work? idk
             keyParser.ClearEvents();
         }
 
@@ -599,7 +273,7 @@ impl App {
                 MouseEventType::Left => {
                     // checking for code selection
                     if matches!(event.state, MouseState::Release | MouseState::Hold) {
-                        if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
+                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 && event.position.1 > 3 {
                             // updating the highlighting position
                             let cursorEnding = self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
 
@@ -639,7 +313,7 @@ impl App {
                             }
                         }
                     } else if matches!(event.state, MouseState::Press) {
-                        if event.position.0 > 29 && event.position.1 < self.area.height - 10 && event.position.1 > 3 {
+                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 && event.position.1 > 3 {
                             let currentTime = std::time::SystemTime::now()
                                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                                 .expect("Time went backwards...")
@@ -677,7 +351,7 @@ impl App {
                                 tab.cursor.1,
                                 tab.lines[tab.cursor.0].len()
                             );
-                            tab.scrolled += tab.mouseScrolledFlt as usize;
+                            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
                             tab.mouseScrolled = 0;
                             tab.mouseScrolledFlt = 0.0;
                             self.appState = AppState::Tabs;
@@ -839,8 +513,26 @@ impl App {
                         // making sure command + s or other commands are being pressed
                         if !keyEvents.ContainsModifier(KeyModifiers::Command) {
                             for chr in &keyEvents.charEvents {
-                                self.codeTabs.tabs[self.codeTabs.currentTab]
-                                    .InsertChars(chr.to_string());
+                                if *chr == '(' {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars("()".to_string());
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
+                                } else if *chr == '{' {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars("{}".to_string());
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
+                                } else if *chr == '[' {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars("[]".to_string());
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
+                                } else if *chr == '\"' {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars("\"\"".to_string());
+                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
+                                } else {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars(chr.to_string());
+                                }
                             }
                         }
 
@@ -922,8 +614,10 @@ impl App {
                             if keyEvents.ContainsModifier(KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
+                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                                tab.mouseScrolledFlt = 0.0;
+                                tab.mouseScrolled = 0;
 
                                 let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 =
@@ -952,9 +646,11 @@ impl App {
                                     tab.scopes.GetNode(&mut jumps).start, 1
                                 );
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 0;
+                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                                tab.mouseScrolledFlt = 0.0;
+                                tab.mouseScrolled = 0;
+                                tab.cursor.0 = 0;
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp(highlight);
                             }
@@ -977,10 +673,12 @@ impl App {
                                 jumps.reverse();
                                 tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
                             } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].lines.len() - 1;
+                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                                tab.mouseScrolledFlt = 0.0;
+                                tab.mouseScrolled = 0;
+                                tab.cursor.0 = 
+                                    tab.lines.len() - 1;
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown(highlight);
                             }
@@ -1005,7 +703,7 @@ impl App {
                             let text = self.codeTabs.tabs[self.codeTabs.currentTab].GetSelection();
                             let _ = clipBoard.set_text(text);
                         } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
-                        keyEvents.charEvents.contains(&'x')
+                            keyEvents.charEvents.contains(&'x')
                         {
                             // get the highlighted section of text.... or the line if none
                             let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
@@ -1018,10 +716,10 @@ impl App {
                             } else {
                                 tab.lines[tab.cursor.0].clear();
                                 tab.RecalcTokens(tab.cursor.0);
-                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens);
+                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
                             }
                         } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
-                        keyEvents.charEvents.contains(&'v')
+                            keyEvents.charEvents.contains(&'v')
                         {
                             // pasting in the text
                             if let Ok(text) = clipBoard.get_text() {
@@ -1033,15 +731,63 @@ impl App {
                                     tab.InsertChars(
                                         line.to_string()
                                     );
+                                    if i > 0 {
+                                        // making sure all actions occur on the same iteration
+                                        if let Some(mut elements) = tab.changeBuffer.pop() {
+                                            while let Some(element) = elements.pop() {
+                                                let size = tab.changeBuffer.len() - 1;
+                                                tab.changeBuffer[size].insert(0, element);
+                                            }
+                                        }
+                                    }
                                     if i < splitLength {
                                         // why does highlight need to be set to true?????? This makes noooo sense??? I give up
                                         tab.LineBreakIn(true);
+                                        // making sure all actions occur on the same iteration
+                                        if let Some(mut elements) = tab.changeBuffer.pop() {
+                                            while let Some(element) = elements.pop() {
+                                                let size = tab.changeBuffer.len() - 1;
+                                                tab.changeBuffer[size].insert(0, element);
+                                            }
+                                        }
                                     }
                                 }
                             }
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                            keyEvents.charEvents.contains(&'f')
+                        {
+                            // finding the nearest occurrence to the cursor
+                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
+                            if tab.highlighting {
+                                // getting the new search term (yk, it's kinda easy when done the right way the first time......not happening again though)
+                                let selection = tab.GetSelection();
+                                tab.searchTerm = selection;
+                            }
+
+                            // searching for the term
+                            let mut lastDst = (usize::MAX, 0usize);
+                            for (index, line) in tab.lines.iter().enumerate() {
+                                let dst = (index as isize - tab.cursor.0 as isize).saturating_abs() as usize;
+                                if !line.contains(&tab.searchTerm) {  continue;  }
+                                if dst > lastDst.0 {  break;  }
+                                lastDst = (dst, index);
+                            }
+
+                            if lastDst.0 < usize::MAX {
+                                tab.searchIndex = lastDst.1;
+                                //self.debugInfo = lastDst.1.to_string();
+                            }
+                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                            keyEvents.charEvents.contains(&'z')
+                        {
+                            if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].Redo();
+                            } else {
+                                self.codeTabs.tabs[self.codeTabs.currentTab].Undo();
+                            }
                         }
                     },
-                    _ => {}  // the other two shouldn't be accessable during the tab state (only during command-line)
+                    _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
                 }
             }
         }
@@ -1172,9 +918,9 @@ impl Widget for &mut App {
                     if scopeIndex.is_empty() {  continue;  }
                     scrolled += 1;
                     if *scopeIndex ==
-                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                        .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
-                        matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
+                        self.codeTabs.tabs[self.codeTabs.currentTab]
+                            .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
+                            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
                 
                         newScroll = scrolled - 1;
                     }
@@ -1279,10 +1025,105 @@ impl Widget for &mut App {
         // ============================================= Error Bar =============================================
         let errorBlock = Block::bordered()
             .border_set(border::THICK);
-        
+
+        // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
+        self.debugInfo.clear();
+        /*for var in &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords {
+            if matches!(var.kwType, OutlineType::Function) {
+                self.debugInfo.push('(');
+                self.debugInfo.push_str(var.keyword.as_str());
+                self.debugInfo.push('/');
+                self.debugInfo.push_str(&format!("{:?}", var.scope));
+                self.debugInfo.push(')');
+            }
+        }*/
+        let mut scope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+            self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+            ].clone();
+        let mut tokenSet: Vec <String> = vec!();
+        self.codeTabs.tabs[self.codeTabs.currentTab].GetCurrentToken(&mut tokenSet);
+        if !tokenSet.is_empty() {  // token set is correct it seems
+            let token = tokenSet.remove(0);  // getting the item actively on the cursor
+            let mut currentScope =
+                self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+            ].clone();
+            if !tokenSet.is_empty() {
+                let mut currentElement = OutlineKeyword::TryFindKeyword(
+                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                    tokenSet.pop().unwrap()
+                );
+                if let Some(set) = &currentElement {
+                    let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                        set.lineNumber
+                    ].clone();
+                    //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
+                    currentScope = newScope;
+                }
+
+                while !tokenSet.is_empty() && currentElement.is_some() {
+                    self.debugInfo.push(' ');
+                    let newToken = tokenSet.remove(0);
+                    if let Some(set) = currentElement {
+                        let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                            set.lineNumber
+                        ].clone();
+                        //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
+                        currentScope = newScope;
+                        currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
+                    }
+                }
+            }
+            scope = currentScope.clone();
+            if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
+                        "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
+                        ".")
+            {
+                let validKeywords = OutlineKeyword::GetValidScoped(
+                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                    &currentScope
+                );
+
+                let mut closest = (usize::MAX, "".to_string(), "".to_string());
+                for var in validKeywords {
+                    /*
+                    if matches!(var.kwType, OutlineType::Function) {
+                        self.debugInfo.push('(');
+                        self.debugInfo.push_str(var.keyword.as_str());
+                        self.debugInfo.push('/');
+                        self.debugInfo.push_str(&format!("{:?}", var.parameters));
+                        self.debugInfo.push(')');
+                    }  // */
+                    let value = WordComparison(&token, &var.keyword);
+                    if value < closest.0 {
+                        let mut t = String::new();
+                        if matches!(var.kwType, OutlineType::Function | OutlineType::Enum) {  // basic printing of parameters
+                            //t.push('(');
+                            //t.push_str(var.keyword.as_str());
+                            //t.push('/');
+                            //t.push_str(&format!(":{:?}", var.parameters));
+                            /*for child in var.childKeywords {
+                                t.push_str(child.keyword.as_str());
+                                t.push(',');
+                            }*/
+                            //t.push(')');
+                        }
+                        closest = (value, var.keyword.clone(), t);
+                    }
+                }
+                if closest.0 < 15 {
+                    self.debugInfo.push_str(&closest.1);
+                    self.debugInfo.push(' ');
+                    self.debugInfo.push_str(closest.0.to_string().as_str());
+                    self.debugInfo.push_str(" / ");
+                    self.debugInfo.push_str(closest.2.as_str());
+                }
+            }
+        }
+
         let errorText = Text::from(vec![
             Line::from(vec![
-                format!("Debug: {}", self.debugInfo).red().bold(),
+                format!("Debug: {} / {:?}", self.debugInfo, scope).red().bold(),
                 //"Error: callback on line 5".to_string().red().bold()
             ]),
         ]);
@@ -1321,6 +1162,25 @@ impl Widget for &mut App {
     }
 }
 
+// kinda bad but kinda sometimes works; at least it should be fairly quick
+fn WordComparison (wordMain: &String, wordComp: &String) -> usize {
+    let mut totalError = 0;
+    let wordBytes = wordComp.as_bytes();
+    for (index, byte) in wordMain
+        .bytes()
+        .enumerate()
+    {
+        if index >= wordComp.len() {  break;  }
+        totalError += (byte as i8 - wordBytes[index] as i8)
+            .abs() as usize;
+    }
+
+    if wordComp.len() < wordMain.len() {
+        totalError += (wordMain.len() - wordComp.len()) * 2;
+    }
+
+    totalError
+}
 
 /*
 Commands: √ <esc>
@@ -1346,17 +1206,17 @@ Commands: √ <esc>
 
             <ctrl> + <left>/<right> -> open/close scope of code (can be done from any section inside the scope, not just the start/end)
 
-            <cmnd> + <c> -> copy (either selection or whole line when none)
-            <cmnd> + <v> -> paste to current level (align relative indentation to the cursor's)
+            √ <cmnd> + <c> -> copy (either selection or whole line when none)
+            √ <cmnd> + <v> -> paste to current level (align relative indentation to the cursor's)
 
             √ <del> -> deletes the character the cursor is on
             √ <del> + <option> -> delete the token the cursor is on
             √ <del> + <cmnd> -> delete the entire line
-            √ <del> + <shift> + <cmnd/option/none> -> does the same as specified before execpt to the right instead
+            √ <del> + <shift> + <cmnd/option/none> -> does the same as specified before except to the right instead
 
-            <tab> -> indents the line up to the predicted indentation
+            <tab> -> indents the lineup to the predicted indentation
             √ <tab> + <shift> -> unindents the line by one
-            <enter> -> creates a new line
+            √<enter> -> creates a new line
             <enter> + <cmnd> -> creates a new line starting at the end of the current
             <enter> + <cmnd> + <shift> -> creates a new line starting before the current
 
@@ -1368,10 +1228,10 @@ Commands: √ <esc>
                 <enter> -> edit setting
                 <left> -> close menu
             
-            √ <shift> + <tab> -> cycle between pg outline and file broswer
+            √ <shift> + <tab> -> cycle between pg outline and file browser
 
             outline:
-                √ - shows all functions/methods/classes/etc... so they can easily be acsess without needed the mouse and without wasting time scrolling
+                √ - shows all functions/methods/classes/etc... so they can easily be access without needed the mouse and without wasting time scrolling
 
                 √ <enter> -> jumps the cursor to that section in the code
                 <shift> + <enter> -> jumps the cursor to the section and switches to code editing
@@ -1389,24 +1249,87 @@ Commands: √ <esc>
             √ <del> -> close current tab
 
 the bottom bar is 4 lines tall (maybe this could be a custom parameter?)
-the side bar appears behind the bottom bar and pops outward shifting the text
+the sidebar appears behind the bottom bar and pops outward shifting the text
 
 Errors underlined in red
 Warnings underlined in yellow
     integrate a way to run clippy on the typed code
-    parse clippy's output into the proper warning or errors
+    parse Clippy's output into the proper warning or errors
     display the error or warning at the bottom (where code completion suggestions go)
 
 Suggestions appear on the very bottom as to not obstruct the code being written
+
+
+
+add undo/redo
+maybe show the outline moving while scrolling?
+Add scrolling to the outline
+make it so when indenting/unindenting it does it for the entire selection if highlighting
+make it so when pressing return, it auto sets to the correct indent level
+    same thing for various other actions being set to the correct indent level
+
+Fix the highlighting bug when selecting text above and only partially covering a token; It's not rendering the full token and does weird things...
+    It has something to do with the end and starting cursor char positions being aligned on the seperate lines
+Add double-clicking to highlight a token or line
+make it so that highlighting than typing () or {} or [] encloses the text rather than replacing it
+
+command f
+    Add the ability to type in custom search terms through the command line
+    Add the ability to scroll through the various options
+    Currently, detection seems to be working at least for single line terms
+    Make it jump the cursor to the terms
+
+settings menu for setting alternative keybindings? or how should that be done?
+general settings menu
+directory selection
+
+make command + x properly shift the text onto a new line when pasted (along w/ being at the correct indent level)
+
+make it so that the outline menu, when opened, is placed at the correct location rather than defaulting to the start until re-entering the code tab
+
+maybe move all the checks for the command key modifier to a single check that then corresponds to other checks beneath it? I'm too lazy rn though
+
+Prevent the program from crashing when touch non-u8 characters (either handle the error, or do something but don't crash)
+    Ideally the user can still copy and past them along with placing them and deleting them
+
+Add syntax highlighting for python
+
+Make the undo/redo undo/redo copy/paste in one move instead of multiple
+
+Fix multi-line comments:
+    maybe set each line to a state such as: Null, Comment Next
+    this could be read and edited based on the current line (only some updates would have to propagate)
+
+Fix the bug with the scope outline system where it clicks one cell too high when it hasn't been scrolled yet
+
+Fix the bug with highlighting; when highlighting left and pressing right arrow, it stays at the left
+    Highlighting right works fine though, idk why
+
+Allow language highlighting to determine unique characters for comments and multi line comments
+
+
+option + tab = accept auto complete suggestion
+
+either check the token the mouse is on or to the left (if partially on one consider the whole token)
+based on that token, find the closest possibility assuming it falls within a certain error range
+account for members vs. methods vs. functions vs. variables
+
+make a better system that can store keybindings; the user can make a custom one, or there are two defaults: mac custom, standard
+
+(complete) make any edits cascade down the file (such as multi line comments) and update those lines until terminated
+    (incomplete..... me no want do) Figure out a way to determine if the set is complete so it doesn't  update the whole file
+
 */
+
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
-    enableMouseCapture().await;
+    eventHandler::enableMouseCapture().await;
     let app_result = App::default().run(&mut terminal).await;
-    disableMouseCapture().await;
+    eventHandler::disableMouseCapture().await;
     ratatui::restore();
     app_result
 }
+
 
