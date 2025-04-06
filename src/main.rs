@@ -149,6 +149,7 @@ pub struct App {
     lastScrolled: u128,
 
     debugInfo: String,
+    suggested: String
 }
 
 impl App {
@@ -686,8 +687,15 @@ impl App {
                             if keyEvents.ContainsModifier(KeyModifiers::Shift) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].UnIndent();
                             } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab]
-                                    .InsertChars("    ".to_string());
+                                if self.suggested.is_empty() {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars("    ".to_string());
+                                } else {
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .RemoveCurrentToken_NonUpdate();
+                                    self.codeTabs.tabs[self.codeTabs.currentTab]
+                                        .InsertChars(self.suggested.clone());
+                                }
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
                             self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn(false);  // can't be highlighting if breaking?
@@ -1028,7 +1036,8 @@ impl Widget for &mut App {
 
         // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
         self.debugInfo.clear();
-        /*for var in &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords {
+        /*
+        for var in &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords {
             if matches!(var.kwType, OutlineType::Function) {
                 self.debugInfo.push('(');
                 self.debugInfo.push_str(var.keyword.as_str());
@@ -1037,6 +1046,7 @@ impl Widget for &mut App {
                 self.debugInfo.push(')');
             }
         }*/
+        self.suggested.clear();
         let mut scope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
             self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
             ].clone();
@@ -1044,6 +1054,9 @@ impl Widget for &mut App {
         self.codeTabs.tabs[self.codeTabs.currentTab].GetCurrentToken(&mut tokenSet);
         if !tokenSet.is_empty() {  // token set is correct it seems
             let token = tokenSet.remove(0);  // getting the item actively on the cursor
+            // self.debugInfo.push_str("{");
+            // self.debugInfo.push_str(&token);
+            // self.debugInfo.push_str("}");
             let mut currentScope =
                 self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
                 self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
@@ -1062,7 +1075,7 @@ impl Widget for &mut App {
                 }
 
                 while !tokenSet.is_empty() && currentElement.is_some() {
-                    self.debugInfo.push(' ');
+                    //self.debugInfo.push(' ');
                     let newToken = tokenSet.remove(0);
                     if let Some(set) = currentElement {
                         let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
@@ -1081,41 +1094,43 @@ impl Widget for &mut App {
             {
                 let validKeywords = OutlineKeyword::GetValidScoped(
                     &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
-                    &currentScope
+                    &scope
                 );
 
                 let mut closest = (usize::MAX, "".to_string(), "".to_string());
                 for var in validKeywords {
-                    /*
+                    //*
                     if matches!(var.kwType, OutlineType::Function) {
                         self.debugInfo.push('(');
                         self.debugInfo.push_str(var.keyword.as_str());
                         self.debugInfo.push('/');
-                        self.debugInfo.push_str(&format!("{:?}", var.parameters));
+                        self.debugInfo.push_str(&format!("{:?}", var.scope));
                         self.debugInfo.push(')');
                     }  // */
                     let value = WordComparison(&token, &var.keyword);
                     if value < closest.0 {
                         let mut t = String::new();
-                        if matches!(var.kwType, OutlineType::Function | OutlineType::Enum) {  // basic printing of parameters
+                        if matches!(var.kwType, OutlineType::Function | OutlineType::Enum) && false {  // basic printing of parameters
                             //t.push('(');
                             //t.push_str(var.keyword.as_str());
                             //t.push('/');
                             //t.push_str(&format!(":{:?}", var.parameters));
-                            /*for child in var.childKeywords {
+                            /*
+                            for child in var.childKeywords {
                                 t.push_str(child.keyword.as_str());
                                 t.push(',');
-                            }*/
+                            } // */
                             //t.push(')');
                         }
                         closest = (value, var.keyword.clone(), t);
                     }
                 }
-                if closest.0 < 15 {
-                    self.debugInfo.push_str(&closest.1);
-                    self.debugInfo.push(' ');
-                    self.debugInfo.push_str(closest.0.to_string().as_str());
-                    self.debugInfo.push_str(" / ");
+                if closest.0 < 15 && closest.1 != token.as_str() {  // todo! keep all of this up to date
+                    self.suggested = closest.1;
+                    //self.suggested.push_str(closest.0.to_string().as_str());
+                    //self.debugInfo.push(' ');
+                    //self.debugInfo.push_str(closest.0.to_string().as_str());
+                    //self.debugInfo.push_str(" / ");
                     self.debugInfo.push_str(closest.2.as_str());
                 }
             }
@@ -1123,8 +1138,11 @@ impl Widget for &mut App {
 
         let errorText = Text::from(vec![
             Line::from(vec![
-                format!("Debug: {} / {:?}", self.debugInfo, scope).red().bold(),
-                //"Error: callback on line 5".to_string().red().bold()
+                format!(": {}?", self.suggested).white().italic(),
+            ]),
+            Line::from(vec![
+                format!("Debug: {}", self.debugInfo).red().bold(),
+                format!(" ; {:?}", scope).white()
             ]),
         ]);
 
@@ -1318,6 +1336,7 @@ make a better system that can store keybindings; the user can make a custom one,
 
 (complete) make any edits cascade down the file (such as multi line comments) and update those lines until terminated
     (incomplete..... me no want do) Figure out a way to determine if the set is complete so it doesn't  update the whole file
+    Todo! Error! Fix the variable checker/saver to handle when variables are removed from the code, idk how; have fun :(
 
 */
 

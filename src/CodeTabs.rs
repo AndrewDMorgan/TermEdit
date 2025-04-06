@@ -232,6 +232,9 @@ impl CodeTab {
             if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
                 tokenOutput.push(text.clone());
                 for index in (0..tokenIndex).rev() {
+                    if matches!(self.lineTokens[self.cursor.0][index].1.as_str(),
+                        " " | "," | "(")
+                        {  break;  }
                     if index > 1 &&
                         self.lineTokens[self.cursor.0][index].1 == ":" &&
                         self.lineTokens[self.cursor.0][index - 1].1 == ":"
@@ -241,6 +244,20 @@ impl CodeTab {
                         tokenOutput.push(self.lineTokens[self.cursor.0][index - 1].1.clone());
                     }
                 }
+                return;
+            }
+            accumulate += text.len();
+        }
+    }
+
+    // doesn't update the tokens or scopes; requires that to be done elsewhere
+    pub fn RemoveCurrentToken_NonUpdate (&mut self) {
+        let mut accumulate = 0;
+        for (tokenIndex, (token, text)) in self.lineTokens[self.cursor.0].iter().enumerate() {
+            // the cursor can be just right of it, in it, but not just left
+            if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
+                self.lines[self.cursor.0].replace_range(accumulate..accumulate+text.len(), "");
+                self.cursor.1 = accumulate;
                 return;
             }
             accumulate += text.len();
@@ -259,16 +276,16 @@ impl CodeTab {
         if let Some(edits) = self.changeBuffer.pop() {
             for edit in &edits {
                 match edit {
-                    Edits::Edit::Addition (action)      => {
+                    Edits::Edit::Addition (action) => {
                         action.Undo( self);
                     },
-                    Edits::Edit::Deletion (action)      => {
+                    Edits::Edit::Deletion (action) => {
                         action.Undo(self);
                     },
                     Edits::Edit::RemoveLine (action) => {
                         action.Undo(self);
                     },
-                    Edits::Edit::NewLine (action)       => {
+                    Edits::Edit::NewLine (action) => {
                         action.Undo(self);
                     },
                 }
@@ -957,7 +974,7 @@ impl CodeTab {
         if lineNumber >= self.lines.len() {  return;  }
         let previousEnding = self.lineTokenFlags[lineNumber].get(
             self.lineTokenFlags[lineNumber].len().saturating_sub(1)
-        ).unwrap_or(&vec!()).len();
+        ).unwrap_or(&vec!()).clone();
         self.lineTokens[lineNumber].clear();
 
         let ending = self.fileName.split('.').last().unwrap_or("");
@@ -969,10 +986,13 @@ impl CodeTab {
         );
         self.lineTokens[lineNumber] = newTokens;
 
-        let empty = self.lineTokenFlags[lineNumber][
+        let currentFlags = self.lineTokenFlags[lineNumber][
             self.lineTokenFlags[lineNumber].len() - 1
-            ].is_empty();
-        if lineNumber < self.lines.len() - 1 && !empty || empty && previousEnding > 0 {
+        ].clone();
+        let empty = currentFlags.is_empty();
+        if lineNumber < self.lines.len() - 1 && !empty &&
+                previousEnding != currentFlags ||
+            empty && previousEnding.len() > 0 {
             self.RecalcTokens(lineNumber + 1);  // cascading any changes further down the file (kinda slow)
         }
         
@@ -1035,7 +1055,7 @@ impl CodeTab {
             TokenType::String => {
                 text.yellow()
             },
-            TokenType::Comment => {
+            TokenType::Comment | TokenType::CommentLong => {
                 if text == "todo" || text == "!" ||
                     text == "error" || text == "condition" ||
                     text == "conditions" || text == "fix" {  text.green().underlined()  }  // basic but it kinda does stuff idk

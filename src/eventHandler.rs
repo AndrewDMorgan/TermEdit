@@ -245,78 +245,101 @@ impl Perform for KeyParser {
         }
 
         //for number in &numbers {println!("{}", number);}
-        if c == '~' {  // this section is for custom escape codes
-            if numbers == [3, 2] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 3] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Option);
-            } else if numbers == [3, 4] {
-                self.keyEvents.insert(KeyCode::Left, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 5] {
-                self.keyEvents.insert(KeyCode::Right, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 6] {
-                self.keyEvents.insert(KeyCode::Up, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 7] {
-                self.keyEvents.insert(KeyCode::Down, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 8] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Option);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 9] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-            } else if numbers == [3, 10] {
-                self.keyEvents.insert(KeyCode::Delete, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 11] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('s');  // command + s
-            } else if numbers == [3, 12] {  // lrud
-                self.keyEvents.insert(KeyCode::Left, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 13] {
-                self.keyEvents.insert(KeyCode::Right, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 14] {
-                self.keyEvents.insert(KeyCode::Up, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 15] {
-                self.keyEvents.insert(KeyCode::Down, true);
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-            } else if numbers == [3, 16] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('c');
-            } else if numbers == [3, 17] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('v');
-            } else if numbers == [3, 18] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('x');
-            } else if numbers == [3, 19] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('f');
-            } else if numbers == [3, 20] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.charEvents.push('z');
-            } else if numbers == [3, 21] {
-                self.keyModifiers.push(KeyModifiers::Command);
-                self.keyModifiers.push(KeyModifiers::Shift);
-                self.charEvents.push('z');
-            } else if numbers == [3, 22] {
-                self.keyEvents.insert(KeyCode::Tab, true);
-                self.keyModifiers.push(KeyModifiers::Option);
-            }
+        if c == '~' && numbers.len() == 2 && numbers[0] == 3 {  // this section is for custom escape codes
+            match numbers[1] {
+                2 => {
+                    self.keyEvents.insert(KeyCode::Delete, true);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                3 => {
+                    self.keyEvents.insert(KeyCode::Delete, true);
+                    self.keyModifiers.push(KeyModifiers::Option);
+                }
+                4 => {
+                    self.keyEvents.insert(KeyCode::Left, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                }
+                5 => {
+                    self.keyEvents.insert(KeyCode::Right, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                }
+                6 => {
+                    self.keyEvents.insert(KeyCode::Up, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                }
+                7 => {
+                    self.keyEvents.insert(KeyCode::Down, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                }
+                8 => {
+                    self.keyEvents.insert(KeyCode::Delete, true);
+                    self.keyModifiers.push(KeyModifiers::Option);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                9 => {
+                    self.keyEvents.insert(KeyCode::Delete, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                }
+                10 => {
+                    self.keyEvents.insert(KeyCode::Delete, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                11 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.charEvents.push('s');  // command + s
+                }
+                12 => {  // lrud
+                    self.keyEvents.insert(KeyCode::Left, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                13 => {
+                    self.keyEvents.insert(KeyCode::Right, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                14 => {
+                    self.keyEvents.insert(KeyCode::Up, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                15 => {
+                    self.keyEvents.insert(KeyCode::Down, true);
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+                16 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.charEvents.push('c');
+                }
+                17 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.charEvents.push('v');
+                }
+                18 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                        self.charEvents.push('x');
+                    }
+                19 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.charEvents.push('f');
+                }
+                20 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.charEvents.push('z');
+                }
+                21 => {
+                    self.keyModifiers.push(KeyModifiers::Command);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                    self.charEvents.push('z');
+                }
+                22 => {
+                    self.keyEvents.insert(KeyCode::Tab, true);
+                    self.keyModifiers.push(KeyModifiers::Option);
+                }
+                _ => {}
+        }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
                 0x5A => {
@@ -325,15 +348,15 @@ impl Perform for KeyParser {
                 },
                 0x44 => {
                     self.keyEvents.insert(KeyCode::Left, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
+                if numbers == [1, 3] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } else if numbers == [1, 2] {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } else if numbers == [1, 4] {
+                            self.keyModifiers.push(KeyModifiers::Option);
+                            self.keyModifiers.push(KeyModifiers::Shift);
+                        }
+                    },
                 0x43 => {
                     self.keyEvents.insert(KeyCode::Right, true);
                     if numbers == [1, 3] {
