@@ -2,10 +2,14 @@
 A bad terminal based code editor created in rust for rust
 
 ## Custom Escape Codes (using iTerm2 for custom key-bindings):
+ - ^[[3;22~  (⌥ Tab)
+ - ^[[3;21~  (⌘ ⇧ 'z')
  - ^[[3;16~  (⌘ 'c')
+ - ^[[3;19~  (⌘ 'f')
  - ^[[3;11~  (⌘ 's')
  - ^[[3;17~  (⌘ 'v')
  - ^[[3;18~  (⌘ 'x')
+ - ^[[3;20~  (⌘ 'z')
  - ^[[3;2~   (⇧ Delete)
  - ^[[3;3~   (⌥ Delete)
  - ^[[3;8~   (⌥ ⇧ Delete)
