@@ -1,10 +1,10 @@
 use tokio::io::AsyncWriteExt;
 use vte::Perform;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Debug, Default)]
 pub enum KeyModifiers {
     Shift,
-    Command,
+    #[default] Command,
     Option,
     Control,
 }
@@ -108,8 +108,8 @@ impl KeyParser {
         self.charEvents.contains(&chr)
     }
 
-    pub fn ContainsModifier (&self, modifier: KeyModifiers) -> bool {
-        self.keyModifiers.contains(&modifier)
+    pub fn ContainsModifier (&self, modifier: &KeyModifiers) -> bool {
+        self.keyModifiers.contains(modifier)
     }
 
     pub fn ContainsMouseModifier (&self, modifier: KeyModifiers) -> bool {
@@ -149,6 +149,14 @@ impl KeyParser {
 impl Perform for KeyParser {
     fn execute(&mut self, byte: u8) {
         self.SetPressTime();
+
+        // control + ...
+        // 3 = c; 22 = v; 26 = z; 6 = f; 1 = a; 24 = x; 19 = s; 21 = u; r = 18
+        // left ^[[1;5D right ^[[1;5C up ^[[1;5A down ^[[1;5B
+        // control u and control r and necessary for undo and redo bc/
+        // control + key and control + shift + key don't send unique
+        // escape codes for some odd reason
+
         match byte {
             0x1B => {
                 self.inEscapeSeq = true;
@@ -158,7 +166,47 @@ impl Perform for KeyParser {
             },
             0x09 => {
                 self.keyEvents.insert(KeyCode::Tab, true);
+            },// 3 = c; 22 = v; 26 = z; 6 = f; 1 = a; 24 = x; 19 = s; 21 = u; r = 18
+            3 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('c');
             },
+            22 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('v');
+            },
+            26 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('z');
+            },
+            6 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('f');
+            },
+            1 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('a');
+            },
+            24 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('x');
+            },
+            19 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('s');
+            },
+            21 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('u');
+            },
+            18 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.charEvents.push('r');
+            },
+            0x08 => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.keyEvents.insert(KeyCode::Delete, true);
+            }
             _ => {},
         }
         //println!("byte {}: '{}'", byte, byte as char);
@@ -339,7 +387,33 @@ impl Perform for KeyParser {
                     self.keyModifiers.push(KeyModifiers::Option);
                 }
                 _ => {}
-        }
+            }
+        } else if numbers.len() == 2 && numbers[0] == 1 && numbers[1] == 5 {
+            // control + ...
+            // 3 = c; 22 = v; 26 = z; 6 = f; 1 = a; 24 = x; 19 = s; 21 = u; r = 18
+            // left ^[[1;5D right ^[[1;5C up ^[[1;5A down ^[[1;5B
+            // control u and control r and necessary for undo and redo bc/
+            // control + key and control + shift + key don't send unique
+            // escape codes for some odd reason
+            match c {
+                'D' => {
+                    self.keyModifiers.push(KeyModifiers::Control);
+                    self.keyEvents.insert(KeyCode::Left, true);
+                },
+                'C' => {
+                    self.keyModifiers.push(KeyModifiers::Control);
+                    self.keyEvents.insert(KeyCode::Right, true);
+                },
+                'A' => {
+                    self.keyModifiers.push(KeyModifiers::Control);
+                    self.keyEvents.insert(KeyCode::Up, true);
+                },
+                'B' => {
+                    self.keyModifiers.push(KeyModifiers::Control);
+                    self.keyEvents.insert(KeyCode::Down, true);
+                },
+                _ => {}  // control + arrows
+            }
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
             match c as u8 {
                 0x5A => {

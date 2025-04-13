@@ -10,10 +10,14 @@ use arboard::Clipboard;
 mod CodeTabs;
 mod Tokens;
 mod eventHandler;
+mod StringPatternMatching;
+mod Colors;
 
+use StringPatternMatching::*;
 use eventHandler::*;
-use CodeTabs::*;
 use Tokens::*;
+
+use CodeTabs::CodeTab;
 
 use ratatui::{
     buffer::Buffer,
@@ -149,7 +153,10 @@ pub struct App {
     lastScrolled: u128,
 
     debugInfo: String,
-    suggested: String
+    suggested: String,
+
+    preferredCommandKeybind: eventHandler::KeyModifiers,
+    colorMode: Colors::Colors::ColorMode,
 }
 
 impl App {
@@ -178,12 +185,13 @@ impl App {
             }
 
             buffer.fill(0);
+            let mut line = String::new();
 
             tokio::select! {
                 result = stdin.read(&mut buffer) => {
                     if let Ok(n) = result {
                         keyParser.bytes = n;
-                        
+
                         if n == 1 && buffer[0] == 0x1B {
                             keyParser.keyEvents.insert(KeyCode::Escape, true);
                         } else {
@@ -404,7 +412,7 @@ impl App {
                 }
 
                 if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-                    if keyEvents.ContainsModifier(KeyModifiers::Shift) &&
+                    if keyEvents.ContainsModifier(&KeyModifiers::Shift) &&
                         matches!(self.tabState, TabState::Files) {
                         
                         self.fileBrowser.fileTab = match self.fileBrowser.fileTab {
@@ -448,13 +456,13 @@ impl App {
                     },
                     TabState::Tabs => {
                         if keyEvents.ContainsKeyCode(KeyCode::Left) {
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 self.codeTabs.MoveTabLeft()
                             } else {
                                 self.codeTabs.TabLeft();
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 self.codeTabs.MoveTabRight()
                             } else {
                                 self.codeTabs.TabRight();
@@ -512,7 +520,7 @@ impl App {
                 match self.tabState {
                     TabState::Code => {
                         // making sure command + s or other commands are being pressed
-                        if !keyEvents.ContainsModifier(KeyModifiers::Command) {
+                        if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                             for chr in &keyEvents.charEvents {
                                 if *chr == '(' {
                                     self.codeTabs.tabs[self.codeTabs.currentTab]
@@ -542,14 +550,14 @@ impl App {
                             let mut offset = 0;
 
                             if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
-                                if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
                                     numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosRight();
                                     offset = numDel;
                                 } else {
                                     numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
                                 }
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
-                                if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
                                     numDel = self.codeTabs.tabs[self.codeTabs.currentTab].lines[
                                         self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
                                     ].len() - self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
@@ -557,7 +565,7 @@ impl App {
                                 } else {
                                     numDel = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
                                 }
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                            } else if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
                                 offset = numDel;
                             }
 
@@ -566,7 +574,7 @@ impl App {
                             ].DelChars(numDel, offset);
                         } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
                             let highlight;
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
                             {
                                 highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
@@ -577,9 +585,9 @@ impl App {
                             } else {
                                 highlight = false;
                             }
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
                                 self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                                 // checking if it's the true first value or not
@@ -601,7 +609,7 @@ impl App {
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
                             let highlight;
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
                             {
                                 highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
@@ -612,9 +620,9 @@ impl App {
                             } else {
                                 highlight = false;
                             }
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
                                 tab.mouseScrolledFlt = 0.0;
@@ -628,7 +636,7 @@ impl App {
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
                             let highlight;
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
                             {
                                 highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
@@ -639,14 +647,14 @@ impl App {
                             } else {
                                 highlight = false;
                             }
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
                                 jumps.reverse();
                                 tab.JumpCursor( 
                                     tab.scopes.GetNode(&mut jumps).start, 1
                                 );
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
                                 tab.mouseScrolledFlt = 0.0;
@@ -657,7 +665,7 @@ impl App {
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
                             let highlight;
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift)
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
                             {
                                 highlight = true;
                                 if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
@@ -668,12 +676,12 @@ impl App {
                             } else {
                                 highlight = false;
                             }
-                            if keyEvents.ContainsModifier(KeyModifiers::Option) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
                                 jumps.reverse();
                                 tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
-                            } else if keyEvents.ContainsModifier(KeyModifiers::Command) {
+                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                                 let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
                                 tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
                                 tab.mouseScrolledFlt = 0.0;
@@ -684,10 +692,10 @@ impl App {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown(highlight);
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].UnIndent();
                             } else {
-                                if self.suggested.is_empty() {
+                                if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
                                     self.codeTabs.tabs[self.codeTabs.currentTab]
                                         .InsertChars("    ".to_string());
                                 } else {
@@ -699,18 +707,18 @@ impl App {
                             }
                         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
                             self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn(false);  // can't be highlighting if breaking?
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
                             keyEvents.ContainsChar('s') {
                             
                             // saving the program
                             self.codeTabs.tabs[self.codeTabs.currentTab].Save();
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
                             keyEvents.charEvents.contains(&'c')
                         {
                             // get the highlighted section of text.... or the line if none
                             let text = self.codeTabs.tabs[self.codeTabs.currentTab].GetSelection();
                             let _ = clipBoard.set_text(text);
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
                             keyEvents.charEvents.contains(&'x')
                         {
                             // get the highlighted section of text.... or the line if none
@@ -723,10 +731,10 @@ impl App {
                                 tab.DelChars(0, 0);
                             } else {
                                 tab.lines[tab.cursor.0].clear();
-                                tab.RecalcTokens(tab.cursor.0);
+                                tab.RecalcTokens(tab.cursor.0, 0);
                                 (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
                             }
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
                             keyEvents.charEvents.contains(&'v')
                         {
                             // pasting in the text
@@ -761,7 +769,7 @@ impl App {
                                     }
                                 }
                             }
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
                             keyEvents.charEvents.contains(&'f')
                         {
                             // finding the nearest occurrence to the cursor
@@ -785,10 +793,13 @@ impl App {
                                 tab.searchIndex = lastDst.1;
                                 //self.debugInfo = lastDst.1.to_string();
                             }
-                        } else if keyEvents.ContainsModifier(KeyModifiers::Command) &&
-                            keyEvents.charEvents.contains(&'z')
+                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+                            (keyEvents.charEvents.contains(&'z') ||  // command z = undo/redo
+                            keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
+                            keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
                         {
-                            if keyEvents.ContainsModifier(KeyModifiers::Shift) {
+                            if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
+                                keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
                                 self.codeTabs.tabs[self.codeTabs.currentTab].Redo();
                             } else {
                                 self.codeTabs.tabs[self.codeTabs.currentTab].Undo();
@@ -874,7 +885,8 @@ impl Widget for &mut App {
             self.codeTabs.GetScrolledText(
                 area,
                 matches!(self.appState, AppState::Tabs) &&
-                    matches!(self.tabState, TabState::Code)
+                    matches!(self.tabState, TabState::Code),
+                &self.colorMode.colorBindings
             )
         );
 
@@ -1088,61 +1100,69 @@ impl Widget for &mut App {
                 }
             }
             scope = currentScope.clone();
+            let validKeywords = OutlineKeyword::GetValidScoped(
+                &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                &scope
+            );
             if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
                         "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
                         ".")
             {
-                let validKeywords = OutlineKeyword::GetValidScoped(
-                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
-                    &scope
-                );
-
-                let mut closest = (usize::MAX, "".to_string(), "".to_string());
-                for var in validKeywords {
+                let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
+                for (i, var) in validKeywords.iter().enumerate() {
                     //*
-                    if matches!(var.kwType, OutlineType::Function) {
+                    if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
                         self.debugInfo.push('(');
                         self.debugInfo.push_str(var.keyword.as_str());
-                        self.debugInfo.push('/');
-                        self.debugInfo.push_str(&format!("{:?}", var.scope));
+                        //self.debugInfo.push('/');
+                        //self.debugInfo.push_str(&format!("{:?}", var.scope));
                         self.debugInfo.push(')');
                     }  // */
-                    let value = WordComparison(&token, &var.keyword);
+                    let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
                     if value < closest.0 {
-                        let mut t = String::new();
-                        if matches!(var.kwType, OutlineType::Function | OutlineType::Enum) && false {  // basic printing of parameters
-                            //t.push('(');
-                            //t.push_str(var.keyword.as_str());
-                            //t.push('/');
-                            //t.push_str(&format!(":{:?}", var.parameters));
-                            /*
-                            for child in var.childKeywords {
-                                t.push_str(child.keyword.as_str());
-                                t.push(',');
-                            } // */
-                            //t.push(')');
-                        }
-                        closest = (value, var.keyword.clone(), t);
+                        closest = (value, vec![var.keyword.clone()], i);
+                    } else if value == closest.0 {
+                        closest.1.push(var.keyword.clone());
                     }
                 }
-                if closest.0 < 15 && closest.1 != token.as_str() {  // todo! keep all of this up to date
-                    self.suggested = closest.1;
+                // getting the closest option to the size of the current token if there are multiple equal options
+                let mut finalBest = (usize::MAX, "".to_string(), 0usize);
+                for element in closest.1 {
+                    let size = (element.len() as isize - token.len() as isize).abs() as usize;
+                    if size < finalBest.0 {
+                        finalBest = (size, element, closest.2);
+                    }
+                }
+                if closest.0 < 15 {  // finalBest.1 != token.as_str()
+                    if token == finalBest.1 {
+                        /*self.debugInfo = format!("Type: {:?} Mutable: {} Publicity: {:?}",
+                            validKeywords[finalBest.2].typedType,
+                            validKeywords[finalBest.2].mutable,
+                            validKeywords[finalBest.2].public,
+                        );*/
+                    } else {
+                        self.suggested = format!("{}", finalBest.1);
+                    }
                     //self.suggested.push_str(closest.0.to_string().as_str());
                     //self.debugInfo.push(' ');
                     //self.debugInfo.push_str(closest.0.to_string().as_str());
                     //self.debugInfo.push_str(" / ");
-                    self.debugInfo.push_str(closest.2.as_str());
+                    //self.debugInfo.push_str(closest.2.as_str());
                 }
             }
         }
 
         let errorText = Text::from(vec![
             Line::from(vec![
-                format!(": {}?", self.suggested).white().italic(),
+                format!(": {}", self.suggested).fg(
+                    self.colorMode.colorBindings.suggestion
+                ).italic(),
             ]),
             Line::from(vec![
-                format!("Debug: {}", self.debugInfo).red().bold(),
-                format!(" ; {:?}", scope).white()
+                format!("Debug: {}", self.debugInfo).fg(
+                    self.colorMode.colorBindings.errorCol
+                ).bold(),
+                //format!(" ; {:?}", scope).white()
             ]),
         ]);
 
@@ -1178,26 +1198,6 @@ impl Widget for &mut App {
                 height: 1
             }, buf);
     }
-}
-
-// kinda bad but kinda sometimes works; at least it should be fairly quick
-fn WordComparison (wordMain: &String, wordComp: &String) -> usize {
-    let mut totalError = 0;
-    let wordBytes = wordComp.as_bytes();
-    for (index, byte) in wordMain
-        .bytes()
-        .enumerate()
-    {
-        if index >= wordComp.len() {  break;  }
-        totalError += (byte as i8 - wordBytes[index] as i8)
-            .abs() as usize;
-    }
-
-    if wordComp.len() < wordMain.len() {
-        totalError += (wordMain.len() - wordComp.len()) * 2;
-    }
-
-    totalError
 }
 
 /*
@@ -1279,7 +1279,6 @@ Suggestions appear on the very bottom as to not obstruct the code being written
 
 
 
-add undo/redo
 maybe show the outline moving while scrolling?
 Add scrolling to the outline
 make it so when indenting/unindenting it does it for the entire selection if highlighting
@@ -1287,7 +1286,7 @@ make it so when pressing return, it auto sets to the correct indent level
     same thing for various other actions being set to the correct indent level
 
 Fix the highlighting bug when selecting text above and only partially covering a token; It's not rendering the full token and does weird things...
-    It has something to do with the end and starting cursor char positions being aligned on the seperate lines
+    It has something to do with the end and starting cursor char positions being aligned on the separate lines
 Add double-clicking to highlight a token or line
 make it so that highlighting than typing () or {} or [] encloses the text rather than replacing it
 
@@ -1310,14 +1309,6 @@ maybe move all the checks for the command key modifier to a single check that th
 Prevent the program from crashing when touch non-u8 characters (either handle the error, or do something but don't crash)
     Ideally the user can still copy and past them along with placing them and deleting them
 
-Add syntax highlighting for python
-
-Make the undo/redo undo/redo copy/paste in one move instead of multiple
-
-Fix multi-line comments:
-    maybe set each line to a state such as: Null, Comment Next
-    this could be read and edited based on the current line (only some updates would have to propagate)
-
 Fix the bug with the scope outline system where it clicks one cell too high when it hasn't been scrolled yet
 
 Fix the bug with highlighting; when highlighting left and pressing right arrow, it stays at the left
@@ -1325,18 +1316,21 @@ Fix the bug with highlighting; when highlighting left and pressing right arrow, 
 
 Allow language highlighting to determine unique characters for comments and multi line comments
 
-
-option + tab = accept auto complete suggestion
-
-either check the token the mouse is on or to the left (if partially on one consider the whole token)
-based on that token, find the closest possibility assuming it falls within a certain error range
-account for members vs. methods vs. functions vs. variables
-
 make a better system that can store keybindings; the user can make a custom one, or there are two defaults: mac custom, standard
 
 (complete) make any edits cascade down the file (such as multi line comments) and update those lines until terminated
-    (incomplete..... me no want do) Figure out a way to determine if the set is complete so it doesn't  update the whole file
-    Todo! Error! Fix the variable checker/saver to handle when variables are removed from the code, idk how; have fun :(
+    (kinda incomplete..... me no want do) determine if the set is incomplete so it doesn't  update the whole file
+    !!!Todo! Error! Fix the variable checker/saver to handle when variables are removed from the code, idk how; have fun :( is this working????
+    Todo! Fix all the countless errors...... A bunch of junk variables are added and parameters aren't; tuples also aren't handled... :(
+
+Todo! Add the undo-redo change thingy for the replacing chars stuff when auto-filling
+
+
+make the syntax highlighting use known variable/function syntax types once it's known (before use the single line context).
+make the larger context and recalculation of scopes & specific variables be calculated on a thread based on a queue and joined
+    once a channel indicates completion. (maybe run this once every second if a change is detected).
+only update the terminal screen if a key input is detected.
+cut down on cpu usage
 
 */
 
