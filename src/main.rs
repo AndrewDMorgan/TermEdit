@@ -28,6 +28,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
+use ratatui::prelude::Alignment;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 
 #[derive(Debug, Default)]
@@ -136,8 +137,15 @@ pub enum TabState {
 
 #[derive(Debug, Default)]
 pub enum AppState {
-    #[default] Tabs,
+    Tabs,
     CommandPrompt,
+    #[default] Menu,
+}
+
+#[derive(Debug, Default)]
+pub enum MenuState {
+    #[default] Welcome,
+    Settings
 }
 
 
@@ -157,6 +165,8 @@ pub struct App {
 
     preferredCommandKeybind: eventHandler::KeyModifiers,
     colorMode: Colors::Colors::ColorMode,
+
+    menuState: MenuState,
 }
 
 impl App {
@@ -169,10 +179,6 @@ impl App {
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
         let mut clipboard = Clipboard::new().unwrap();
-
-        self.fileBrowser.LoadFilePath("src/", &mut self.codeTabs);
-        self.fileBrowser.fileCursor = 1;
-        self.codeTabs.currentTab = 1;
 
         let mut parser = Parser::new();
         let mut keyParser = KeyParser::new();
@@ -217,7 +223,7 @@ impl App {
                     }
                 },
             }
-            
+
             self.area = terminal.get_frame().area();  // ig this is a thing
             self.HandleKeyEvents(&keyParser, &mut clipboard);
             self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed, but I think it should work? idk
@@ -233,6 +239,11 @@ impl App {
 
     pub fn HandleMouseEvents (&mut self, events: &KeyParser) {
         if let Some(event) = &events.mouseEvent {
+            if matches!(self.appState, AppState::Menu) {
+                // do stuff...
+                return;
+            }
+
             match event.eventType {
                 MouseEventType::Down => {
                     if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
@@ -485,7 +496,7 @@ impl App {
                             self.Exit();
                         }
 
-                        // jumping command
+                        // jumping to, command
                         if self.currentCommand.starts_with('[') {
                             // jumping up
                             if let Some(numberString) = self.currentCommand.get(1..) {
@@ -808,6 +819,36 @@ impl App {
                     },
                     _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
                 }
+            },
+            AppState::Menu => {
+                for chr in &keyEvents.charEvents {
+                    self.currentCommand.push(*chr);
+                }
+
+                if !self.currentCommand.is_empty() {
+                    // quiting
+                    if keyEvents.ContainsKeyCode(KeyCode::Return) {
+                        if self.currentCommand == "q" {
+                            self.Exit();
+                        }
+
+                        if self.currentCommand == "settings" {
+                            self.menuState = MenuState::Settings;
+                        }
+
+                        if self.currentCommand.starts_with("open ") {
+                            self.fileBrowser.LoadFilePath("src/", &mut self.codeTabs);
+                            self.fileBrowser.fileCursor = 1;
+                            self.codeTabs.currentTab = 1;
+
+                            self.appState = AppState::CommandPrompt;
+                        }
+
+                        self.currentCommand.clear();
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+                        self.currentCommand.pop();
+                    }
+                }
             }
         }
         
@@ -826,6 +867,13 @@ impl App {
 
                     AppState::Tabs
                 },
+                _ => {
+                    if matches!(self.menuState, MenuState::Settings) {
+                        self.menuState = MenuState::Welcome;
+                    }
+
+                    AppState::Menu
+                },
             }
         }
     }
@@ -834,12 +882,7 @@ impl App {
         self.exit = true;
     }
 
-}
-
-
-impl Widget for &mut App {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-
+    fn RenderProject (&mut self, area: Rect, buf: &mut Buffer) {
         // ============================================= file block here =============================================
         let mut tabBlock = Block::bordered()
             .border_set(border::THICK);
@@ -861,7 +904,7 @@ impl Widget for &mut App {
                 y: area.y,
                 width: area.width - 20,
                 height: 3
-        }, buf);
+            }, buf);
 
 
         // ============================================= code block here =============================================
@@ -869,9 +912,9 @@ impl Widget for &mut App {
             " ".to_string().white(),
             self.codeTabs.tabs[
                 self.codeTabs.currentTab
-            ].name
-            .clone()
-            .bold(),
+                ].name
+                .clone()
+                .bold(),
             " ".to_string().white(),
         ]);
         let mut codeBlock = Block::bordered()
@@ -897,7 +940,7 @@ impl Widget for &mut App {
                 y: area.y + 2,
                 width: area.width - 29,
                 height: area.height - 10
-        }, buf);
+            }, buf);
 
 
         // ============================================= files =============================================
@@ -940,8 +983,8 @@ impl Widget for &mut App {
                     if *scopeIndex ==
                         self.codeTabs.tabs[self.codeTabs.currentTab]
                             .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
-                            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-                
+                        matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
+
                         newScroll = scrolled - 1;
                     }
                     if scrolled < scrollTo {  continue;  }
@@ -952,21 +995,21 @@ impl Widget for &mut App {
                                 if *scopeIndex ==
                                     self.codeTabs.tabs[self.codeTabs.currentTab]
                                         .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
-                                        matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-                                
+                                    matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
+
                                     offset.push('>')
                                 } else if
-                                    matches!(self.appState, AppState::CommandPrompt) &&
+                                matches!(self.appState, AppState::CommandPrompt) &&
                                     matches!(self.tabState, TabState::Files) &&
                                     self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
                                         self.fileBrowser.outlineCursor
-                                    ] == *scopeIndex {
+                                        ] == *scopeIndex {
                                     offset.push('>');
                                 }
                                 for _ in 0..scopeIndex.len().saturating_sub(1) {
                                     offset.push_str("  ");
                                 }
-                                
+
                                 offset.white()
                             },
                             {
@@ -974,7 +1017,7 @@ impl Widget for &mut App {
                                     self.codeTabs.tabs[self.codeTabs.currentTab]
                                         .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
                                     matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-                                    
+
                                     match scopeIndex.len() {
                                         1 => scope.name.clone().light_blue(),
                                         2 => scope.name.clone().light_magenta(),
@@ -984,12 +1027,12 @@ impl Widget for &mut App {
                                         _ => scope.name.clone().white(),
                                     }.underlined()
                                 } else if
-                                    matches!(self.appState, AppState::CommandPrompt) &&
+                                matches!(self.appState, AppState::CommandPrompt) &&
                                     matches!(self.tabState, TabState::Files) &&
                                     self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
                                         self.fileBrowser.outlineCursor
-                                    ] == *scopeIndex {
-                                    
+                                        ] == *scopeIndex {
+
                                     match scopeIndex.len() {
                                         1 => scope.name.clone().light_blue().underlined(),
                                         2 => scope.name.clone().light_magenta().underlined(),
@@ -1039,9 +1082,9 @@ impl Widget for &mut App {
                 y: area.y,
                 width: 30,
                 height: area.height - 8
-        }, buf);
+            }, buf);
 
-            
+
         // ============================================= Error Bar =============================================
         let errorBlock = Block::bordered()
             .border_set(border::THICK);
@@ -1071,8 +1114,8 @@ impl Widget for &mut App {
             // self.debugInfo.push_str("}");
             let mut currentScope =
                 self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
-            ].clone();
+                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+                    ].clone();
             if !tokenSet.is_empty() {
                 let mut currentElement = OutlineKeyword::TryFindKeyword(
                     &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
@@ -1081,7 +1124,7 @@ impl Widget for &mut App {
                 if let Some(set) = &currentElement {
                     let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
                         set.lineNumber
-                    ].clone();
+                        ].clone();
                     //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
                     currentScope = newScope;
                 }
@@ -1092,7 +1135,7 @@ impl Widget for &mut App {
                     if let Some(set) = currentElement {
                         let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
                             set.lineNumber
-                        ].clone();
+                            ].clone();
                         //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
                         currentScope = newScope;
                         currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
@@ -1174,14 +1217,105 @@ impl Widget for &mut App {
                 width: area.width,
                 height: 8
             }, buf);
-        
+    }
+
+    fn RenderMenu (&mut self, area: Rect, buf: &mut Buffer) {
+        // ============================================= Welcome Text =============================================
+        /*
+
+        welcome!
+       |\\            //   .==  ||      _===_    _===_   ||\    /||   .==  ||  |
+       | \\          //   ||    ||     //   \\  //   \\  ||\\  //||  //    ||  |
+       |  \\  //\\  //    ||--  ||     ||       ||   ||  || \\// ||  ||--      |
+       |   \\//  \\//     \\==  ||===  \\___//  \\___//  ||      ||  \\==  []  |
+
+        */
+
+        match self.menuState {
+            MenuState::Settings => {
+                //
+            },
+            MenuState::Welcome => {
+                let welcomeText = Text::from(vec![
+                    Line::from(vec![
+                        "\\\\            //   .==  ||      _===_    _===_   ||\\    /||   .==  ||"
+                            .red().bold(),
+                    ]),
+                    Line::from(vec![
+                        " \\\\          //   ||    ||     //   \\\\  //   \\\\  ||\\\\  //||  //    ||"
+                            .red().bold(),
+                    ]),
+                    Line::from(vec![
+                        "  \\\\  //\\\\  //    ||--  ||     ||       ||   ||  || \\\\// ||  ||--    "
+                            .red().bold(),
+                    ]),
+                    Line::from(vec![
+                        "   \\\\//  \\\\//     \\\\==  ||===  \\\\__=//  \\\\___//  ||      ||  \\\\==  []"
+                            .red().bold(),
+                    ]),
+                    Line::from(vec![]),
+                    Line::from(vec![]),
+                    Line::from(vec![
+                        "The command prompt is bellow (Bottom Left):".white().bold()
+                    ]),
+                    Line::from(vec![]),
+                    Line::from(vec![
+                        "Press: <".white().bold().dim(),
+                        "q".white().bold().dim().italic().underlined(),
+                        "> followed by <".white().bold().dim(),
+                        "return".white().bold().dim().italic().underlined(),
+                        "> to quit".white().bold().dim(),
+                    ]),
+                    Line::from(vec![
+                        "Type ".white().bold().dim(),
+                        "\"open\"".white().bold().dim().italic().underlined(),
+                        " followed by the path to the directory".white().bold().dim(),
+                    ]),
+                    Line::from(vec![]),
+                    Line::from(vec![
+                        "Type ".white().bold().dim(),
+                        "\"settings\"".white().bold().dim().underlined().italic(),
+                        " to open settings ( <".white().bold().dim(),
+                        "esc".white().bold().dim().italic().underlined(),
+                        "> to leave)".white().bold().dim(),
+                    ]),
+                ]);
+
+                let welcomeBlock = Block::bordered();
+
+                Paragraph::new(welcomeText)
+                    .alignment(Alignment::Center)
+                    .block(welcomeBlock)
+                    .render(Rect {
+                        x: area.x + area.width / 2 - 71 / 2,
+                        y: area.y + area.height / 2 - 10,
+                        width: 71,
+                        height: 15
+                }, buf);
+            }
+        }
+    }
+}
+
+impl Widget for &mut App {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        match self.appState {
+            AppState::Tabs | AppState::CommandPrompt => {
+                self.RenderProject(area, buf);
+            },
+            AppState::Menu => {
+                self.RenderMenu(area, buf)
+            }
+        }
+
+        // is necessary for all
         // ============================================= Commandline =============================================
         let commandText = Text::from(vec![
             Line::from(vec![
                 "/".to_string().white().bold(),
                 self.currentCommand.clone().white().italic(),
                 {
-                    if matches!(self.appState, AppState::CommandPrompt) {
+                    if matches!(self.appState, AppState::CommandPrompt | AppState::Menu) {
                         "_".to_string().white().slow_blink().bold()
                     } else {
                         "".to_string().white()
@@ -1196,7 +1330,7 @@ impl Widget for &mut App {
                 y: area.y + area.height - 1,
                 width: area.width,
                 height: 1
-            }, buf);
+        }, buf);
     }
 }
 
