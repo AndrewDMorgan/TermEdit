@@ -9,3 +9,4 @@ ratatui = "0.30.0-alpha.2"
 tokio = { version = "1.44.1", features = ["full"] }  # Async I/O
 vte = "0.15.0"  # For escape sequence parsing
 arboard = "3.5.0"
+dirs = "5.0"  # or latest

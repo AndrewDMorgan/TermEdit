@@ -1,11 +1,13 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
+use std::path::PathBuf;
 use tokio::io::{self, AsyncReadExt};
 use vte::Parser;
 
 use crossterm::terminal::enable_raw_mode;
 use arboard::Clipboard;
+use dirs::home_dir;
 
 mod CodeTabs;
 mod Tokens;
@@ -47,10 +49,15 @@ pub struct FileBrowser {
 }
 
 impl FileBrowser {
-    pub fn LoadFilePath (&mut self, pathInput: &str, codeTabs: &mut CodeTabs::CodeTabs) {
+    pub fn LoadFilePath (&mut self, indirectPathInput: &str, codeTabs: &mut CodeTabs::CodeTabs) {
         self.files.clear();
         codeTabs.tabs.clear();
-        if let Ok(paths) = std::fs::read_dir(pathInput) {
+        let pathInput = home_dir()
+            .unwrap_or(PathBuf::from("/"))
+            .join(indirectPathInput)
+            .to_string_lossy()
+            .into_owned();
+        if let Ok(paths) = std::fs::read_dir(pathInput.clone()) {
             for path in paths.flatten() {
                 if std::fs::FileType::is_file(&path.file_type().unwrap()) {
                     let name = path.file_name().to_str().unwrap_or("").to_string();
@@ -59,7 +66,7 @@ impl FileBrowser {
                     // loading the file's contents
                     let mut lines: Vec <String> = vec!();
                     
-                    let mut fullPath = pathInput.to_string();
+                    let mut fullPath = pathInput.clone();
                     fullPath.push_str(&name);
 
                     let msg = fullPath.as_str().trim();  // temporary for debugging
@@ -105,6 +112,8 @@ impl FileBrowser {
                     codeTabs.tabFileNames.push(name.clone());
                 }
             }
+        } else {
+            panic!("Error loading files!");
         }
     }
 
@@ -837,9 +846,10 @@ impl App {
                         }
 
                         if self.currentCommand.starts_with("open ") {
-                            self.fileBrowser.LoadFilePath("src/", &mut self.codeTabs);
-                            self.fileBrowser.fileCursor = 1;
-                            self.codeTabs.currentTab = 1;
+                            self.fileBrowser.LoadFilePath(self.currentCommand.get(5..).unwrap_or(""), &mut self.codeTabs);
+                            //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
+                            self.fileBrowser.fileCursor = 0;
+                            self.codeTabs.currentTab = 0;
 
                             self.appState = AppState::CommandPrompt;
                         }
@@ -1223,17 +1233,17 @@ impl App {
         // ============================================= Welcome Text =============================================
         /*
 
-        welcome!
-       |\\            //   .==  ||      _===_    _===_   ||\    /||   .==  ||  |
-       | \\          //   ||    ||     //   \\  //   \\  ||\\  //||  //    ||  |
-       |  \\  //\\  //    ||--  ||     ||       ||   ||  || \\// ||  ||--      |
-       |   \\//  \\//     \\==  ||===  \\___//  \\___//  ||      ||  \\==  []  |
+        | welcome!
+        |\\            //   .==  ||      _===_    _===_   ||\    /||   .==  ||  |
+        | \\          //   ||    ||     //   \\  //   \\  ||\\  //||  //    ||  |
+        |  \\  //\\  //    ||--  ||     ||       ||   ||  || \\// ||  ||--      |
+        |   \\//  \\//     \\==  ||===  \\___//  \\___//  ||      ||  \\==  []  |
 
         */
 
         match self.menuState {
             MenuState::Settings => {
-                //
+                // settings stuff ig
             },
             MenuState::Welcome => {
                 let welcomeText = Text::from(vec![
