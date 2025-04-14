@@ -1010,149 +1010,149 @@ impl CodeTab {
         // recalculating variables, methods, etc...
     }
 
-    pub fn GenerateColor <'a> (&self, token: &TokenType, text: &'a str, colorBindings: &Colors::ColorBindings) -> Span <'a> {
+    pub fn GenerateColor <'a> (&self, token: &TokenType, text: &'a str, colorMode: &Colors::ColorMode) -> Span <'a> {
         match token {
             TokenType::Bracket => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::SquirlyBracket => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Parentheses => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Variable => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Member => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Object => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).bold().underlined()
             },
             TokenType::Function => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Method => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic()  // works for now ig
             },
             TokenType::Number => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Logic => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Math => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Assignment => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Endl => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Macro => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic().bold().underlined()
             },
             TokenType::Const => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic()
             },
             TokenType::Barrow => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic()
             },
             TokenType::Lifetime => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).underlined().bold()
             },
             TokenType::String => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
@@ -1161,58 +1161,58 @@ impl CodeTab {
                     text == "error" || text == "condition" ||
                     text == "conditions" || text == "fix" {
                         text.fg(
-                            *colorBindings
+                            *colorMode.colorBindings
                                 .syntaxHighlighting
-                                .get(token)
+                                .get(&(&token, &colorMode.colorType))
                                 .expect("Error.... no color found")
                         ).underlined()
                 }  // basic but it kinda does stuff idk
                 else {
                     text.fg(
-                        *colorBindings
+                        *colorMode.colorBindings
                             .syntaxHighlighting
-                            .get(token)
+                            .get(&(&token, &colorMode.colorType))
                             .expect("Error.... no color found")
                     )
                 }
             },
             TokenType::Null => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Primitive => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 )
             },
             TokenType::Keyword => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).bold().underlined()
             },
             TokenType::Unsafe => {
                 text.fg(
-                    *colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(token)
+                        .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic().underlined().on_dark_gray().bold()
             }
         }
     }
 
-    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorBindings: &Colors::ColorBindings) -> Vec <ratatui::text::Line> {
-        // using the known area to adjust the scrolled position (even though this can now be done elsewise..... too lazy to move it)
+    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorMode: &Colors::ColorMode) -> Vec <Line> {
+        // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
         let currentTime = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
             .expect("Time went backwards...")
@@ -1314,33 +1314,34 @@ impl CodeTab {
                                     currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
                             {
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, text.as_str(), colorBindings)
+                                    (text.len(), self.GenerateColor(token, text.as_str(), colorMode)
                                         .on_dark_gray())
                                 );
                             } else if self.highlighting && currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
                                 let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
                                 let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, txtLeft, colorBindings)
+                                    (text.len(), self.GenerateColor(token, txtLeft, colorMode)
                                         .on_dark_gray())
                                 );
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, txtRight, colorBindings))
+                                    (text.len(), self.GenerateColor(token, txtRight, colorMode))
                                 );
                             } else {
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, text.as_str(), colorBindings))
+                                    (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
                                 );
                             }
                         } else {
                             coloredRight.push(
-                                (text.len(), self.GenerateColor(token, text.as_str(), colorBindings))
+                                (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
                             );
                         }
                     } else {
-                        let txt = &text[0..text.len() - (
-                            currentCharNum + text.len() - self.cursor.1
-                        )];
+                        // (fixed... ugly but works) this can't handle non utf-8 chars... it just crashes because of the char-boundaries
+                        let txt = &text.get(0..text.len() - (
+                                currentCharNum + text.len() - self.cursor.1
+                        )).unwrap_or("");
                         let leftSize = txt.len();
                         if self.highlighting && (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) {
                             if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < text.len() &&
@@ -1351,7 +1352,7 @@ impl CodeTab {
                                     self.GenerateColor(
                                         token,
                                         &txt[..self.cursorEnd.1 - currentCharNum],
-                                        colorBindings
+                                        colorMode
                                     )
                                 ));
                                 coloredLeft.push((
@@ -1359,19 +1360,19 @@ impl CodeTab {
                                     self.GenerateColor(
                                         token,
                                         &txt[self.cursorEnd.1 - currentCharNum..],
-                                        colorBindings
+                                        colorMode
                                     ).on_dark_gray()
                                 ));
                             } else {
                                 coloredLeft.push((
                                     txt.len(),
-                                    self.GenerateColor(token, txt, colorBindings).on_dark_gray()
+                                    self.GenerateColor(token, txt, colorMode).on_dark_gray()
                                 ));
                             }
                         } else {
                             coloredLeft.push((
                                 txt.len(),
-                                self.GenerateColor(token, txt, colorBindings)
+                                self.GenerateColor(token, txt, colorMode)
                             ));
                         }
                         if editingCode {
@@ -1380,11 +1381,12 @@ impl CodeTab {
                                 .white()
                                 .bold()))
                         };
-                        let txt = &text[
-                            text.len() - (
-                                currentCharNum + text.len() - self.cursor.1
-                            )..text.len()
-                            ];
+                        let txt = &text.get(
+                                text.len() - (
+                                    currentCharNum + text.len() - self.cursor.1
+                                )..text.len()
+                        ).unwrap_or("");
+
                         if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
                             if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + text.len() {
                                 coloredRight.push((
@@ -1392,7 +1394,7 @@ impl CodeTab {
                                     self.GenerateColor(
                                         token,
                                         &txt[..self.cursorEnd.1 - (currentCharNum + leftSize)],
-                                        colorBindings
+                                        colorMode
                                     ).on_dark_gray()
                                 ));
                                 coloredRight.push((
@@ -1400,19 +1402,19 @@ impl CodeTab {
                                     self.GenerateColor(
                                         token,
                                         &txt[self.cursorEnd.1 - (currentCharNum + leftSize)..],
-                                        colorBindings
+                                        colorMode
                                     )
                                 ));
                             } else {
                                 coloredRight.push((
                                     txt.len(),
-                                    self.GenerateColor(token, txt, colorBindings).on_dark_gray()
+                                    self.GenerateColor(token, txt, colorMode).on_dark_gray()
                                 ));
                             }
                         } else {
                             coloredRight.push((
                                 txt.len(),
-                                self.GenerateColor(token, txt, colorBindings)
+                                self.GenerateColor(token, txt, colorMode)
                             ));
                         }
                     }
@@ -1421,35 +1423,35 @@ impl CodeTab {
                         (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
                             currentCharNum >= self.cursorEnd.1 && currentCharNum + text.len() <= self.cursor.1)
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorBindings)
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
                             .on_dark_gray()));
                     } else if currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
                         let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
                         let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorBindings)));
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorBindings)
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorMode)));
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorMode)
                             .on_dark_gray()));
                     } else if (lineNumber == self.cursor.0 && currentCharNum + text.len() <= self.cursor.1 ||
                         lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorBindings)
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
                             .on_dark_gray()));
                     } else {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorBindings)));
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)));
                     }
                 } else if self.highlighting {
                     if (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
                         (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
                             currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorBindings)
+                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
                             .on_dark_gray()));
                     } else if currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
                         let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
                         let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorBindings)
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorMode)
                             .on_dark_gray()));
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorBindings)));
+                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorMode)));
                     } else if (
                         lineNumber == self.cursorEnd.0 &&
                             currentCharNum <= self.cursorEnd.1 ||
@@ -1458,16 +1460,16 @@ impl CodeTab {
                         self.cursorEnd.0 != self.cursor.0
                     {
                         coloredLeft.push(
-                            (text.len(), self.GenerateColor(token, text.as_str(), colorBindings)
+                            (text.len(), self.GenerateColor(token, text.as_str(), colorMode)
                                 .on_dark_gray())
                         );
                     } else {
                         coloredLeft.push(
-                            (text.len(), self.GenerateColor(token, text.as_str(), colorBindings))
+                            (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
                         );
                     }
                 } else {
-                    coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorBindings)));
+                    coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)));
                     //coloredLeft.push((1, "|".white()))  // shows the tokens    todo (just to pin this line idk)
                 }
 
@@ -1581,8 +1583,8 @@ pub struct CodeTabs {
 }
 
 impl CodeTabs {
-    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorBindings: &Colors::ColorBindings) -> Vec <ratatui::text::Line> {
-        self.tabs[self.currentTab].GetScrolledText(area, editingCode, colorBindings)
+    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorMode: &Colors::ColorMode) -> Vec <ratatui::text::Line> {
+        self.tabs[self.currentTab].GetScrolledText(area, editingCode, colorMode)
     }
 }
 

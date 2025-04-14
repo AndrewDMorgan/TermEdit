@@ -17,6 +17,7 @@ mod Colors;
 
 use StringPatternMatching::*;
 use eventHandler::*;
+use Colors::Colors::*;
 use Tokens::*;
 
 use CodeTabs::CodeTab;
@@ -42,6 +43,7 @@ pub enum FileTabs {
 #[derive(Debug, Default)]
 pub struct FileBrowser {
     files: Vec <String>,  // stores the names
+    filePaths: Vec <String>,
 
     fileTab: FileTabs,
     fileCursor: usize,
@@ -49,7 +51,42 @@ pub struct FileBrowser {
 }
 
 impl FileBrowser {
-    pub fn LoadFilePath (&mut self, indirectPathInput: &str, codeTabs: &mut CodeTabs::CodeTabs) {
+    pub fn GetPathName (dirSuffix: &str) -> String {
+        home_dir()
+            .unwrap_or(PathBuf::from("/"))
+            .join(dirSuffix)
+            .to_string_lossy()
+            .into_owned()
+    }
+    pub fn CalculateDirectories (directory: &String, nextDirectories: &mut Vec <String>) {
+        if let Ok(paths) = std::fs::read_dir(directory) {
+            for path in paths.flatten() {
+                if std::fs::FileType::is_dir(&path.file_type().unwrap()) {
+                    nextDirectories.push(path
+                        .file_name()
+                        .to_str()
+                        .unwrap_or("")
+                        .to_string()
+                    );
+                }
+            }
+        }
+    }
+
+    pub fn LoadFilePath (&mut self,
+                         indirectPathInput: &str,
+                         codeTabs: &mut CodeTabs::CodeTabs
+    ) -> io::Result <()> {
+        static VALID_EXTENSIONS: [&str; 7] = [
+            "txt",
+            "rs",
+            "py",
+            "cpp",
+            "hpp",
+            "c",
+            "h"
+        ];
+
         self.files.clear();
         codeTabs.tabs.clear();
         let pathInput = home_dir()
@@ -61,8 +98,16 @@ impl FileBrowser {
             for path in paths.flatten() {
                 if std::fs::FileType::is_file(&path.file_type().unwrap()) {
                     let name = path.file_name().to_str().unwrap_or("").to_string();
+
+                    // so it doesn't try and load invalid files
+                    if !VALID_EXTENSIONS.contains(&name.split(".").last().unwrap_or("")) {  continue;  }
+
                     self.files.push(name.clone());
-                    
+                    let mut fullPath = pathInput.clone();
+                    fullPath.push_str(&name);
+                    self.filePaths.push(fullPath);
+
+                    /*
                     // loading the file's contents
                     let mut lines: Vec <String> = vec!();
                     
@@ -109,11 +154,11 @@ impl FileBrowser {
                     (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
 
                     codeTabs.tabs.push(tab);
-                    codeTabs.tabFileNames.push(name.clone());
+                    codeTabs.tabFileNames.push(name.clone());*/
                 }
-            }
+            } Ok(())
         } else {
-            panic!("Error loading files!");
+            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to find directory"))
         }
     }
 
@@ -159,7 +204,7 @@ pub enum MenuState {
 
 
 #[derive(Debug, Default)]
-pub struct App {
+pub struct App <'a> {
     exit: bool,
     appState: AppState,
     tabState: TabState,
@@ -172,13 +217,18 @@ pub struct App {
     debugInfo: String,
     suggested: String,
 
-    preferredCommandKeybind: eventHandler::KeyModifiers,
-    colorMode: Colors::Colors::ColorMode,
+    preferredCommandKeybind: KeyModifiers,
+    colorMode: ColorMode <'a>,
 
     menuState: MenuState,
+
+    currentDir: String,
+    dirFiles: Vec<String>,
+
+    currentMenuSettingBox: usize,
 }
 
-impl App {
+impl <'a> App <'a> {
 
     /// runs the application's main loop until the user quits
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
@@ -254,7 +304,7 @@ impl App {
             }
 
             match event.eventType {
-                MouseEventType::Down => {
+                MouseEventType::Down if self.codeTabs.tabs.len() > 0 => {
                     if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
                         let currentTime = std::time::SystemTime::now()
                             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -274,7 +324,7 @@ impl App {
                         self.lastScrolled = currentTime;
                     }
                 },
-                MouseEventType::Up => {
+                MouseEventType::Up if self.codeTabs.tabs.len() > 0 => {
                     if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
                         let currentTime = std::time::SystemTime::now()
                             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -302,7 +352,10 @@ impl App {
                 MouseEventType::Left => {
                     // checking for code selection
                     if matches!(event.state, MouseState::Release | MouseState::Hold) {
-                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 && event.position.1 > 3 {
+                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 &&
+                           event.position.1 > 3 &&
+                           self.codeTabs.tabs.len() > 0
+                        {
                             // updating the highlighting position
                             let cursorEnding = self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
 
@@ -342,7 +395,11 @@ impl App {
                             }
                         }
                     } else if matches!(event.state, MouseState::Press) {
-                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 && event.position.1 > 3 {
+                        if  event.position.0 > 29 &&
+                            event.position.1 < self.area.height - 8 &&
+                            event.position.1 > 3 &&
+                            self.codeTabs.tabs.len() > 0
+                        {
                             let currentTime = std::time::SystemTime::now()
                                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                                 .expect("Time went backwards...")
@@ -385,7 +442,12 @@ impl App {
                             tab.mouseScrolledFlt = 0.0;
                             self.appState = AppState::Tabs;
                             self.tabState = TabState::Code;
-                        } else if event.position.0 <= 29 && event.position.1 < self.area.height - 10 && matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
+                        } else if
+                            event.position.0 <= 29 &&
+                            event.position.1 < self.area.height - 10 &&
+                            matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
+                            self.codeTabs.tabs.len() > 0
+                        {
                             // getting the line clicked on and jumping to it if it's in range
                             // account for the line scrolling/shifting... (not as bad as I thought it would be)
                             let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
@@ -403,7 +465,11 @@ impl App {
                             ).start;
                             self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
                             self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                        } else if event.position.0 > 29 && event.position.1 <= 2 {
+                        } else if
+                            event.position.0 > 29 &&
+                            event.position.1 <= 2 &&
+                            self.codeTabs.tabs.len() > 0
+                        {
                             // tallying the size till the correct tab is found
                             let mut sizeCounted = 29usize;
                             for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
@@ -412,6 +478,64 @@ impl App {
                                     self.codeTabs.currentTab = index;
                                     break;
                                 }
+                            }
+                        } else if  // selecting files to open
+                            event.position.0 > 1 &&
+                            event.position.0 < 30 && //height - 8, width 30
+                            event.position.1 < self.area.height - 8 &&
+                            event.position.1 > 1
+                        {
+                            let height = event.position.1.saturating_sub(2) as usize;
+                            if self.fileBrowser.files.len() > height {
+                                // loading the file's contents
+                                self.codeTabs.currentTab = self.codeTabs.tabs.len();
+                                let name = &self.fileBrowser.files[height];
+
+                                let mut lines: Vec <String> = vec!();
+
+                                let fullPath = &self.fileBrowser.filePaths[height];
+
+                                let msg = fullPath.as_str().trim();  // temporary for debugging
+                                let contents = std::fs::read_to_string(&fullPath).expect(msg);
+                                let mut current = String::new();
+                                for chr in contents.chars() {
+                                    if chr == '\n' {
+                                        lines.push(current.clone());
+                                        current.clear();
+                                    } else {
+                                        current.push(chr);
+                                    }
+                                }
+                                lines.push(current);
+
+                                let mut tab = CodeTab {
+                                    lines,
+                                    ..Default::default()
+                                };
+
+                                tab.fileName = fullPath.clone();
+
+                                tab.lineTokens.clear();
+                                let mut lineNumber = 0;
+                                let ending = tab.fileName.split('.').last().unwrap_or("");
+                                for line in tab.lines.iter() {
+                                    tab.lineTokenFlags.push(vec!());
+                                    tab.lineTokens.push(
+                                        {
+                                            GenerateTokens(line.clone(),
+                                                           ending,
+                                                           &mut tab.lineTokenFlags,
+                                                           lineNumber,
+                                                           &mut tab.outlineKeywords
+                                            )
+                                        }
+                                    );
+                                    lineNumber += 1;
+                                }
+                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+
+                                self.codeTabs.tabs.push(tab);
+                                self.codeTabs.tabFileNames.push(name.clone());
                             }
                         }
                     }
@@ -538,7 +662,7 @@ impl App {
             },
             AppState::Tabs => {
                 match self.tabState {
-                    TabState::Code => {
+                    TabState::Code if self.codeTabs.tabs.len() > 0 => {
                         // making sure command + s or other commands are being pressed
                         if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
                             for chr in &keyEvents.charEvents {
@@ -832,6 +956,17 @@ impl App {
             AppState::Menu => {
                 for chr in &keyEvents.charEvents {
                     self.currentCommand.push(*chr);
+
+                    if self.currentCommand.starts_with("open ") && *chr == '/' {
+                        // recalculating the directories
+                        self.currentDir = FileBrowser::GetPathName(
+                            self.currentCommand.get(5..)
+                                .unwrap_or("")
+                        );
+
+                        self.dirFiles.clear();
+                        FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
+                    }
                 }
 
                 if !self.currentCommand.is_empty() {
@@ -846,20 +981,99 @@ impl App {
                         }
 
                         if self.currentCommand.starts_with("open ") {
-                            self.fileBrowser.LoadFilePath(self.currentCommand.get(5..).unwrap_or(""), &mut self.codeTabs);
-                            //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
-                            self.fileBrowser.fileCursor = 0;
-                            self.codeTabs.currentTab = 0;
+                            let foundFile = self.fileBrowser
+                                .LoadFilePath(self.currentCommand
+                                                  .get(5..)
+                                                  .unwrap_or(""), &mut self.codeTabs);
 
-                            self.appState = AppState::CommandPrompt;
+                            match foundFile {
+                                Ok(_) => {
+                                    //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
+                                    self.fileBrowser.fileCursor = 0;
+                                    self.codeTabs.currentTab = 0;
+
+                                    self.appState = AppState::CommandPrompt;
+                                },
+                                _ => {},
+                            }
                         }
 
                         self.currentCommand.clear();
                     } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
                         self.currentCommand.pop();
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Tab) &&
+                        self.currentCommand.starts_with("open ")
+                    {
+                        // handling suggested directory auto fills
+                        let currentToken = self.currentCommand
+                            .split("/")
+                            .last()
+                            .unwrap_or("");
+
+                        for path in &self.dirFiles {
+                            if path.starts_with(currentToken) {
+                                let pathEnding = path
+                                    .get(currentToken.len()..)
+                                    .unwrap_or("")
+                                    .to_string();
+                                self.currentCommand.push_str(&pathEnding);
+                                self.currentCommand.push('/');
+
+                                // recalculating the directories
+                                self.currentDir = FileBrowser::GetPathName(
+                                    self.currentCommand.get(5..)
+                                        .unwrap_or("")
+                                );
+
+                                self.dirFiles.clear();
+                                FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
+                                break;
+                            }
+                        }
                     }
                 }
-            }
+
+                if matches!(self.menuState, MenuState::Settings) {
+                    if keyEvents.ContainsKeyCode(KeyCode::Left) {
+                        match self.currentMenuSettingBox {
+                            0 => {
+                                self.colorMode.colorType = match self.colorMode.colorType {
+                                    ColorTypes::BasicColor => ColorTypes::BasicColor,
+                                    ColorTypes::PartialColor => ColorTypes::BasicColor,
+                                    ColorTypes::TrueColor => ColorTypes::PartialColor,
+                                }
+                            },
+                            1 => {
+                                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                                    self.preferredCommandKeybind = KeyModifiers::Command;
+                                }
+                            }
+                            _ => {},
+                        }
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+                        match self.currentMenuSettingBox {
+                            0 => {
+                                self.colorMode.colorType = match self.colorMode.colorType {
+                                    ColorTypes::BasicColor => ColorTypes::PartialColor,
+                                    ColorTypes::PartialColor => ColorTypes::TrueColor,
+                                    ColorTypes::TrueColor => ColorTypes::TrueColor,
+                                }
+                            },
+                            1 => {
+                                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                                    self.preferredCommandKeybind = KeyModifiers::Control;
+                                }
+                            }
+                            _ => {},
+                        }
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+                        self.currentMenuSettingBox = self.currentMenuSettingBox.saturating_sub(1);
+                    } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+                        self.currentMenuSettingBox += 1;
+                    }
+                }
+            },
+            _ => {},
         }
         
         // handling escape (switching tabs)
@@ -918,39 +1132,41 @@ impl App {
 
 
         // ============================================= code block here =============================================
-        let codeBlockTitle = Line::from(vec![
-            " ".to_string().white(),
-            self.codeTabs.tabs[
-                self.codeTabs.currentTab
-                ].name
-                .clone()
-                .bold(),
-            " ".to_string().white(),
-        ]);
-        let mut codeBlock = Block::bordered()
-            .title_top(codeBlockTitle.centered())
-            .border_set(border::THICK);
-        if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-            codeBlock = codeBlock.light_blue();
-        }
+        if self.codeTabs.tabs.len() > 0 {
+            let codeBlockTitle = Line::from(vec![
+                " ".to_string().white(),
+                self.codeTabs.tabs[
+                    self.codeTabs.currentTab
+                    ].name
+                    .clone()
+                    .bold(),
+                " ".to_string().white(),
+            ]);
+            let mut codeBlock = Block::bordered()
+                .title_top(codeBlockTitle.centered())
+                .border_set(border::THICK);
+            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
+                codeBlock = codeBlock.light_blue();
+            }
 
-        let codeText = Text::from(
-            self.codeTabs.GetScrolledText(
-                area,
-                matches!(self.appState, AppState::Tabs) &&
-                    matches!(self.tabState, TabState::Code),
-                &self.colorMode.colorBindings
-            )
-        );
+            let codeText = Text::from(
+                self.codeTabs.GetScrolledText(
+                    area,
+                    matches!(self.appState, AppState::Tabs) &&
+                        matches!(self.tabState, TabState::Code),
+                    &self.colorMode
+                )
+            );
 
-        Paragraph::new(codeText)
-            .block(codeBlock)
-            .render(Rect {
-                x: area.x + 29,
-                y: area.y + 2,
-                width: area.width - 29,
-                height: area.height - 10
+            Paragraph::new(codeText)
+                .block(codeBlock)
+                .render(Rect {
+                    x: area.x + 29,
+                    y: area.y + 2,
+                    width: area.width - 29,
+                    height: area.height - 10
             }, buf);
+        }
 
 
         // ============================================= files =============================================
@@ -1111,96 +1327,99 @@ impl App {
                 self.debugInfo.push(')');
             }
         }*/
-        self.suggested.clear();
-        let mut scope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-            self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
-            ].clone();
-        let mut tokenSet: Vec <String> = vec!();
-        self.codeTabs.tabs[self.codeTabs.currentTab].GetCurrentToken(&mut tokenSet);
-        if !tokenSet.is_empty() {  // token set is correct it seems
-            let token = tokenSet.remove(0);  // getting the item actively on the cursor
-            // self.debugInfo.push_str("{");
-            // self.debugInfo.push_str(&token);
-            // self.debugInfo.push_str("}");
-            let mut currentScope =
-                self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
-                    ].clone();
-            if !tokenSet.is_empty() {
-                let mut currentElement = OutlineKeyword::TryFindKeyword(
-                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
-                    tokenSet.pop().unwrap()
-                );
-                if let Some(set) = &currentElement {
-                    let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-                        set.lineNumber
-                        ].clone();
-                    //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
-                    currentScope = newScope;
-                }
 
-                while !tokenSet.is_empty() && currentElement.is_some() {
-                    //self.debugInfo.push(' ');
-                    let newToken = tokenSet.remove(0);
-                    if let Some(set) = currentElement {
+        if self.codeTabs.tabs.len() > 0 {
+            self.suggested.clear();
+            let mut scope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+                ].clone();
+            let mut tokenSet: Vec<String> = vec!();
+            self.codeTabs.tabs[self.codeTabs.currentTab].GetCurrentToken(&mut tokenSet);
+            if !tokenSet.is_empty() {  // token set is correct it seems
+                let token = tokenSet.remove(0);  // getting the item actively on the cursor
+                // self.debugInfo.push_str("{");
+                // self.debugInfo.push_str(&token);
+                // self.debugInfo.push_str("}");
+                let mut currentScope =
+                    self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+                        ].clone();
+                if !tokenSet.is_empty() {
+                    let mut currentElement = OutlineKeyword::TryFindKeyword(
+                        &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                        tokenSet.pop().unwrap()
+                    );
+                    if let Some(set) = &currentElement {
                         let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
                             set.lineNumber
                             ].clone();
                         //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
                         currentScope = newScope;
-                        currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
+                    }
+
+                    while !tokenSet.is_empty() && currentElement.is_some() {
+                        //self.debugInfo.push(' ');
+                        let newToken = tokenSet.remove(0);
+                        if let Some(set) = currentElement {
+                            let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                                set.lineNumber
+                                ].clone();
+                            //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
+                            currentScope = newScope;
+                            currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
+                        }
                     }
                 }
-            }
-            scope = currentScope.clone();
-            let validKeywords = OutlineKeyword::GetValidScoped(
-                &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
-                &scope
-            );
-            if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
-                        "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
-                        ".")
-            {
-                let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
-                for (i, var) in validKeywords.iter().enumerate() {
-                    //*
-                    if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
-                        self.debugInfo.push('(');
-                        self.debugInfo.push_str(var.keyword.as_str());
-                        //self.debugInfo.push('/');
-                        //self.debugInfo.push_str(&format!("{:?}", var.scope));
-                        self.debugInfo.push(')');
-                    }  // */
-                    let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
-                    if value < closest.0 {
-                        closest = (value, vec![var.keyword.clone()], i);
-                    } else if value == closest.0 {
-                        closest.1.push(var.keyword.clone());
+                scope = currentScope.clone();
+                let validKeywords = OutlineKeyword::GetValidScoped(
+                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                    &scope
+                );
+                if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
+                            "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
+                            ".")
+                {
+                    let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
+                    for (i, var) in validKeywords.iter().enumerate() {
+                        //*
+                        if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
+                            self.debugInfo.push('(');
+                            self.debugInfo.push_str(var.keyword.as_str());
+                            //self.debugInfo.push('/');
+                            //self.debugInfo.push_str(&format!("{:?}", var.scope));
+                            self.debugInfo.push(')');
+                        }  // */
+                        let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
+                        if value < closest.0 {
+                            closest = (value, vec![var.keyword.clone()], i);
+                        } else if value == closest.0 {
+                            closest.1.push(var.keyword.clone());
+                        }
                     }
-                }
-                // getting the closest option to the size of the current token if there are multiple equal options
-                let mut finalBest = (usize::MAX, "".to_string(), 0usize);
-                for element in closest.1 {
-                    let size = (element.len() as isize - token.len() as isize).abs() as usize;
-                    if size < finalBest.0 {
-                        finalBest = (size, element, closest.2);
+                    // getting the closest option to the size of the current token if there are multiple equal options
+                    let mut finalBest = (usize::MAX, "".to_string(), 0usize);
+                    for element in closest.1 {
+                        let size = (element.len() as isize - token.len() as isize).abs() as usize;
+                        if size < finalBest.0 {
+                            finalBest = (size, element, closest.2);
+                        }
                     }
-                }
-                if closest.0 < 15 {  // finalBest.1 != token.as_str()
-                    if token == finalBest.1 {
-                        /*self.debugInfo = format!("Type: {:?} Mutable: {} Publicity: {:?}",
-                            validKeywords[finalBest.2].typedType,
-                            validKeywords[finalBest.2].mutable,
-                            validKeywords[finalBest.2].public,
-                        );*/
-                    } else {
-                        self.suggested = format!("{}", finalBest.1);
+                    if closest.0 < 15 {  // finalBest.1 != token.as_str()
+                        if token == finalBest.1 {
+                            /*self.debugInfo = format!("Type: {:?} Mutable: {} Publicity: {:?}",
+                                validKeywords[finalBest.2].typedType,
+                                validKeywords[finalBest.2].mutable,
+                                validKeywords[finalBest.2].public,
+                            );*/
+                        } else {
+                            self.suggested = format!("{}", finalBest.1);
+                        }
+                        //self.suggested.push_str(closest.0.to_string().as_str());
+                        //self.debugInfo.push(' ');
+                        //self.debugInfo.push_str(closest.0.to_string().as_str());
+                        //self.debugInfo.push_str(" / ");
+                        //self.debugInfo.push_str(closest.2.as_str());
                     }
-                    //self.suggested.push_str(closest.0.to_string().as_str());
-                    //self.debugInfo.push(' ');
-                    //self.debugInfo.push_str(closest.0.to_string().as_str());
-                    //self.debugInfo.push_str(" / ");
-                    //self.debugInfo.push_str(closest.2.as_str());
                 }
             }
         }
@@ -1226,7 +1445,7 @@ impl App {
                 y: area.y + area.height - 9,
                 width: area.width,
                 height: 8
-            }, buf);
+        }, buf);
     }
 
     fn RenderMenu (&mut self, area: Rect, buf: &mut Buffer) {
@@ -1243,7 +1462,104 @@ impl App {
 
         match self.menuState {
             MenuState::Settings => {
-                // settings stuff ig
+                // ============================================= Color Settings =============================================
+                // the color mode setting
+                let settingsText = Text::from(
+                    vec![
+                        Line::from(vec![
+                            "Color Mode: [".white(),
+                            {
+                                if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
+                                    "Basic".yellow().bold().underlined()
+                                } else {
+                                    "Basic".white()
+                                }
+                            },
+                            "]".white(),
+                            " [".white(),
+                            {
+                                if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
+                                    "8-bit".yellow().bold().underlined()
+                                } else {
+                                    "8-bit".white()
+                                }
+                            },
+                            "]".white(),
+                            " [".white(),
+                            {
+                                if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
+                                    "24-bit".yellow().bold().underlined()
+                                } else {
+                                    "24-bit".white()
+                                }
+                            },
+                            "]".white(),
+                        ]),
+                        Line::from(vec![
+                            " * Not all terminals accept all color modes. If the colors are messed up, try lowering this".white().dim().italic()
+                        ]),
+                    ]
+                );
+
+                let mut colorSettingsBlock = Block::bordered()
+                    .border_set(border::THICK);
+                if self.currentMenuSettingBox == 0 {
+                    colorSettingsBlock = colorSettingsBlock.light_blue();
+                }
+
+                Paragraph::new(settingsText)
+                    .block(colorSettingsBlock)
+                    .render(Rect {
+                        x: 10,//area.x + area.width / 2 - 71 / 2,
+                        y: 2,//area.y + area.height / 2 - 10,
+                        width: area.width - 20,
+                        height: 4
+                }, buf);
+
+                // ============================================= Key Settings =============================================
+                // the color mode setting
+                let settingsText = Text::from(
+                    vec![
+                        Line::from(vec![
+                            "Preferred Modifier Key: [".white(),
+                            {
+                                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                                    "Command".yellow().bold().underlined()
+                                } else {
+                                    "Command".white()
+                                }
+                            },
+                            "]".white(),
+                            " [".white(),
+                            {
+                                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                                    "Control".yellow().bold().underlined()
+                                } else {
+                                    "Control".white()
+                                }
+                            },
+                            "]".white(),
+                        ]),
+                        Line::from(vec![
+                            " * The preferred modifier key for things like ctrl/cmd 'c'".white().dim().italic()
+                        ]),
+                    ]
+                );
+
+                let mut colorSettingsBlock = Block::bordered()
+                    .border_set(border::THICK);
+                if self.currentMenuSettingBox == 1 {
+                    colorSettingsBlock = colorSettingsBlock.light_blue();
+                }
+
+                Paragraph::new(settingsText)
+                    .block(colorSettingsBlock)
+                    .render(Rect {
+                        x: 10,//area.x + area.width / 2 - 71 / 2,
+                        y: 6,//area.y + area.height / 2 - 10,
+                        width: area.width - 20,
+                        height: 4
+                }, buf);
             },
             MenuState::Welcome => {
                 let welcomeText = Text::from(vec![
@@ -1287,8 +1603,11 @@ impl App {
                         "\"settings\"".white().bold().dim().underlined().italic(),
                         " to open settings ( <".white().bold().dim(),
                         "esc".white().bold().dim().italic().underlined(),
-                        "> to leave)".white().bold().dim(),
+                        "> to leave )".white().bold().dim(),
                     ]),
+                    //Line::from(vec![
+                    //    self.dirFiles.concat().white().bold().dim(),
+                    //]),
                 ]);
 
                 let welcomeBlock = Block::bordered();
@@ -1307,7 +1626,7 @@ impl App {
     }
 }
 
-impl Widget for &mut App {
+impl <'a> Widget for &mut App <'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         match self.appState {
             AppState::Tabs | AppState::CommandPrompt => {
@@ -1325,12 +1644,38 @@ impl Widget for &mut App {
                 "/".to_string().white().bold(),
                 self.currentCommand.clone().white().italic(),
                 {
+                    if  matches!(self.appState, AppState::Menu) &&
+                        self.currentCommand.starts_with("open ")
+                    {
+                        // handling suggested directory auto fills
+                        let currentToken = self.currentCommand
+                            .split("/")
+                            .last()
+                            .unwrap_or("");
+
+                        let mut validFinish = String::new();
+                        for path in &self.dirFiles {
+                            if path.starts_with(currentToken) {
+                                validFinish = path
+                                    .get(currentToken.len()..)
+                                    .unwrap_or("")
+                                    .to_string();
+                                break;
+                            }
+                        }
+
+                        validFinish.white().dim()
+                    } else {
+                        "".white().dim()
+                    }
+                },
+                {
                     if matches!(self.appState, AppState::CommandPrompt | AppState::Menu) {
                         "_".to_string().white().slow_blink().bold()
                     } else {
                         "".to_string().white()
                     }
-                }
+                },
             ])
         ]);
 
@@ -1440,10 +1785,6 @@ command f
     Currently, detection seems to be working at least for single line terms
     Make it jump the cursor to the terms
 
-settings menu for setting alternative keybindings? or how should that be done?
-general settings menu
-directory selection
-
 make command + x properly shift the text onto a new line when pasted (along w/ being at the correct indent level)
 
 make it so that the outline menu, when opened, is placed at the correct location rather than defaulting to the start until re-entering the code tab
@@ -1452,6 +1793,7 @@ maybe move all the checks for the command key modifier to a single check that th
 
 Prevent the program from crashing when touch non-u8 characters (either handle the error, or do something but don't crash)
     Ideally the user can still copy and past them along with placing them and deleting them
+    (kind of fixed. You can touch it but not interact)
 
 Fix the bug with the scope outline system where it clicks one cell too high when it hasn't been scrolled yet
 
@@ -1461,6 +1803,7 @@ Fix the bug with highlighting; when highlighting left and pressing right arrow, 
 Allow language highlighting to determine unique characters for comments and multi line comments
 
 make a better system that can store keybindings; the user can make a custom one, or there are two defaults: mac custom, standard
+    Kind of did this... kinda not
 
 (complete) make any edits cascade down the file (such as multi line comments) and update those lines until terminated
     (kinda incomplete..... me no want do) determine if the set is incomplete so it doesn't  update the whole file
@@ -1476,15 +1819,17 @@ make the larger context and recalculation of scopes & specific variables be calc
 only update the terminal screen if a key input is detected.
 cut down on cpu usage
 
+make suggested code completions render in-line similar to how the file-directories are done
+
 */
 
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
     let mut terminal = ratatui::init();
-    eventHandler::enableMouseCapture().await;
+    enableMouseCapture().await;
     let app_result = App::default().run(&mut terminal).await;
-    eventHandler::disableMouseCapture().await;
+    disableMouseCapture().await;
     ratatui::restore();
     app_result
 }

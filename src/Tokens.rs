@@ -1,13 +1,15 @@
-
+use lazy_static::lazy_static;
 
 // language file types for syntax highlighting
+#[derive(Clone)]
 pub enum Languages {
     Rust,
     Cpp,
     Python,
+    Null,
 }
 
-const LANGS: [(Languages, &str); 4] = [
+static LANGS: [(Languages, &str); 4] = [
     (Languages::Cpp , "cpp"),
     (Languages::Cpp , "hpp"),
     (Languages::Rust, "rs" ),
@@ -134,39 +136,40 @@ pub fn GenerateTokens (text: String, fileType: &str,
                        outline: &mut Vec<OutlineKeyword>,
 ) -> Vec <(TokenType, String)> {
     // move this to a json file so it can be customized by the user if they so chose to
-    let lineBreaks = [
-        " ".to_string(),
-        "@".to_string(),
-        "?".to_string(),
-        "=".to_string(),
-        "|".to_string(),
-        "#".to_string(),
-        ".".to_string(),
-        ",".to_string(),
-        "(".to_string(),
-        ")".to_string(),
-        "[".to_string(),
-        "]".to_string(),
-        "{".to_string(),
-        "}".to_string(),
-        ";".to_string(),
-        ":".to_string(),
-        "!".to_string(),
-        "/".to_string(),
-        "+".to_string(),
-        "-".to_string(),
-        "*".to_string(),
-        "&".to_string(),
-        "'".to_string(),
-        "\"".to_string(),
-        "<".to_string(),
-        ">".to_string(),
-    ];
+    lazy_static::lazy_static! {
+        static ref LINE_BREAKS: [String; 26] = [
+            " ".to_string(),
+            "@".to_string(),
+            "?".to_string(),
+            "=".to_string(),
+            "|".to_string(),
+            "#".to_string(),
+            ".".to_string(),
+            ",".to_string(),
+            "(".to_string(),
+            ")".to_string(),
+            "[".to_string(),
+            "]".to_string(),
+            "{".to_string(),
+            "}".to_string(),
+            ";".to_string(),
+            ":".to_string(),
+            "!".to_string(),
+            "/".to_string(),
+            "+".to_string(),
+            "-".to_string(),
+            "*".to_string(),
+            "&".to_string(),
+            "'".to_string(),
+            "\"".to_string(),
+            "<".to_string(),
+            ">".to_string(),
+    ];}
 
     let mut current = "".to_string();
     let mut tokenStrs: Vec <String> = vec!();
     for character in text.as_str().chars() {
-        if !current.is_empty() && lineBreaks.contains(&character.to_string()) {
+        if !current.is_empty() && LINE_BREAKS.contains(&character.to_string()) {
             tokenStrs.push(current.clone());
             current.clear();
             current.push(character);
@@ -175,7 +178,7 @@ pub fn GenerateTokens (text: String, fileType: &str,
         } else {
             current.push(character);
             let mut valid = false;
-            for breaker in &lineBreaks {
+            for breaker in LINE_BREAKS.iter() {
                 if current.contains(breaker) {
                     valid = true;
                     break;
@@ -230,10 +233,10 @@ pub fn GenerateTokens (text: String, fileType: &str,
             } else {  &"".to_string()  }
         };
         
-        let mut language = Languages::Rust;  // the default
-        for (lang, extension) in LANGS {
-            if extension == fileType {
-                language = lang;
+        let mut language = Languages::Null;  // the default
+        for (lang, extension) in LANGS.iter() {
+            if *extension == fileType {
+                language = lang.clone();
                 break;
             }
         }
@@ -321,7 +324,7 @@ pub fn GenerateTokens (text: String, fileType: &str,
                     _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
                     _ => TokenType::Null,
                 }
-                _ => match strToken.as_str() {  // rust
+                Languages::Rust => match strToken.as_str() {  // rust
                     _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
                     _s if matches!(flags[index], TokenFlags::String) => TokenType::String,  //  | TokenFlags::Char
                     "!" if matches!(lastToken, TokenType::Macro) => TokenType::Macro,
@@ -331,7 +334,7 @@ pub fn GenerateTokens (text: String, fileType: &str,
                         "const" | "static" | "dyn" | "type" | "continue" |
                         "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
                         "async" | "await" | "default" | "derive" |
-                        "as" | "?" => TokenType::Keyword,
+                        "as" | "?" | "ref" => TokenType::Keyword,
                     " " => TokenType::Null,
                     "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
                         "u32" | "usize" | "u16" | "u8" | "u128" | "u64" | 
@@ -379,6 +382,7 @@ pub fn GenerateTokens (text: String, fileType: &str,
                     _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
                     _ => TokenType::Null,
                 },
+                _ => {TokenType::Null}
             },
         strToken.clone()));
     }
