@@ -120,6 +120,245 @@ impl KeyParser {
         *self.keyEvents.get(&key).unwrap_or(&false)
     }
 
+    fn HandleMouseEscapeCodes (&mut self, numbers: &Vec <u16>, c: char) {
+        if let Some([byte, x, y]) = numbers.get(0..3) {
+            let button = byte & 0b11; // Mask lowest 2 bits (button type)
+            //println!("button: {}, numbers: {:?}", button, numbers);
+
+            // adding key press modifiers
+            if (byte & 32) != 0 {
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            if (byte & 64) != 0 {
+                self.keyModifiers.push(KeyModifiers::Option);
+            }
+            if (byte & 128) != 0 {
+                self.keyModifiers.push(KeyModifiers::Control);
+            }
+
+            //println!("Code: {:?} / {}", numbers, c);
+
+            let isScroll = (byte & 64) != 0;
+            let eventType = match (isScroll, button) {
+                (true, 0) => MouseEventType::Up,   // 1???? ig so
+                (true, 1) => MouseEventType::Down, // 2???? ig so
+                (false, 0) => MouseEventType::Left,
+                (false, 1) => MouseEventType::Middle,
+                (false, 2) => MouseEventType::Right,
+                _ => MouseEventType::Null
+            };
+
+            if matches!(eventType, MouseEventType::Left) && numbers[0] == 4 {
+                self.mouseModifiers.push(KeyModifiers::Shift);
+            }
+
+            self.CalculateMouseEventCode(eventType, (*x, *y), c);
+        }
+    }
+
+    fn CalculateMouseEventCode (
+        &mut self,
+        eventType: MouseEventType,
+        (x, y): (u16, u16),
+        c: char
+    ) {
+        if let Some(event) = &mut self.mouseEvent {
+            if matches!(eventType, MouseEventType::Left) &&
+                event.position != (x, y) &&
+                matches!(event.state, MouseState::Hold) &&
+                c == 'M'
+            {
+                event.position = (x, y);
+                return;
+            }
+        }
+
+        self.mouseEvent = Some(MouseEvent {
+            eventType,
+            position: (x, y),
+            state: {
+                match c {
+                    'M' => MouseState::Press,
+                    'm' => MouseState::Release,
+                    _ => MouseState::Null,
+                }
+            },
+        });
+    }
+
+    fn HandleCustomEscapeCodes (&mut self, numbers: &Vec <u16>) {
+        match numbers[1] {
+            2 => {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            3 => {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Option);
+            }
+            4 => {
+                self.keyEvents.insert(KeyCode::Left, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            }
+            5 => {
+                self.keyEvents.insert(KeyCode::Right, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            }
+            6 => {
+                self.keyEvents.insert(KeyCode::Up, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            }
+            7 => {
+                self.keyEvents.insert(KeyCode::Down, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            }
+            8 => {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Option);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            9 => {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+            }
+            10 => {
+                self.keyEvents.insert(KeyCode::Delete, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            11 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('s');  // command + s
+            }
+            12 => {  // lrud
+                self.keyEvents.insert(KeyCode::Left, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            13 => {
+                self.keyEvents.insert(KeyCode::Right, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            14 => {
+                self.keyEvents.insert(KeyCode::Up, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            15 => {
+                self.keyEvents.insert(KeyCode::Down, true);
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            }
+            16 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('c');
+            }
+            17 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('v');
+            }
+            18 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('x');
+            }
+            19 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('f');
+            }
+            20 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.charEvents.push('z');
+            }
+            21 => {
+                self.keyModifiers.push(KeyModifiers::Command);
+                self.keyModifiers.push(KeyModifiers::Shift);
+                self.charEvents.push('z');
+            }
+            22 => {
+                self.keyEvents.insert(KeyCode::Tab, true);
+                self.keyModifiers.push(KeyModifiers::Option);
+            }
+            _ => {}
+        }
+    }
+
+    fn HandleControlArrows (&mut self, numbers: &Vec <u16>, c: char) {
+        match c {
+            'D' => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.keyEvents.insert(KeyCode::Left, true);
+            },
+            'C' => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.keyEvents.insert(KeyCode::Right, true);
+            },
+            'A' => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.keyEvents.insert(KeyCode::Up, true);
+            },
+            'B' => {
+                self.keyModifiers.push(KeyModifiers::Control);
+                self.keyEvents.insert(KeyCode::Down, true);
+            },
+            _ => {}  // control + arrows
+        }
+    }
+
+    fn HandleStandardEscapeCodes (&mut self, numbers: &Vec <u16>, c: char) {
+        match c as u8 {
+            0x5A => {
+                self.keyEvents.insert(KeyCode::Tab, true);
+                self.keyModifiers.push(KeyModifiers::Shift);
+            },
+            0x44 => {
+                self.keyEvents.insert(KeyCode::Left, true);
+                if *numbers == [1, 3] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } else if *numbers == [1, 2] {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } else if *numbers == [1, 4] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+            },
+            0x43 => {
+                self.keyEvents.insert(KeyCode::Right, true);
+                if *numbers == [1, 3] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } else if *numbers == [1, 2] {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } else if *numbers == [1, 4] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+            },
+            0x41 => {
+                self.keyEvents.insert(KeyCode::Up, true);
+                if *numbers == [1, 3] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } else if *numbers == [1, 2] {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } else if *numbers == [1, 4] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+            },
+            0x42 => {
+                self.keyEvents.insert(KeyCode::Down, true);
+                if *numbers == [1, 3] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                } else if *numbers == [1, 2] {
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                } else if *numbers == [1, 4] {
+                    self.keyModifiers.push(KeyModifiers::Option);
+                    self.keyModifiers.push(KeyModifiers::Shift);
+                }
+            },
+            _ => {},
+        }
+    }
+
 }
 
 pub async fn enableMouseCapture() {
@@ -147,6 +386,30 @@ impl KeyParser {
 }
 
 impl Perform for KeyParser {
+    fn print(&mut self, chr: char) {
+        //println!("char {}: '{}'", chr as u8, chr);
+        if self.inEscapeSeq || self.bytes > 1 {
+            match chr as u8 {
+                17 => {
+                    self.charEvents.push('w');
+                    self.keyModifiers.push(KeyModifiers::Option);
+                },
+                _ => {}
+            }
+
+            return;
+        }
+        self.SetPressTime();
+
+        if chr as u8 == 0x7F {
+            self.keyEvents.insert(KeyCode::Delete, true);
+            return;
+        }
+        if !(chr.is_ascii_graphic() || chr.is_whitespace()) {  return;  }
+        //println!("char {}: '{}'", chr as u8, chr);
+        self.charEvents.push(chr);
+    }
+
     #[inline(always)]
     fn execute(&mut self, byte: u8) {
         self.SetPressTime();
@@ -212,195 +475,23 @@ impl Perform for KeyParser {
         }
         //println!("byte {}: '{}'", byte, byte as char);
     }
-
-    fn print(&mut self, chr: char) {
-        //println!("char {}: '{}'", chr as u8, chr);
-        if self.inEscapeSeq || self.bytes > 1 {
-            match chr as u8 {
-                17 => {
-                    self.charEvents.push('w');
-                    self.keyModifiers.push(KeyModifiers::Option);
-                },
-                _ => {}
-            }
-
-            return;
-        }
-        self.SetPressTime();
-
-        if chr as u8 == 0x7F {
-            self.keyEvents.insert(KeyCode::Delete, true);
-            return;
-        }
-        if !(chr.is_ascii_graphic() || chr.is_whitespace()) {  return;  }
-        //println!("char {}: '{}'", chr as u8, chr);
-        self.charEvents.push(chr);
-    }
-
+    
     #[inline(always)]
     fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, c: char) {
         self.inEscapeSeq = false;  // resetting the escape sequence
         self.SetPressTime();
 
-        let numbers: Vec<u16> = params.iter().map(|p| p[0]).collect();
+        let numbers: Vec <u16> = params.iter().map(|p| p[0]).collect();
 
         // mouse handling
         if c == 'M' || c == 'm' {
-            if let Some([byte, x, y]) = numbers.get(0..3) {
-                let button = byte & 0b11; // Mask lowest 2 bits (button type)
-                //println!("button: {}, numbers: {:?}", button, numbers);
-
-                // adding key press modifiers
-                if (byte & 32) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                if (byte & 64) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Option);
-                }
-                if (byte & 128) != 0 {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                }
-
-                //println!("Code: {:?} / {}", numbers, c);
-
-                let isScroll = (byte & 64) != 0;
-                let eventType = match (isScroll, button) {
-                    (true, 0) => MouseEventType::Up,   // 1???? ig so
-                    (true, 1) => MouseEventType::Down, // 2???? ig so
-                    (false, 0) => MouseEventType::Left,
-                    (false, 1) => MouseEventType::Middle,
-                    (false, 2) => MouseEventType::Right,
-                    _ => MouseEventType::Null
-                };
-
-                if matches!(eventType, MouseEventType::Left) && numbers[0] == 4 {
-                    self.mouseModifiers.push(KeyModifiers::Shift);
-                }
-
-                if let Some(event) = &mut self.mouseEvent {
-                    if matches!(eventType, MouseEventType::Left) &&
-                        event.position != (*x, *y) &&
-                        matches!(event.state, MouseState::Hold) &&
-                        c == 'M'
-                    {
-                        event.position = (*x, *y);
-                        return;
-                    }
-                }
-
-                self.mouseEvent = Some(MouseEvent {
-                    eventType,
-                    position: (*x, *y),
-                    state: {
-                        match c {
-                            'M' => MouseState::Press,
-                            'm' => MouseState::Release,
-                            _ => MouseState::Null,
-                        }
-                    },
-                });
-
-            }
-
+            self.HandleMouseEscapeCodes(&numbers, c);
             return;
         }
 
         //for number in &numbers {println!("{}", number);}
         if c == '~' && numbers.len() == 2 && numbers[0] == 3 {  // this section is for custom escape codes
-            match numbers[1] {
-                2 => {
-                    self.keyEvents.insert(KeyCode::Delete, true);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                3 => {
-                    self.keyEvents.insert(KeyCode::Delete, true);
-                    self.keyModifiers.push(KeyModifiers::Option);
-                }
-                4 => {
-                    self.keyEvents.insert(KeyCode::Left, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                }
-                5 => {
-                    self.keyEvents.insert(KeyCode::Right, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                }
-                6 => {
-                    self.keyEvents.insert(KeyCode::Up, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                }
-                7 => {
-                    self.keyEvents.insert(KeyCode::Down, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                }
-                8 => {
-                    self.keyEvents.insert(KeyCode::Delete, true);
-                    self.keyModifiers.push(KeyModifiers::Option);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                9 => {
-                    self.keyEvents.insert(KeyCode::Delete, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                }
-                10 => {
-                    self.keyEvents.insert(KeyCode::Delete, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                11 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.charEvents.push('s');  // command + s
-                }
-                12 => {  // lrud
-                    self.keyEvents.insert(KeyCode::Left, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                13 => {
-                    self.keyEvents.insert(KeyCode::Right, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                14 => {
-                    self.keyEvents.insert(KeyCode::Up, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                15 => {
-                    self.keyEvents.insert(KeyCode::Down, true);
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                }
-                16 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.charEvents.push('c');
-                }
-                17 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.charEvents.push('v');
-                }
-                18 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                        self.charEvents.push('x');
-                    }
-                19 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.charEvents.push('f');
-                }
-                20 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.charEvents.push('z');
-                }
-                21 => {
-                    self.keyModifiers.push(KeyModifiers::Command);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                    self.charEvents.push('z');
-                }
-                22 => {
-                    self.keyEvents.insert(KeyCode::Tab, true);
-                    self.keyModifiers.push(KeyModifiers::Option);
-                }
-                _ => {}
-            }
+            self.HandleCustomEscapeCodes(&numbers);
         } else if numbers.len() == 2 && numbers[0] == 1 && numbers[1] == 5 {
             // control + ...
             // 3 = c; 22 = v; 26 = z; 6 = f; 1 = a; 24 = x; 19 = s; 21 = u; r = 18
@@ -408,77 +499,9 @@ impl Perform for KeyParser {
             // control u and control r and necessary for undo and redo bc/
             // control + key and control + shift + key don't send unique
             // escape codes for some odd reason
-            match c {
-                'D' => {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                    self.keyEvents.insert(KeyCode::Left, true);
-                },
-                'C' => {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                    self.keyEvents.insert(KeyCode::Right, true);
-                },
-                'A' => {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                    self.keyEvents.insert(KeyCode::Up, true);
-                },
-                'B' => {
-                    self.keyModifiers.push(KeyModifiers::Control);
-                    self.keyEvents.insert(KeyCode::Down, true);
-                },
-                _ => {}  // control + arrows
-            }
+            self.HandleControlArrows(&numbers, c);
         } else {  // this checks existing escape codes of 1 parameter/ending code (they don't end with ~)
-            match c as u8 {
-                0x5A => {
-                    self.keyEvents.insert(KeyCode::Tab, true);
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                },
-                0x44 => {
-                    self.keyEvents.insert(KeyCode::Left, true);
-                if numbers == [1, 3] {
-                    self.keyModifiers.push(KeyModifiers::Option);
-                } else if numbers == [1, 2] {
-                    self.keyModifiers.push(KeyModifiers::Shift);
-                } else if numbers == [1, 4] {
-                            self.keyModifiers.push(KeyModifiers::Option);
-                            self.keyModifiers.push(KeyModifiers::Shift);
-                        }
-                    },
-                0x43 => {
-                    self.keyEvents.insert(KeyCode::Right, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                0x41 => {
-                    self.keyEvents.insert(KeyCode::Up, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                0x42 => {
-                    self.keyEvents.insert(KeyCode::Down, true);
-                    if numbers == [1, 3] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                    } else if numbers == [1, 2] {
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    } else if numbers == [1, 4] {
-                        self.keyModifiers.push(KeyModifiers::Option);
-                        self.keyModifiers.push(KeyModifiers::Shift);
-                    }
-                },
-                _ => {},
-            }
+            self.HandleStandardEscapeCodes(&numbers, c);
         }
     }
 }

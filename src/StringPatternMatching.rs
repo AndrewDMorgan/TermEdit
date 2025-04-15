@@ -1,7 +1,7 @@
 #[allow(dead_code)]
 
 pub mod string_pattern_matching {
-    // kinda bad but kinda sometimes works; at least it's really fast
+    // kinda bad but kinda actually works; at least it's really fast
     pub fn byte_comparison (wordMain: &String, wordComp: &String) -> usize {
         //if wordMain.is_empty() || wordComp.is_empty() {  return usize::MAX;  }
         let mut totalError = 0;
@@ -12,7 +12,7 @@ pub mod string_pattern_matching {
         {
             if index >= wordComp.len() {  break;  }
             totalError += (byte as isize - wordBytes[index] as isize)
-                .abs() as usize;
+                .unsigned_abs();
         }
 
         if wordComp.len() < wordMain.len() {
@@ -22,6 +22,9 @@ pub mod string_pattern_matching {
         totalError
     }
 
+    // too slow for practical use in this project :(
+    // it seems fairly accurate and nice; far better than
+    // the messy byte comparison
     fn levenshtein_recursive (word1: &String, word2: &String, i: usize, j: usize) -> usize {
         if i == 0 {  return j;  }
         if j == 0 {  return i;  }

@@ -6,8 +6,8 @@ use tokio::io::{self, AsyncReadExt};
 use vte::Parser;
 
 use crossterm::terminal::enable_raw_mode;
-use arboard::Clipboard;
-use dirs::home_dir;
+use arboard::Clipboard;  // for copy + paste + cut
+use dirs::home_dir;  // auto gets the starting file path
 
 mod CodeTabs;
 mod Tokens;
@@ -50,7 +50,20 @@ pub struct FileBrowser {
     outlineCursor: usize,
 }
 
+static VALID_EXTENSIONS: [&str; 7] = [
+    "txt",
+    "rs",
+    "py",
+    "cpp",
+    "hpp",
+    "c",
+    "h"
+];
+
+// manages the files for a given project
+// provides an outline and means for loading files
 impl FileBrowser {
+    // gets the complete path name
     pub fn GetPathName (dirSuffix: &str) -> String {
         home_dir()
             .unwrap_or(PathBuf::from("/"))
@@ -58,6 +71,8 @@ impl FileBrowser {
             .to_string_lossy()
             .into_owned()
     }
+
+    // finds all directories in a given directory
     pub fn CalculateDirectories (directory: &String, nextDirectories: &mut Vec <String>) {
         if let Ok(paths) = std::fs::read_dir(directory) {
             for path in paths.flatten() {
@@ -73,20 +88,12 @@ impl FileBrowser {
         }
     }
 
-    pub fn LoadFilePath (&mut self,
-                         indirectPathInput: &str,
-                         codeTabs: &mut CodeTabs::CodeTabs
+    // loads a project into memory
+    pub fn LoadFilePath (
+        &mut self,
+        indirectPathInput: &str,
+        codeTabs: &mut CodeTabs::CodeTabs
     ) -> io::Result <()> {
-        static VALID_EXTENSIONS: [&str; 7] = [
-            "txt",
-            "rs",
-            "py",
-            "cpp",
-            "hpp",
-            "c",
-            "h"
-        ];
-
         self.files.clear();
         codeTabs.tabs.clear();
         let pathInput = home_dir()
@@ -106,55 +113,6 @@ impl FileBrowser {
                     let mut fullPath = pathInput.clone();
                     fullPath.push_str(&name);
                     self.filePaths.push(fullPath);
-
-                    /*
-                    // loading the file's contents
-                    let mut lines: Vec <String> = vec!();
-                    
-                    let mut fullPath = pathInput.clone();
-                    fullPath.push_str(&name);
-
-                    let msg = fullPath.as_str().trim();  // temporary for debugging
-                    let contents = std::fs::read_to_string(&fullPath).expect(msg);
-                    let mut current = String::new();
-                    for chr in contents.chars() {
-                        if chr == '\n' {
-                            lines.push(current.clone());
-                            current.clear();
-                        } else {
-                            current.push(chr);
-                        }
-                    }
-                    lines.push(current);
-
-                    let mut tab = CodeTab {
-                        lines,
-                        ..Default::default()
-                    };
-
-                    tab.fileName = fullPath;
-
-                    tab.lineTokens.clear();
-                    let mut lineNumber = 0;
-                    let ending = tab.fileName.split('.').last().unwrap_or("");
-                    for line in tab.lines.iter() {
-                        tab.lineTokenFlags.push(vec!());
-                        tab.lineTokens.push(
-                            {
-                                GenerateTokens(line.clone(),
-                                               ending,
-                                               &mut tab.lineTokenFlags,
-                                               lineNumber,
-                                               &mut tab.outlineKeywords
-                                )
-                            }
-                        );
-                        lineNumber += 1;
-                    }
-                    (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-
-                    codeTabs.tabs.push(tab);
-                    codeTabs.tabFileNames.push(name.clone());*/
                 }
             } Ok(())
         } else {
@@ -641,6 +599,32 @@ impl <'a> App <'a> {
         }
     }
 
+    fn JumpLineUp (&mut self) {
+        // jumping up
+        if let Some(numberString) = self.currentCommand.get(1..) {
+            let number = numberString.parse:: <usize>();
+            if number.is_ok() {
+                let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
+                self.codeTabs.tabs[self.lastTab].JumpCursor(
+                    cursor.saturating_sub(number.unwrap()), 1
+                );
+            }
+        }
+    }
+
+    fn JumpLineDown (&mut self) {
+        // jumping down
+        if let Some(numberString) = self.currentCommand.get(1..) {
+            let number = numberString.parse:: <usize>();
+            if number.is_ok() {
+                let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
+                self.codeTabs.tabs[self.lastTab].JumpCursor(
+                    cursor.saturating_add(number.unwrap()), 1
+                );
+            }
+        }
+    }
+
     fn HandleCommands (&mut self, keyEvents: &KeyParser) {
         // quiting
         if keyEvents.ContainsKeyCode(KeyCode::Return) {
@@ -650,27 +634,9 @@ impl <'a> App <'a> {
 
             // jumping to, command
             if self.currentCommand.starts_with('[') {
-                // jumping up
-                if let Some(numberString) = self.currentCommand.get(1..) {
-                    let number = numberString.parse:: <usize>();
-                    if number.is_ok() {
-                        let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
-                        self.codeTabs.tabs[self.lastTab].JumpCursor(
-                            cursor.saturating_sub(number.unwrap()), 1
-                        );
-                    }
-                }
+                self.JumpLineUp();
             } else if self.currentCommand.starts_with(']') {
-                // jumping down
-                if let Some(numberString) = self.currentCommand.get(1..) {
-                    let number = numberString.parse:: <usize>();
-                    if number.is_ok() {
-                        let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
-                        self.codeTabs.tabs[self.lastTab].JumpCursor(
-                            cursor.saturating_add(number.unwrap()), 1
-                        );
-                    }
-                }
+                self.JumpLineDown();
             } else if self.currentCommand == String::from("gd") {
                 // todo!
             }
@@ -1753,7 +1719,7 @@ impl <'a> Widget for &mut App <'a> {
             }
         }
 
-        // is necessary for all
+        // rendering the command line is necessary for all states
         // ============================================= Commandline =============================================
         let commandText = Text::from(vec![
             Line::from(vec![
@@ -1940,6 +1906,11 @@ make suggested code completions render in-line similar to how the file-directori
 
 multi-line parameters on functions/methods aren't correctly read
 multi-line comments aren't updated properly when just pressing return
+
+todo!! make it so when too many tabs are open it doesn't just crash and die...
+
+Todo!!! Make it so that when typing, it only recalculates the current token selected rather than the whole line
+Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage
 
 */
 
