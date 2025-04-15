@@ -147,6 +147,7 @@ impl KeyParser {
 }
 
 impl Perform for KeyParser {
+    #[inline(always)]
     fn execute(&mut self, byte: u8) {
         self.SetPressTime();
 
@@ -213,7 +214,18 @@ impl Perform for KeyParser {
     }
 
     fn print(&mut self, chr: char) {
-        if self.inEscapeSeq || self.bytes > 1 {  return;  }
+        //println!("char {}: '{}'", chr as u8, chr);
+        if self.inEscapeSeq || self.bytes > 1 {
+            match chr as u8 {
+                17 => {
+                    self.charEvents.push('w');
+                    self.keyModifiers.push(KeyModifiers::Option);
+                },
+                _ => {}
+            }
+
+            return;
+        }
         self.SetPressTime();
 
         if chr as u8 == 0x7F {
@@ -225,6 +237,7 @@ impl Perform for KeyParser {
         self.charEvents.push(chr);
     }
 
+    #[inline(always)]
     fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, c: char) {
         self.inEscapeSeq = false;  // resetting the escape sequence
         self.SetPressTime();

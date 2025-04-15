@@ -1,4 +1,3 @@
-use lazy_static::lazy_static;
 
 // language file types for syntax highlighting
 #[derive(Clone)]

@@ -3,7 +3,7 @@
 pub mod string_pattern_matching {
     // kinda bad but kinda sometimes works; at least it's really fast
     pub fn byte_comparison (wordMain: &String, wordComp: &String) -> usize {
-        if wordMain.is_empty() || wordComp.is_empty() {  return usize::MAX;  }
+        //if wordMain.is_empty() || wordComp.is_empty() {  return usize::MAX;  }
         let mut totalError = 0;
         let wordBytes = wordComp.as_bytes();
         for (index, byte) in wordMain

@@ -226,6 +226,8 @@ pub struct App <'a> {
     dirFiles: Vec<String>,
 
     currentMenuSettingBox: usize,
+
+    lastTab: usize,
 }
 
 impl <'a> App <'a> {
@@ -250,7 +252,6 @@ impl <'a> App <'a> {
             }
 
             buffer.fill(0);
-            let mut line = String::new();
 
             tokio::select! {
                 result = stdin.read(&mut buffer) => {
@@ -296,249 +297,303 @@ impl <'a> App <'a> {
         frame.render_widget(self, frame.area());
     }
 
-    pub fn HandleMouseEvents (&mut self, events: &KeyParser) {
+    fn HandleUpScroll (&mut self, event: &MouseEvent) {
+        if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+            let mut tabIndex = 0;
+            self.codeTabs.GetTabNumber(
+                &self.area, 29,
+                event.position.0 as usize,
+                &mut tabIndex
+            );
+
+            let currentTime = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards...")
+                .as_millis();
+            //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
+            let acceleration = {
+                let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
+                if v1 > 1.0/4.0 {  v1  }
+                else {  1.0/4.0  }
+            };
+
+            self.codeTabs.tabs[tabIndex].mouseScrolledFlt = {
+                let v1 = self.codeTabs.tabs[tabIndex].mouseScrolledFlt - acceleration;
+                let v2 = (self.codeTabs.tabs[tabIndex].cursor.0 + self.codeTabs.tabs[tabIndex].mouseScrolledFlt as usize) as f64 * -1.0;
+                if v1 > v2 {  v1  }
+                else {  v2  }
+            };  // change based on the speed of scrolling to allow fast scrolling
+            self.codeTabs.tabs[tabIndex].mouseScrolled =
+                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;
+
+            self.lastScrolled = currentTime;
+        }
+    }
+
+    fn HandleDownScroll (&mut self, event: &MouseEvent) {
+        if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
+            let mut tabIndex = 0;
+            self.codeTabs.GetTabNumber(
+                &self.area, 29,
+                event.position.0 as usize,
+                &mut tabIndex
+            );
+
+            let currentTime = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards...")
+                .as_millis();
+            //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
+            let acceleration = {
+                let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
+                if v1 > 1.0/4.0 {  v1  }
+                else {  1.0/4.0  }
+            };
+
+            self.codeTabs.tabs[tabIndex].mouseScrolledFlt += acceleration;  // change based on the speed of scrolling to allow fast scrolling
+            self.codeTabs.tabs[tabIndex].mouseScrolled =
+                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;
+
+            self.lastScrolled = currentTime;
+        }
+    }
+
+    fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent) {
+        if  event.position.0 > 29 &&
+            event.position.1 < self.area.height - 8 &&
+            event.position.1 > 3 &&
+            self.codeTabs.tabs.len() > 0
+        {
+            self.lastTab = self.codeTabs.GetTabNumber(
+                &self.area, 29,
+                event.position.0 as usize,
+                &mut self.lastTab
+            );
+            let currentTime = std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards...")
+                .as_millis();
+            self.codeTabs.tabs[self.lastTab].pauseScroll = currentTime;
+            // updating the highlighting position
+            if events.ContainsMouseModifier(KeyModifiers::Shift)
+            {
+                if !self.codeTabs.tabs[self.lastTab].highlighting {
+                    self.codeTabs.tabs[self.lastTab].cursorEnd =
+                        self.codeTabs.tabs[self.lastTab].cursor;
+                    self.codeTabs.tabs[self.lastTab].highlighting = true;
+                }
+            } else {
+                self.codeTabs.tabs[self.lastTab].highlighting = false;
+            }
+
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                               event.position.1.saturating_sub(4) as usize,
+                           event.position.0.saturating_sub(lineSize as u16) as usize);
+            tab.cursor = (
+                std::cmp::min(
+                    linePos.0,
+                    tab.lines.len() - 1
+                ),
+                linePos.1.saturating_sub( {
+                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                        1
+                    } else {  0  }
+                } )
+            );
+            tab.cursor.1 = std::cmp::min(
+                tab.cursor.1,
+                tab.lines[tab.cursor.0].len()
+            );
+            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+            tab.mouseScrolled = 0;
+            tab.mouseScrolledFlt = 0.0;
+            self.appState = AppState::Tabs;
+            self.tabState = TabState::Code;
+        } else if
+        event.position.0 <= 29 &&
+            event.position.1 < self.area.height - 10 &&
+            matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
+            self.codeTabs.tabs.len() > 0
+        {
+            // getting the line clicked on and jumping to it if it's in range
+            // account for the line scrolling/shifting... (not as bad as I thought it would be)
+            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
+            let line = std::cmp::min(
+                event.position.1.saturating_sub(3) as usize + scrollTo,
+                self.codeTabs.tabs[self.lastTab].linearScopes.len() - 1
+            );
+            self.fileBrowser.outlineCursor = line;
+            let scopes = &mut self.codeTabs.tabs[self.lastTab].linearScopes[
+                line].clone();
+            scopes.reverse();
+            self.codeTabs.tabs[self.lastTab].cursor.0 =
+                self.codeTabs.tabs[self.lastTab].scopes.GetNode(
+                    scopes
+                ).start;
+            self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
+            self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
+        } else if
+        event.position.0 > 29 &&
+            event.position.1 <= 2 &&
+            self.codeTabs.tabs.len() > 0
+        {
+            // tallying the size till the correct tab is found
+            let mut sizeCounted = 29usize;
+            for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
+                sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
+                if sizeCounted >= event.position.0 as usize {
+                    if events.ContainsMouseModifier(KeyModifiers::Shift) {
+                        self.codeTabs.panes.push(index);
+                    } else {
+                        self.codeTabs.currentTab = index;
+                    }
+                    break;
+                }
+            }
+        } else if  // selecting files to open
+        event.position.0 > 1 &&
+            event.position.0 < 30 && //height - 8, width 30
+            event.position.1 < self.area.height - 8 &&
+            event.position.1 > 1
+        {
+            let height = event.position.1.saturating_sub(2) as usize;
+            if self.fileBrowser.files.len() > height {
+                // loading the file's contents
+                /*if !self.codeTabs.tabs.is_empty() {
+                    self.codeTabs.panes.push(self.codeTabs.tabs.len());
+                } else {
+                    self.codeTabs.currentTab = self.codeTabs.tabs.len();
+                }*/
+                self.codeTabs.currentTab = self.codeTabs.tabs.len();
+
+                let name = &self.fileBrowser.files[height];
+
+                let mut lines: Vec <String> = vec!();
+
+                let fullPath = &self.fileBrowser.filePaths[height];
+
+                let msg = fullPath.as_str().trim();  // temporary for debugging
+                let contents = std::fs::read_to_string(&fullPath).expect(msg);
+                let mut current = String::new();
+                for chr in contents.chars() {
+                    if chr == '\n' {
+                        lines.push(current.clone());
+                        current.clear();
+                    } else {
+                        current.push(chr);
+                    }
+                }
+                lines.push(current);
+
+                let mut tab = CodeTab {
+                    lines,
+                    ..Default::default()
+                };
+
+                tab.fileName = fullPath.clone();
+
+                tab.lineTokens.clear();
+                let mut lineNumber = 0;
+                let ending = tab.fileName.split('.').last().unwrap_or("");
+                for line in tab.lines.iter() {
+                    tab.lineTokenFlags.push(vec!());
+                    tab.lineTokens.push(
+                        {
+                            GenerateTokens(line.clone(),
+                                           ending,
+                                           &mut tab.lineTokenFlags,
+                                           lineNumber,
+                                           &mut tab.outlineKeywords
+                            )
+                        }
+                    );
+                    lineNumber += 1;
+                }
+                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+
+                self.codeTabs.tabs.push(tab);
+                self.codeTabs.tabFileNames.push(name.clone());
+            }
+        }
+    }
+
+    fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
+        // checking for code selection
+        if matches!(event.state, MouseState::Release | MouseState::Hold) {
+            if event.position.0 > 29 && event.position.1 < self.area.height - 8 &&
+                event.position.1 > 3 &&
+                self.codeTabs.tabs.len() > 0
+            {
+                // updating the highlighting position
+                self.lastTab = self.codeTabs.GetTabNumber(
+                    &self.area, 29,
+                    event.position.0 as usize,
+                    &mut self.lastTab
+                );
+                let cursorEnding = self.codeTabs.tabs[self.lastTab].cursor;
+
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+                let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                                   event.position.1.saturating_sub(4) as usize,
+                               event.position.0.saturating_sub(lineSize as u16) as usize);
+                tab.cursor = (
+                    std::cmp::min(
+                        linePos.0,
+                        tab.lines.len() - 1
+                    ),
+                    linePos.1.saturating_sub( {
+                        if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                            1
+                        } else {  0  }
+                    } )
+                );
+                tab.cursor.1 = std::cmp::min(
+                    tab.cursor.1,
+                    tab.lines[tab.cursor.0].len()
+                );
+                tab.mouseScrolled = 0;
+                tab.mouseScrolledFlt = 0.0;
+                self.appState = AppState::Tabs;
+                self.tabState = TabState::Code;
+
+                if cursorEnding != tab.cursor && !tab.highlighting
+                {
+                    if !tab.highlighting {
+                        tab.cursorEnd = cursorEnding;
+                        tab.highlighting = true;
+                    }
+                } else if !tab.highlighting {
+                    self.codeTabs.tabs[self.lastTab].highlighting = false;
+                }
+            }
+        } else if matches!(event.state, MouseState::Press) {
+            self.HandlePress(events, event);
+        }
+    }
+
+    fn HandleMenuMouseEvents (&mut self, _events: &KeyParser, _event: &MouseEvent) {
+        // todo!
+    }
+
+    fn HandleMouseEvents (&mut self, events: &KeyParser) {
         if let Some(event) = &events.mouseEvent {
             if matches!(self.appState, AppState::Menu) {
-                // do stuff...
+                self.HandleMenuMouseEvents(events, event);
                 return;
             }
 
             match event.eventType {
                 MouseEventType::Down if self.codeTabs.tabs.len() > 0 => {
-                    if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
-                        let currentTime = std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .expect("Time went backwards...")
-                            .as_millis();
-                        //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-                        let acceleration = {
-                            let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
-                            if v1 > 1.0/4.0 {  v1  }
-                            else {  1.0/4.0  }
-                        };
-                        
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt += acceleration;  // change based on the speed of scrolling to allow fast scrolling
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
-                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
-                        
-                        self.lastScrolled = currentTime;
-                    }
+                    self.HandleDownScroll(event);
                 },
                 MouseEventType::Up if self.codeTabs.tabs.len() > 0 => {
-                    if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
-                        let currentTime = std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .expect("Time went backwards...")
-                            .as_millis();
-                        //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-                        let acceleration = {
-                            let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
-                            if v1 > 1.0/4.0 {  v1  }
-                            else {  1.0/4.0  }
-                        };
-
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = {
-                            let v1 = self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt - acceleration;
-                            let v2 = (self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 + self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as usize) as f64 * -1.0;
-                            if v1 > v2 {  v1  }
-                            else {  v2  }
-                        };  // change based on the speed of scrolling to allow fast scrolling
-                        self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled =
-                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt as isize;
-                        
-                        self.lastScrolled = currentTime;
-                    }
+                    self.HandleUpScroll(event);
                 },
                 MouseEventType::Left => {
-                    // checking for code selection
-                    if matches!(event.state, MouseState::Release | MouseState::Hold) {
-                        if event.position.0 > 29 && event.position.1 < self.area.height - 8 &&
-                           event.position.1 > 3 &&
-                           self.codeTabs.tabs.len() > 0
-                        {
-                            // updating the highlighting position
-                            let cursorEnding = self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-
-                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
-                            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                                event.position.1.saturating_sub(4) as usize,
-                                event.position.0.saturating_sub(lineSize as u16) as usize);
-                            tab.cursor = (
-                                std::cmp::min(
-                                    linePos.0,
-                                    tab.lines.len() - 1
-                                ),
-                                linePos.1.saturating_sub( {
-                                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
-                                        1
-                                    } else {  0  }
-                                } )
-                            );
-                            tab.cursor.1 = std::cmp::min(
-                                tab.cursor.1,
-                                tab.lines[tab.cursor.0].len()
-                            );
-                            tab.mouseScrolled = 0;
-                            tab.mouseScrolledFlt = 0.0;
-                            self.appState = AppState::Tabs;
-                            self.tabState = TabState::Code;
-
-                            if cursorEnding != tab.cursor && !tab.highlighting
-                            {
-                                if !tab.highlighting {
-                                    tab.cursorEnd = cursorEnding;
-                                    tab.highlighting = true;
-                                }
-                            } else if !tab.highlighting {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
-                            }
-                        }
-                    } else if matches!(event.state, MouseState::Press) {
-                        if  event.position.0 > 29 &&
-                            event.position.1 < self.area.height - 8 &&
-                            event.position.1 > 3 &&
-                            self.codeTabs.tabs.len() > 0
-                        {
-                            let currentTime = std::time::SystemTime::now()
-                                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                                .expect("Time went backwards...")
-                                .as_millis();
-                            self.codeTabs.tabs[self.codeTabs.currentTab].pauseScroll = currentTime;
-                            // updating the highlighting position
-                            if events.ContainsMouseModifier(KeyModifiers::Shift)
-                            {
-                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
-                                }
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = false;
-                            }
-
-                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
-                            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                                event.position.1.saturating_sub(4) as usize,
-                                event.position.0.saturating_sub(lineSize as u16) as usize);
-                            tab.cursor = (
-                                std::cmp::min(
-                                    linePos.0,
-                                    tab.lines.len() - 1
-                                ),
-                                linePos.1.saturating_sub( {
-                                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
-                                        1
-                                    } else {  0  }
-                                } )
-                            );
-                            tab.cursor.1 = std::cmp::min(
-                                tab.cursor.1,
-                                tab.lines[tab.cursor.0].len()
-                            );
-                            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                            tab.mouseScrolled = 0;
-                            tab.mouseScrolledFlt = 0.0;
-                            self.appState = AppState::Tabs;
-                            self.tabState = TabState::Code;
-                        } else if
-                            event.position.0 <= 29 &&
-                            event.position.1 < self.area.height - 10 &&
-                            matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
-                            self.codeTabs.tabs.len() > 0
-                        {
-                            // getting the line clicked on and jumping to it if it's in range
-                            // account for the line scrolling/shifting... (not as bad as I thought it would be)
-                            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
-                            let line = std::cmp::min(
-                                event.position.1.saturating_sub(3) as usize + scrollTo,
-                                self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes.len() - 1
-                            );
-                            self.fileBrowser.outlineCursor = line;
-                            let scopes = &mut self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
-                                line].clone();
-                            scopes.reverse();
-                            self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0 = 
-                                self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
-                                    scopes
-                            ).start;
-                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
-                            self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                        } else if
-                            event.position.0 > 29 &&
-                            event.position.1 <= 2 &&
-                            self.codeTabs.tabs.len() > 0
-                        {
-                            // tallying the size till the correct tab is found
-                            let mut sizeCounted = 29usize;
-                            for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
-                                sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
-                                if sizeCounted >= event.position.0 as usize {
-                                    self.codeTabs.currentTab = index;
-                                    break;
-                                }
-                            }
-                        } else if  // selecting files to open
-                            event.position.0 > 1 &&
-                            event.position.0 < 30 && //height - 8, width 30
-                            event.position.1 < self.area.height - 8 &&
-                            event.position.1 > 1
-                        {
-                            let height = event.position.1.saturating_sub(2) as usize;
-                            if self.fileBrowser.files.len() > height {
-                                // loading the file's contents
-                                self.codeTabs.currentTab = self.codeTabs.tabs.len();
-                                let name = &self.fileBrowser.files[height];
-
-                                let mut lines: Vec <String> = vec!();
-
-                                let fullPath = &self.fileBrowser.filePaths[height];
-
-                                let msg = fullPath.as_str().trim();  // temporary for debugging
-                                let contents = std::fs::read_to_string(&fullPath).expect(msg);
-                                let mut current = String::new();
-                                for chr in contents.chars() {
-                                    if chr == '\n' {
-                                        lines.push(current.clone());
-                                        current.clear();
-                                    } else {
-                                        current.push(chr);
-                                    }
-                                }
-                                lines.push(current);
-
-                                let mut tab = CodeTab {
-                                    lines,
-                                    ..Default::default()
-                                };
-
-                                tab.fileName = fullPath.clone();
-
-                                tab.lineTokens.clear();
-                                let mut lineNumber = 0;
-                                let ending = tab.fileName.split('.').last().unwrap_or("");
-                                for line in tab.lines.iter() {
-                                    tab.lineTokenFlags.push(vec!());
-                                    tab.lineTokens.push(
-                                        {
-                                            GenerateTokens(line.clone(),
-                                                           ending,
-                                                           &mut tab.lineTokenFlags,
-                                                           lineNumber,
-                                                           &mut tab.outlineKeywords
-                                            )
-                                        }
-                                    );
-                                    lineNumber += 1;
-                                }
-                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-
-                                self.codeTabs.tabs.push(tab);
-                                self.codeTabs.tabFileNames.push(name.clone());
-                            }
-                        }
-                    }
+                    self.HandleLeftClick(events, event);
                 },
                 MouseEventType::Middle => {},
                 MouseEventType::Right => {},
@@ -547,533 +602,581 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    fn HandleCommandPromptKeyEvents (&mut self, keyEvents: &KeyParser) {
+        for chr in &keyEvents.charEvents {
+            self.currentCommand.push(*chr);
+        }
 
+        if keyEvents.ContainsKeyCode(KeyCode::Tab) {
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift) &&
+                matches!(self.tabState, TabState::Files) {
+
+                self.fileBrowser.fileTab = match self.fileBrowser.fileTab {
+                    FileTabs::Files => FileTabs::Outline,
+                    FileTabs::Outline => FileTabs::Files,
+                }
+            } else {
+                self.tabState = match self.tabState {
+                    TabState::Code => TabState::Files,
+                    TabState::Files => TabState::Tabs,
+                    TabState::Tabs => TabState::Code,
+                }
+            }
+        }
+
+        match self.tabState {
+            TabState::Code => {
+                self.HandleCodeTabviewKeyEvents(keyEvents);
+            },
+            TabState::Files => {
+                self.HandleFilebrowserKeyEvents(keyEvents);
+            },
+            TabState::Tabs => {
+                self.HandleTabsKeyEvents(keyEvents);
+            },
+        }
+
+        if !self.currentCommand.is_empty() {
+            self.HandleCommands(keyEvents);
+        }
+    }
+
+    fn HandleCommands (&mut self, keyEvents: &KeyParser) {
+        // quiting
+        if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            if self.currentCommand == "q" {
+                self.Exit();
+            }
+
+            // jumping to, command
+            if self.currentCommand.starts_with('[') {
+                // jumping up
+                if let Some(numberString) = self.currentCommand.get(1..) {
+                    let number = numberString.parse:: <usize>();
+                    if number.is_ok() {
+                        let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
+                        self.codeTabs.tabs[self.lastTab].JumpCursor(
+                            cursor.saturating_sub(number.unwrap()), 1
+                        );
+                    }
+                }
+            } else if self.currentCommand.starts_with(']') {
+                // jumping down
+                if let Some(numberString) = self.currentCommand.get(1..) {
+                    let number = numberString.parse:: <usize>();
+                    if number.is_ok() {
+                        let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
+                        self.codeTabs.tabs[self.lastTab].JumpCursor(
+                            cursor.saturating_add(number.unwrap()), 1
+                        );
+                    }
+                }
+            } else if self.currentCommand == String::from("gd") {
+                // todo!
+            }
+
+            self.currentCommand.clear();
+        } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+            self.currentCommand.pop();
+        }
+    }
+
+    fn HandleCodeTabviewKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            self.appState = AppState::Tabs;
+        }
+    }
+
+    fn HandleFilebrowserKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
+            if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
+                let mut nodePath = self.codeTabs.tabs[self.lastTab].linearScopes[
+                    self.fileBrowser.outlineCursor].clone();
+                nodePath.reverse();
+                let node = self.codeTabs.tabs[self.lastTab].scopes.GetNode(
+                    &mut nodePath
+                );
+                let start = node.start;
+                self.codeTabs.tabs[self.lastTab].JumpCursor(start, 1);
+            } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+                self.fileBrowser.MoveCursorUp();
+            } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+                self.fileBrowser.MoveCursorDown(
+                    &self.codeTabs.tabs[self.lastTab].linearScopes,
+                    &self.codeTabs.tabs[self.lastTab].scopes);
+            }
+        }
+    }
+
+    fn HandleTabsKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if keyEvents.ContainsKeyCode(KeyCode::Left) {
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                self.codeTabs.MoveTabLeft()
+            } else {
+                self.codeTabs.TabLeft();
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                self.codeTabs.MoveTabRight()
+            } else {
+                self.codeTabs.TabRight();
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            self.appState = AppState::Tabs;
+            self.tabState = TabState::Code;
+        } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+            self.codeTabs.tabs.remove(self.lastTab);
+            self.codeTabs.tabFileNames.remove(self.codeTabs.currentTab);
+            self.codeTabs.currentTab = self.codeTabs.currentTab.saturating_sub(1);
+        }
+    }
+
+    fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        // making sure command + s or other commands are being pressed
+        if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            for chr in &keyEvents.charEvents {
+                if *chr == '(' {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars("()".to_string());
+                    self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
+                } else if *chr == '{' {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars("{}".to_string());
+                    self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
+                } else if *chr == '[' {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars("[]".to_string());
+                    self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
+                } else if *chr == '\"' {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars("\"\"".to_string());
+                    self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
+                } else {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars(chr.to_string());
+                }
+            }
+        }
+
+        if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+            let mut numDel = 1;
+            let mut offset = 0;
+
+            if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
+                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+                    numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosRight();
+                    offset = numDel;
+                } else {
+                    numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosLeft();
+                }
+            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+                    numDel = self.codeTabs.tabs[self.lastTab].lines[
+                        self.codeTabs.tabs[self.lastTab].cursor.0
+                        ].len() - self.codeTabs.tabs[self.lastTab].cursor.1;
+                    offset = numDel;
+                } else {
+                    numDel = self.codeTabs.tabs[self.lastTab].cursor.1;
+                }
+            } else if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+                offset = numDel;
+            }
+
+            self.codeTabs.tabs[
+                self.lastTab
+                ].DelChars(numDel, offset);
+        } else if keyEvents.ContainsChar('w') &&
+            keyEvents.ContainsModifier(&KeyModifiers::Option)
+        {
+            if self.codeTabs.panes.contains(&self.lastTab) {
+                self.codeTabs.panes.remove(
+                    self.codeTabs.panes
+                        .iter()
+                        .position(|e| e == &self.lastTab)
+                        .unwrap()
+                );
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
+            let highlight;
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
+            {
+                highlight = true;
+                if !self.codeTabs.tabs[self.lastTab].highlighting {
+                    self.codeTabs.tabs[self.lastTab].cursorEnd =
+                        self.codeTabs.tabs[self.lastTab].cursor;
+                    self.codeTabs.tabs[self.lastTab].highlighting = true;
+                }
+            } else {
+                highlight = false;
+            }
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                self.codeTabs.tabs[self.lastTab].MoveCursorLeftToken();
+            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
+                self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
+                // checking if it's the true first value or not
+                let mut indentIndex = 0usize;
+                let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
+                for chr in self.codeTabs.tabs[self.lastTab].lines[cursorLine].chars() {
+                    if chr != ' ' {
+                        break;
+                    } indentIndex += 1;
+                }
+
+                if self.codeTabs.tabs[self.lastTab].cursor.1 <= indentIndex {
+                    self.codeTabs.tabs[self.lastTab].cursor.1 = 0;
+                } else {
+                    self.codeTabs.tabs[self.lastTab].cursor.1 = indentIndex;
+                }
+            } else {
+                self.codeTabs.tabs[self.lastTab].MoveCursorLeft(1, highlight);
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+            let highlight;
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
+            {
+                highlight = true;
+                if !self.codeTabs.tabs[self.lastTab].highlighting {
+                    self.codeTabs.tabs[self.lastTab].cursorEnd =
+                        self.codeTabs.tabs[self.lastTab].cursor;
+                    self.codeTabs.tabs[self.lastTab].highlighting = true;
+                }
+            } else {
+                highlight = false;
+            }
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                self.codeTabs.tabs[self.lastTab].MoveCursorRightToken();
+            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                tab.mouseScrolledFlt = 0.0;
+                tab.mouseScrolled = 0;
+
+                let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
+                self.codeTabs.tabs[self.lastTab].cursor.1 =
+                    self.codeTabs.tabs[self.lastTab].lines[cursorLine].len();
+            } else {
+                self.codeTabs.tabs[self.lastTab].MoveCursorRight(1, highlight);
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+            let highlight;
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
+            {
+                highlight = true;
+                if !self.codeTabs.tabs[self.lastTab].highlighting {
+                    self.codeTabs.tabs[self.lastTab].cursorEnd =
+                        self.codeTabs.tabs[self.lastTab].cursor;
+                    self.codeTabs.tabs[self.lastTab].highlighting = true;
+                }
+            } else {
+                highlight = false;
+            }
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+                jumps.reverse();
+                tab.JumpCursor(
+                    tab.scopes.GetNode(&mut jumps).start, 1
+                );
+            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                tab.mouseScrolledFlt = 0.0;
+                tab.mouseScrolled = 0;
+                tab.cursor.0 = 0;
+            } else {
+                self.codeTabs.tabs[self.lastTab].CursorUp(highlight);
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+            let highlight;
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
+            {
+                highlight = true;
+                if !self.codeTabs.tabs[self.lastTab].highlighting {
+                    self.codeTabs.tabs[self.lastTab].cursorEnd =
+                        self.codeTabs.tabs[self.lastTab].cursor;
+                    self.codeTabs.tabs[self.lastTab].highlighting = true;
+                }
+            } else {
+                highlight = false;
+            }
+            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+                jumps.reverse();
+                tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
+            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+                tab.mouseScrolledFlt = 0.0;
+                tab.mouseScrolled = 0;
+                tab.cursor.0 =
+                    tab.lines.len() - 1;
+            } else {
+                self.codeTabs.tabs[self.lastTab].CursorDown(highlight);
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+                self.codeTabs.tabs[self.lastTab].UnIndent();
+            } else {
+                if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars("    ".to_string());
+                } else {
+                    self.codeTabs.tabs[self.lastTab]
+                        .RemoveCurrentToken_NonUpdate();
+                    self.codeTabs.tabs[self.lastTab]
+                        .InsertChars(self.suggested.clone());
+                }
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            self.codeTabs.tabs[self.lastTab].LineBreakIn(false);  // can't be highlighting if breaking?
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.ContainsChar('s') {
+
+            // saving the program
+            self.codeTabs.tabs[self.lastTab].Save();
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.charEvents.contains(&'c')
+        {
+            // get the highlighted section of text.... or the line if none
+            let text = self.codeTabs.tabs[self.lastTab].GetSelection();
+            let _ = clipBoard.set_text(text);
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.charEvents.contains(&'x')
+        {
+            // get the highlighted section of text.... or the line if none
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            let text = tab.GetSelection();
+            let _ = clipBoard.set_text(text);
+
+            // clearing the rest of the selection
+            if tab.highlighting {
+                tab.DelChars(0, 0);
+            } else {
+                tab.lines[tab.cursor.0].clear();
+                tab.RecalcTokens(tab.cursor.0, 0);
+                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            }
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.charEvents.contains(&'v')
+        {
+            // pasting in the text
+            if let Ok(text) = clipBoard.get_text() {
+                let tab = &mut self.codeTabs.tabs[self.lastTab];
+                let splitText = text.split('\n');
+                let splitLength = splitText.clone().count() - 1;
+                for (i, line) in splitText.enumerate() {
+                    if line.is_empty() {  continue;  }
+                    tab.InsertChars(
+                        line.to_string()
+                    );
+                    if i > 0 {
+                        // making sure all actions occur on the same iteration
+                        if let Some(mut elements) = tab.changeBuffer.pop() {
+                            while let Some(element) = elements.pop() {
+                                let size = tab.changeBuffer.len() - 1;
+                                tab.changeBuffer[size].insert(0, element);
+                            }
+                        }
+                    }
+                    if i < splitLength {
+                        // why does highlight need to be set to true?????? This makes noooo sense??? I give up
+                        tab.LineBreakIn(true);
+                        // making sure all actions occur on the same iteration
+                        if let Some(mut elements) = tab.changeBuffer.pop() {
+                            while let Some(element) = elements.pop() {
+                                let size = tab.changeBuffer.len() - 1;
+                                tab.changeBuffer[size].insert(0, element);
+                            }
+                        }
+                    }
+                }
+            }
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.charEvents.contains(&'f')
+        {
+            // finding the nearest occurrence to the cursor
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            if tab.highlighting {
+                // getting the new search term (yk, it's kinda easy when done the right way the first time......not happening again though)
+                let selection = tab.GetSelection();
+                tab.searchTerm = selection;
+            }
+
+            // searching for the term
+            let mut lastDst = (usize::MAX, 0usize);
+            for (index, line) in tab.lines.iter().enumerate() {
+                let dst = (index as isize - tab.cursor.0 as isize).saturating_abs() as usize;
+                if !line.contains(&tab.searchTerm) {  continue;  }
+                if dst > lastDst.0 {  break;  }
+                lastDst = (dst, index);
+            }
+
+            if lastDst.0 < usize::MAX {
+                tab.searchIndex = lastDst.1;
+                //self.debugInfo = lastDst.1.to_string();
+            }
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            (keyEvents.charEvents.contains(&'z') ||  // command z = undo/redo
+                keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
+                keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
+        {
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
+                keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
+                self.codeTabs.tabs[self.lastTab].Redo();
+            } else {
+                self.codeTabs.tabs[self.lastTab].Undo();
+            }
+        }
+    }
+
+    fn HandleMenuKeyEvents (&mut self, keyEvents: &KeyParser) {
+        for chr in &keyEvents.charEvents {
+            self.currentCommand.push(*chr);
+
+            if self.currentCommand.starts_with("open ") && *chr == '/' {
+                // recalculating the directories
+                self.currentDir = FileBrowser::GetPathName(
+                    self.currentCommand.get(5..)
+                        .unwrap_or("")
+                );
+
+                self.dirFiles.clear();
+                FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
+            }
+        }
+
+        if !self.currentCommand.is_empty() {
+            self.HandleMenuCommandKeyEvents(keyEvents);
+        }
+
+        if matches!(self.menuState, MenuState::Settings) {
+            self.HandleSettingsKeyEvents(keyEvents);
+        }
+    }
+
+    fn HandleMenuCommandKeyEvents (&mut self, keyEvents: &KeyParser) {
+        // quiting
+        if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            if self.currentCommand == "q" {
+                self.Exit();
+            }
+
+            if self.currentCommand == "settings" {
+                self.menuState = MenuState::Settings;
+            }
+
+            if self.currentCommand.starts_with("open ") {
+                let foundFile = self.fileBrowser
+                    .LoadFilePath(self.currentCommand
+                                      .get(5..)
+                                      .unwrap_or(""), &mut self.codeTabs);
+
+                match foundFile {
+                    Ok(_) => {
+                        //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
+                        self.fileBrowser.fileCursor = 0;
+                        self.codeTabs.currentTab = 0;
+
+                        self.appState = AppState::CommandPrompt;
+                    },
+                    _ => {},
+                }
+            }
+
+            self.currentCommand.clear();
+        } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+            self.currentCommand.pop();
+        } else if keyEvents.ContainsKeyCode(KeyCode::Tab) &&
+            self.currentCommand.starts_with("open ")
+        {
+            // handling suggested directory auto fills
+            let currentToken = self.currentCommand
+                .split("/")
+                .last()
+                .unwrap_or("");
+
+            for path in &self.dirFiles {
+                if path.starts_with(currentToken) {
+                    let pathEnding = path
+                        .get(currentToken.len()..)
+                        .unwrap_or("")
+                        .to_string();
+                    self.currentCommand.push_str(&pathEnding);
+                    self.currentCommand.push('/');
+
+                    // recalculating the directories
+                    self.currentDir = FileBrowser::GetPathName(
+                        self.currentCommand.get(5..)
+                            .unwrap_or("")
+                    );
+
+                    self.dirFiles.clear();
+                    FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
+                    break;
+                }
+            }
+        }
+    }
+
+    fn HandleSettingsKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if keyEvents.ContainsKeyCode(KeyCode::Left) {
+            match self.currentMenuSettingBox {
+                0 => {
+                    self.colorMode.colorType = match self.colorMode.colorType {
+                        ColorTypes::BasicColor => ColorTypes::BasicColor,
+                        ColorTypes::PartialColor => ColorTypes::BasicColor,
+                        ColorTypes::TrueColor => ColorTypes::PartialColor,
+                    }
+                },
+                1 => {
+                    if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                        self.preferredCommandKeybind = KeyModifiers::Command;
+                    }
+                }
+                _ => {},
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+            match self.currentMenuSettingBox {
+                0 => {
+                    self.colorMode.colorType = match self.colorMode.colorType {
+                        ColorTypes::BasicColor => ColorTypes::PartialColor,
+                        ColorTypes::PartialColor => ColorTypes::TrueColor,
+                        ColorTypes::TrueColor => ColorTypes::TrueColor,
+                    }
+                },
+                1 => {
+                    if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                        self.preferredCommandKeybind = KeyModifiers::Control;
+                    }
+                }
+                _ => {},
+            }
+        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+            self.currentMenuSettingBox = self.currentMenuSettingBox.saturating_sub(1);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+            self.currentMenuSettingBox += 1;
+        }
+    }
+
+    fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         match self.appState {
             AppState::CommandPrompt => {
-                for chr in &keyEvents.charEvents {
-                    self.currentCommand.push(*chr);
-                }
-
-                if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-                    if keyEvents.ContainsModifier(&KeyModifiers::Shift) &&
-                        matches!(self.tabState, TabState::Files) {
-                        
-                        self.fileBrowser.fileTab = match self.fileBrowser.fileTab {
-                            FileTabs::Files => FileTabs::Outline,
-                            FileTabs::Outline => FileTabs::Files,
-                        }
-                    } else {
-                        self.tabState = match self.tabState {
-                            TabState::Code => TabState::Files,
-                            TabState::Files => TabState::Tabs,
-                            TabState::Tabs => TabState::Code,
-                        }
-                    }
-                }
-
-                match self.tabState {
-                    TabState::Code => {
-                        if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                            self.appState = AppState::Tabs;
-                        }
-                    },
-                    TabState::Files => {
-                        if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
-                            if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
-                                let mut nodePath = self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
-                                    self.fileBrowser.outlineCursor].clone();
-                                nodePath.reverse();
-                                let node = self.codeTabs.tabs[self.codeTabs.currentTab].scopes.GetNode(
-                                        &mut nodePath
-                                );
-                                let start = node.start;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(start, 1);
-                            } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
-                                self.fileBrowser.MoveCursorUp();
-                            } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
-                                self.fileBrowser.MoveCursorDown(
-                                    &self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes,
-                                    &self.codeTabs.tabs[self.codeTabs.currentTab].scopes);
-                            }
-                        }
-                    },
-                    TabState::Tabs => {
-                        if keyEvents.ContainsKeyCode(KeyCode::Left) {
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                self.codeTabs.MoveTabLeft()
-                            } else {
-                                self.codeTabs.TabLeft();
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                self.codeTabs.MoveTabRight()
-                            } else {
-                                self.codeTabs.TabRight();
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                            self.appState = AppState::Tabs;
-                            self.tabState = TabState::Code;
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-                            self.codeTabs.tabs.remove(self.codeTabs.currentTab);
-                            self.codeTabs.tabFileNames.remove(self.codeTabs.currentTab);
-                            self.codeTabs.currentTab = self.codeTabs.currentTab.saturating_sub(1);
-                        }
-                    },
-                }
-
-                if !self.currentCommand.is_empty() {
-                    // quiting
-                    if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                        if self.currentCommand == "q" {
-                            self.Exit();
-                        }
-
-                        // jumping to, command
-                        if self.currentCommand.starts_with('[') {
-                            // jumping up
-                            if let Some(numberString) = self.currentCommand.get(1..) {
-                                let number = numberString.parse:: <usize>();
-                                if number.is_ok() {
-                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                        cursor.saturating_sub(number.unwrap()), 1
-                                    );
-                                }
-                            }
-                        } else if self.currentCommand.starts_with(']') {
-                            // jumping down
-                            if let Some(numberString) = self.currentCommand.get(1..) {
-                                let number = numberString.parse:: <usize>();
-                                if number.is_ok() {
-                                    let cursor = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].JumpCursor(
-                                        cursor.saturating_add(number.unwrap()), 1
-                                    );
-                                }
-                            }
-                        }
-
-                        self.currentCommand.clear();
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-                        self.currentCommand.pop();
-                    }
-                }
+                self.HandleCommandPromptKeyEvents(keyEvents);
             },
             AppState::Tabs => {
                 match self.tabState {
                     TabState::Code if self.codeTabs.tabs.len() > 0 => {
-                        // making sure command + s or other commands are being pressed
-                        if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                            for chr in &keyEvents.charEvents {
-                                if *chr == '(' {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars("()".to_string());
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
-                                } else if *chr == '{' {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars("{}".to_string());
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
-                                } else if *chr == '[' {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars("[]".to_string());
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
-                                } else if *chr == '\"' {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars("\"\"".to_string());
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 -= 1;
-                                } else {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars(chr.to_string());
-                                }
-                            }
-                        }
-
-                        if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-                            let mut numDel = 1;
-                            let mut offset = 0;
-
-                            if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
-                                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosRight();
-                                    offset = numDel;
-                                } else {
-                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].FindTokenPosLeft();
-                                }
-                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].lines[
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
-                                    ].len() - self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
-                                    offset = numDel;
-                                } else {
-                                    numDel = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1;
-                                }
-                            } else if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                                offset = numDel;
-                            }
-
-                            self.codeTabs.tabs[
-                                self.codeTabs.currentTab
-                            ].DelChars(numDel, offset);
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
-                            let highlight;
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-                            {
-                                highlight = true;
-                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
-                                }
-                            } else {
-                                highlight = false;
-                            }
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeftToken();
-                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolledFlt = 0.0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].mouseScrolled = 0;
-                                // checking if it's the true first value or not
-                                let mut indentIndex = 0usize;
-                                let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                for chr in self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].chars() {                                    
-                                    if chr != ' ' {
-                                        break;
-                                    } indentIndex += 1;
-                                }
-
-                                if self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 <= indentIndex {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 = 0;
-                                } else {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 = indentIndex;
-                                }
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorLeft(1, highlight);
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-                            let highlight;
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-                            {
-                                highlight = true;
-                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
-                                }
-                            } else {
-                                highlight = false;
-                            }
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRightToken();
-                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                                tab.mouseScrolledFlt = 0.0;
-                                tab.mouseScrolled = 0;
-
-                                let cursorLine = self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0;
-                                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.1 =
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].lines[cursorLine].len();
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].MoveCursorRight(1, highlight);
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
-                            let highlight;
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-                            {
-                                highlight = true;
-                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
-                                }
-                            } else {
-                                highlight = false;
-                            }
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                                jumps.reverse();
-                                tab.JumpCursor( 
-                                    tab.scopes.GetNode(&mut jumps).start, 1
-                                );
-                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                                tab.mouseScrolledFlt = 0.0;
-                                tab.mouseScrolled = 0;
-                                tab.cursor.0 = 0;
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorUp(highlight);
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
-                            let highlight;
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-                            {
-                                highlight = true;
-                                if !self.codeTabs.tabs[self.codeTabs.currentTab].highlighting {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].cursorEnd =
-                                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor;
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].highlighting = true;
-                                }
-                            } else {
-                                highlight = false;
-                            }
-                            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                                jumps.reverse();
-                                tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
-                            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                                tab.mouseScrolledFlt = 0.0;
-                                tab.mouseScrolled = 0;
-                                tab.cursor.0 = 
-                                    tab.lines.len() - 1;
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].CursorDown(highlight);
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].UnIndent();
-                            } else {
-                                if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars("    ".to_string());
-                                } else {
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .RemoveCurrentToken_NonUpdate();
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .InsertChars(self.suggested.clone());
-                                }
-                            }
-                        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                            self.codeTabs.tabs[self.codeTabs.currentTab].LineBreakIn(false);  // can't be highlighting if breaking?
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            keyEvents.ContainsChar('s') {
-                            
-                            // saving the program
-                            self.codeTabs.tabs[self.codeTabs.currentTab].Save();
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            keyEvents.charEvents.contains(&'c')
-                        {
-                            // get the highlighted section of text.... or the line if none
-                            let text = self.codeTabs.tabs[self.codeTabs.currentTab].GetSelection();
-                            let _ = clipBoard.set_text(text);
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            keyEvents.charEvents.contains(&'x')
-                        {
-                            // get the highlighted section of text.... or the line if none
-                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                            let text = tab.GetSelection();
-                            let _ = clipBoard.set_text(text);
-
-                            // clearing the rest of the selection
-                            if tab.highlighting {
-                                tab.DelChars(0, 0);
-                            } else {
-                                tab.lines[tab.cursor.0].clear();
-                                tab.RecalcTokens(tab.cursor.0, 0);
-                                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-                            }
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            keyEvents.charEvents.contains(&'v')
-                        {
-                            // pasting in the text
-                            if let Ok(text) = clipBoard.get_text() {
-                                let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                                let splitText = text.split('\n');
-                                let splitLength = splitText.clone().count() - 1;
-                                for (i, line) in splitText.enumerate() {
-                                    if line.is_empty() {  continue;  }
-                                    tab.InsertChars(
-                                        line.to_string()
-                                    );
-                                    if i > 0 {
-                                        // making sure all actions occur on the same iteration
-                                        if let Some(mut elements) = tab.changeBuffer.pop() {
-                                            while let Some(element) = elements.pop() {
-                                                let size = tab.changeBuffer.len() - 1;
-                                                tab.changeBuffer[size].insert(0, element);
-                                            }
-                                        }
-                                    }
-                                    if i < splitLength {
-                                        // why does highlight need to be set to true?????? This makes noooo sense??? I give up
-                                        tab.LineBreakIn(true);
-                                        // making sure all actions occur on the same iteration
-                                        if let Some(mut elements) = tab.changeBuffer.pop() {
-                                            while let Some(element) = elements.pop() {
-                                                let size = tab.changeBuffer.len() - 1;
-                                                tab.changeBuffer[size].insert(0, element);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            keyEvents.charEvents.contains(&'f')
-                        {
-                            // finding the nearest occurrence to the cursor
-                            let tab = &mut self.codeTabs.tabs[self.codeTabs.currentTab];
-                            if tab.highlighting {
-                                // getting the new search term (yk, it's kinda easy when done the right way the first time......not happening again though)
-                                let selection = tab.GetSelection();
-                                tab.searchTerm = selection;
-                            }
-
-                            // searching for the term
-                            let mut lastDst = (usize::MAX, 0usize);
-                            for (index, line) in tab.lines.iter().enumerate() {
-                                let dst = (index as isize - tab.cursor.0 as isize).saturating_abs() as usize;
-                                if !line.contains(&tab.searchTerm) {  continue;  }
-                                if dst > lastDst.0 {  break;  }
-                                lastDst = (dst, index);
-                            }
-
-                            if lastDst.0 < usize::MAX {
-                                tab.searchIndex = lastDst.1;
-                                //self.debugInfo = lastDst.1.to_string();
-                            }
-                        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-                            (keyEvents.charEvents.contains(&'z') ||  // command z = undo/redo
-                            keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
-                            keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
-                        {
-                            if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
-                                keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
-                                self.codeTabs.tabs[self.codeTabs.currentTab].Redo();
-                            } else {
-                                self.codeTabs.tabs[self.codeTabs.currentTab].Undo();
-                            }
-                        }
+                        self.HandleCodeKeyEvents(keyEvents, clipBoard);
                     },
                     _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
                 }
             },
             AppState::Menu => {
-                for chr in &keyEvents.charEvents {
-                    self.currentCommand.push(*chr);
-
-                    if self.currentCommand.starts_with("open ") && *chr == '/' {
-                        // recalculating the directories
-                        self.currentDir = FileBrowser::GetPathName(
-                            self.currentCommand.get(5..)
-                                .unwrap_or("")
-                        );
-
-                        self.dirFiles.clear();
-                        FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
-                    }
-                }
-
-                if !self.currentCommand.is_empty() {
-                    // quiting
-                    if keyEvents.ContainsKeyCode(KeyCode::Return) {
-                        if self.currentCommand == "q" {
-                            self.Exit();
-                        }
-
-                        if self.currentCommand == "settings" {
-                            self.menuState = MenuState::Settings;
-                        }
-
-                        if self.currentCommand.starts_with("open ") {
-                            let foundFile = self.fileBrowser
-                                .LoadFilePath(self.currentCommand
-                                                  .get(5..)
-                                                  .unwrap_or(""), &mut self.codeTabs);
-
-                            match foundFile {
-                                Ok(_) => {
-                                    //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
-                                    self.fileBrowser.fileCursor = 0;
-                                    self.codeTabs.currentTab = 0;
-
-                                    self.appState = AppState::CommandPrompt;
-                                },
-                                _ => {},
-                            }
-                        }
-
-                        self.currentCommand.clear();
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-                        self.currentCommand.pop();
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Tab) &&
-                        self.currentCommand.starts_with("open ")
-                    {
-                        // handling suggested directory auto fills
-                        let currentToken = self.currentCommand
-                            .split("/")
-                            .last()
-                            .unwrap_or("");
-
-                        for path in &self.dirFiles {
-                            if path.starts_with(currentToken) {
-                                let pathEnding = path
-                                    .get(currentToken.len()..)
-                                    .unwrap_or("")
-                                    .to_string();
-                                self.currentCommand.push_str(&pathEnding);
-                                self.currentCommand.push('/');
-
-                                // recalculating the directories
-                                self.currentDir = FileBrowser::GetPathName(
-                                    self.currentCommand.get(5..)
-                                        .unwrap_or("")
-                                );
-
-                                self.dirFiles.clear();
-                                FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                if matches!(self.menuState, MenuState::Settings) {
-                    if keyEvents.ContainsKeyCode(KeyCode::Left) {
-                        match self.currentMenuSettingBox {
-                            0 => {
-                                self.colorMode.colorType = match self.colorMode.colorType {
-                                    ColorTypes::BasicColor => ColorTypes::BasicColor,
-                                    ColorTypes::PartialColor => ColorTypes::BasicColor,
-                                    ColorTypes::TrueColor => ColorTypes::PartialColor,
-                                }
-                            },
-                            1 => {
-                                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
-                                    self.preferredCommandKeybind = KeyModifiers::Command;
-                                }
-                            }
-                            _ => {},
-                        }
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-                        match self.currentMenuSettingBox {
-                            0 => {
-                                self.colorMode.colorType = match self.colorMode.colorType {
-                                    ColorTypes::BasicColor => ColorTypes::PartialColor,
-                                    ColorTypes::PartialColor => ColorTypes::TrueColor,
-                                    ColorTypes::TrueColor => ColorTypes::TrueColor,
-                                }
-                            },
-                            1 => {
-                                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
-                                    self.preferredCommandKeybind = KeyModifiers::Control;
-                                }
-                            }
-                            _ => {},
-                        }
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
-                        self.currentMenuSettingBox = self.currentMenuSettingBox.saturating_sub(1);
-                    } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
-                        self.currentMenuSettingBox += 1;
-                    }
-                }
+                self.HandleMenuKeyEvents(keyEvents);
             },
-            _ => {},
+            //_ => {},
         }
         
         // handling escape (switching tabs)
@@ -1133,39 +1236,52 @@ impl <'a> App <'a> {
 
         // ============================================= code block here =============================================
         if self.codeTabs.tabs.len() > 0 {
-            let codeBlockTitle = Line::from(vec![
-                " ".to_string().white(),
-                self.codeTabs.tabs[
-                    self.codeTabs.currentTab
-                    ].name
-                    .clone()
-                    .bold(),
-                " ".to_string().white(),
-            ]);
-            let mut codeBlock = Block::bordered()
-                .title_top(codeBlockTitle.centered())
-                .border_set(border::THICK);
-            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-                codeBlock = codeBlock.light_blue();
+            let tabSize = self.codeTabs.GetTabSize(&area, 29);
+
+            for tabIndex in 0..=self.codeTabs.panes.len() {
+                let codeBlockTitle = Line::from(vec![
+                    " ".to_string().white(),
+                    self.codeTabs.tabs[
+                        {
+                            if tabIndex == 0 {  self.codeTabs.currentTab  }
+                            else {  self.codeTabs.panes[tabIndex - 1]  }
+                        }
+                        ].name
+                        .clone()
+                        .bold(),
+                    " ".to_string().white(),
+                ]);
+                let mut codeBlock = Block::bordered()
+                    .title_top(codeBlockTitle.centered())
+                    .border_set(border::THICK);
+                if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
+                    codeBlock = codeBlock.light_blue();
+                }
+
+                let codeText = Text::from(
+                    self.codeTabs.GetScrolledText(
+                        area,
+                        matches!(self.appState, AppState::Tabs) &&
+                            matches!(self.tabState, TabState::Code),
+                        &self.colorMode,
+                        &self.suggested,
+                        {
+                            if tabIndex == 0 {  self.codeTabs.currentTab  }
+                            else {  self.codeTabs.panes[tabIndex - 1]  }
+                        }
+                    )
+                );
+
+                Paragraph::new(codeText)
+                    .block(codeBlock)
+                    .render(Rect {
+                        x: area.x + 29 + (tabIndex*tabSize) as u16,
+                        y: area.y + 2,
+                        width: tabSize as u16,
+                        //width: area.width - 29,
+                        height: area.height - 10
+                }, buf);
             }
-
-            let codeText = Text::from(
-                self.codeTabs.GetScrolledText(
-                    area,
-                    matches!(self.appState, AppState::Tabs) &&
-                        matches!(self.tabState, TabState::Code),
-                    &self.colorMode
-                )
-            );
-
-            Paragraph::new(codeText)
-                .block(codeBlock)
-                .render(Rect {
-                    x: area.x + 29,
-                    y: area.y + 2,
-                    width: area.width - 29,
-                    height: area.height - 10
-            }, buf);
         }
 
 
@@ -1185,7 +1301,7 @@ impl <'a> App <'a> {
             let mut newScroll = self.fileBrowser.outlineCursor;
             let mut scrolled = 0;
             let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
-            for scopeIndex in &self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps {
+            for scopeIndex in &self.codeTabs.tabs[self.lastTab].scopeJumps {
                 if {
                     let mut valid = true;
                     for i in 0..scopes.len() {
@@ -1199,7 +1315,7 @@ impl <'a> App <'a> {
                 } {
                     scopes.clear();
 
-                    let mut scope = &self.codeTabs.tabs[self.codeTabs.currentTab].scopes;
+                    let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
                     for index in scopeIndex {
                         scopes.push(*index);
                         scope = &scope.children[*index];
@@ -1207,8 +1323,8 @@ impl <'a> App <'a> {
                     if scopeIndex.is_empty() {  continue;  }
                     scrolled += 1;
                     if *scopeIndex ==
-                        self.codeTabs.tabs[self.codeTabs.currentTab]
-                            .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
+                        self.codeTabs.tabs[self.lastTab]
+                            .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
                         matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
 
                         newScroll = scrolled - 1;
@@ -1219,15 +1335,15 @@ impl <'a> App <'a> {
                             {
                                 let mut offset = String::new();
                                 if *scopeIndex ==
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
+                                    self.codeTabs.tabs[self.lastTab]
+                                        .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
                                     matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
 
                                     offset.push('>')
                                 } else if
                                 matches!(self.appState, AppState::CommandPrompt) &&
                                     matches!(self.tabState, TabState::Files) &&
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
+                                    self.codeTabs.tabs[self.lastTab].linearScopes[
                                         self.fileBrowser.outlineCursor
                                         ] == *scopeIndex {
                                     offset.push('>');
@@ -1240,8 +1356,8 @@ impl <'a> App <'a> {
                             },
                             {
                                 if *scopeIndex ==
-                                    self.codeTabs.tabs[self.codeTabs.currentTab]
-                                        .scopeJumps[self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0] &&
+                                    self.codeTabs.tabs[self.lastTab]
+                                        .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
                                     matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
 
                                     match scopeIndex.len() {
@@ -1255,7 +1371,7 @@ impl <'a> App <'a> {
                                 } else if
                                 matches!(self.appState, AppState::CommandPrompt) &&
                                     matches!(self.tabState, TabState::Files) &&
-                                    self.codeTabs.tabs[self.codeTabs.currentTab].linearScopes[
+                                    self.codeTabs.tabs[self.lastTab].linearScopes[
                                         self.fileBrowser.outlineCursor
                                         ] == *scopeIndex {
 
@@ -1318,7 +1434,7 @@ impl <'a> App <'a> {
         // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
         self.debugInfo.clear();
         /*
-        for var in &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords {
+        for var in &self.codeTabs.tabs[self.lastTab].outlineKeywords {
             if matches!(var.kwType, OutlineType::Function) {
                 self.debugInfo.push('(');
                 self.debugInfo.push_str(var.keyword.as_str());
@@ -1328,29 +1444,29 @@ impl <'a> App <'a> {
             }
         }*/
 
-        if self.codeTabs.tabs.len() > 0 {
+        if !self.codeTabs.tabs.is_empty() {
             self.suggested.clear();
-            let mut scope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-                self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
-                ].clone();
+            //let mut scope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+            //    self.codeTabs.tabs[self.lastTab].cursor.0
+            //    ].clone();
             let mut tokenSet: Vec<String> = vec!();
-            self.codeTabs.tabs[self.codeTabs.currentTab].GetCurrentToken(&mut tokenSet);
+            self.codeTabs.tabs[self.lastTab].GetCurrentToken(&mut tokenSet);
             if !tokenSet.is_empty() {  // token set is correct it seems
                 let token = tokenSet.remove(0);  // getting the item actively on the cursor
                 // self.debugInfo.push_str("{");
                 // self.debugInfo.push_str(&token);
                 // self.debugInfo.push_str("}");
                 let mut currentScope =
-                    self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
-                        self.codeTabs.tabs[self.codeTabs.currentTab].cursor.0
+                    self.codeTabs.tabs[self.lastTab].scopeJumps[
+                        self.codeTabs.tabs[self.lastTab].cursor.0
                         ].clone();
                 if !tokenSet.is_empty() {
                     let mut currentElement = OutlineKeyword::TryFindKeyword(
-                        &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
+                        &self.codeTabs.tabs[self.lastTab].outlineKeywords,
                         tokenSet.pop().unwrap()
                     );
                     if let Some(set) = &currentElement {
-                        let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                        let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
                             set.lineNumber
                             ].clone();
                         //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
@@ -1361,7 +1477,7 @@ impl <'a> App <'a> {
                         //self.debugInfo.push(' ');
                         let newToken = tokenSet.remove(0);
                         if let Some(set) = currentElement {
-                            let newScope = self.codeTabs.tabs[self.codeTabs.currentTab].scopeJumps[
+                            let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
                                 set.lineNumber
                                 ].clone();
                             //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
@@ -1370,10 +1486,10 @@ impl <'a> App <'a> {
                         }
                     }
                 }
-                scope = currentScope.clone();
+                //scope = currentScope.clone();
                 let validKeywords = OutlineKeyword::GetValidScoped(
-                    &self.codeTabs.tabs[self.codeTabs.currentTab].outlineKeywords,
-                    &scope
+                    &self.codeTabs.tabs[self.lastTab].outlineKeywords,
+                    &currentScope
                 );
                 if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
                             "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
@@ -1399,7 +1515,7 @@ impl <'a> App <'a> {
                     // getting the closest option to the size of the current token if there are multiple equal options
                     let mut finalBest = (usize::MAX, "".to_string(), 0usize);
                     for element in closest.1 {
-                        let size = (element.len() as isize - token.len() as isize).abs() as usize;
+                        let size = (element.len() as isize - token.len() as isize).unsigned_abs();
                         if size < finalBest.0 {
                             finalBest = (size, element, closest.2);
                         }
@@ -1412,7 +1528,7 @@ impl <'a> App <'a> {
                                 validKeywords[finalBest.2].public,
                             );*/
                         } else {
-                            self.suggested = format!("{}", finalBest.1);
+                            self.suggested = finalBest.1;
                         }
                         //self.suggested.push_str(closest.0.to_string().as_str());
                         //self.debugInfo.push(' ');
@@ -1694,6 +1810,7 @@ Commands: √ <esc>
     √ <enter> -> exit commands
     √ <q> + <enter> -> exit application
     √ <tab> -> switch tabs:
+    gd -> go to definition (experimental)
 
         * code editor:
             <cmd> + <1 - 9> -> switch to corresponding code tab
@@ -1820,6 +1937,9 @@ only update the terminal screen if a key input is detected.
 cut down on cpu usage
 
 make suggested code completions render in-line similar to how the file-directories are done
+
+multi-line parameters on functions/methods aren't correctly read
+multi-line comments aren't updated properly when just pressing return
 
 */
 

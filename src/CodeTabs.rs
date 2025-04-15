@@ -50,7 +50,7 @@ pub mod Edits {
 
     fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String) {
         let splitText = text.split('\n');
-        let splitLength = splitText.clone().count() - 1;
+        //let splitLength = splitText.clone().count() - 1;
         for (i, line) in splitText.enumerate() {
             if line.is_empty() {
                 tab.lines.insert(end.0 + i, "".to_string());
@@ -228,7 +228,7 @@ impl CodeTab {
 
     pub fn GetCurrentToken (&self, tokenOutput: &mut Vec <String>) {
         let mut accumulate = 0;
-        for (tokenIndex, (token, text)) in self.lineTokens[self.cursor.0].iter().enumerate() {
+        for (tokenIndex, (_token, text)) in self.lineTokens[self.cursor.0].iter().enumerate() {
             // the cursor can be just right of it, in it, but not just left
             if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
                 tokenOutput.push(text.clone());
@@ -254,7 +254,7 @@ impl CodeTab {
     // doesn't update the tokens or scopes; requires that to be done elsewhere
     pub fn RemoveCurrentToken_NonUpdate (&mut self) {
         let mut accumulate = 0;
-        for (tokenIndex, (token, text)) in self.lineTokens[self.cursor.0].iter().enumerate() {
+        for (_token, text) in self.lineTokens[self.cursor.0].iter() {
             // the cursor can be just right of it, in it, but not just left
             if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
                 self.lines[self.cursor.0].replace_range(accumulate..accumulate+text.len(), "");
@@ -1211,7 +1211,11 @@ impl CodeTab {
         }
     }
 
-    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorMode: &Colors::ColorMode) -> Vec <Line> {
+    pub fn GetScrolledText <'a> (&mut self, area: Rect,
+                                 editingCode: bool,
+                                 colorMode: &Colors::ColorMode,
+                                 suggested: &'a String,  // the suggested auto-complete (for inline rendering)
+) -> Vec <Line> {
         // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
         let currentTime = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -1477,6 +1481,23 @@ impl CodeTab {
             }
             if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
                 coloredLeft.push((1, "|".to_string().white().bold()));
+                // adding the suggested add-on
+                if !suggested.is_empty() {
+                    let mut tokens = vec!();
+                    self.GetCurrentToken(&mut tokens);
+                    if !tokens.is_empty() {
+                        let selectedToken = tokens.remove(0);
+                        let partialToken = suggested
+                            .get(selectedToken.len()..)
+                            .unwrap_or("")
+                            .to_string();
+
+                        coloredLeft.push((
+                            suggested.len().saturating_sub(selectedToken.len()),
+                            partialToken.white().dim().italic()
+                        ));
+                    }
+                }
             }
 
             let mut charCount = 0usize;
@@ -1580,11 +1601,44 @@ pub struct CodeTabs {
     pub tabFileNames: Vec <String>,
     pub tabs: Vec <CodeTab>,
     pub currentTab: usize,
+    pub panes: Vec <usize>,  // todo! add this
 }
 
 impl CodeTabs {
-    pub fn GetScrolledText (&mut self, area: Rect, editingCode: bool, colorMode: &Colors::ColorMode) -> Vec <ratatui::text::Line> {
-        self.tabs[self.currentTab].GetScrolledText(area, editingCode, colorMode)
+    pub fn GetTab (&mut self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> &mut CodeTab {
+        let tab = self.GetTabNumber(area, paddingLeft, positionX, lastTab);
+        &mut self.tabs[tab]
+    }
+
+    pub fn GetTabNumber (&self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> usize {
+        let total = self.panes.len() + 1;
+        let tabSize = (area.width as usize - paddingLeft) / total;
+        let tabNumber = std::cmp::min(
+            (positionX - paddingLeft) / tabSize,
+            self.panes.len()  // no need to sub one bc/ the main tab isn't in the vector
+        );
+        if tabNumber == 0 {
+            self.currentTab.clone_into(lastTab);
+            self.currentTab
+        } else {
+            tabNumber.clone_into(lastTab);
+            self.panes[tabNumber - 1]
+        }
+    }
+
+    pub fn GetTabSize (&self, area: &Rect, paddingLeft: usize) -> usize {
+        let total = self.panes.len() + 1;
+        (area.width as usize - paddingLeft) / total
+    }
+
+    pub fn GetScrolledText <'a> (&mut self,
+                                 area: Rect,
+                                 editingCode: bool,
+                                 colorMode: &Colors::ColorMode,
+                                 suggested: &'a String,
+                                 tabIndex: usize,
+    ) -> Vec <ratatui::text::Line> {
+        self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested)
     }
 }
 
@@ -1727,7 +1781,8 @@ impl Default for CodeTabs {
                 }
 
             ],  // put a tab here or something idk
-            currentTab: 0
+            currentTab: 0,
+            panes: vec![],
         }
     }
 }
