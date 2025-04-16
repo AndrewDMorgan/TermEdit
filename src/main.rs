@@ -339,11 +339,17 @@ impl <'a> App <'a> {
             self.codeTabs.tabs[self.lastTab].highlighting = false;
         }
 
+        // adjusting the position for panes
+        let position = (
+            self.codeTabs.GetRelativeTabPosition(event.position.0, self.area, 33),
+            event.position.1
+        );
+
         let tab = &mut self.codeTabs.tabs[self.lastTab];
-        let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+        let lineSize = tab.lines.len().to_string().len();  // account for the length of the total lines
         let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                           event.position.1.saturating_sub(4) as usize,
-                       event.position.0.saturating_sub(lineSize as u16) as usize);
+                           position.1.saturating_sub(4) as usize,
+                       position.0.saturating_sub(lineSize as u16) as usize);
         tab.cursor = (
             std::cmp::min(
                 linePos.0,
@@ -403,7 +409,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn PressedLoadFile (&mut self, events: &KeyParser, event: &MouseEvent) {
+    fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
         let height = event.position.1.saturating_sub(2) as usize;
         if self.fileBrowser.files.len() > height {
             // loading the file's contents
@@ -494,20 +500,26 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HighlightLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
+    fn HighlightLeftClick (&mut self, _events: &KeyParser, event: &MouseEvent) {
         // updating the highlighting position
         self.lastTab = self.codeTabs.GetTabNumber(
             &self.area, 29,
             event.position.0 as usize,
             &mut self.lastTab
         );
+        // adjusting the position
+        let position = (
+            self.codeTabs.GetRelativeTabPosition(event.position.0, self.area, 33),
+            event.position.1
+        );
+
         let cursorEnding = self.codeTabs.tabs[self.lastTab].cursor;
 
         let tab = &mut self.codeTabs.tabs[self.lastTab];
-        let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+        let lineSize = tab.lines.len().to_string().len();  // account for the length of the total lines
         let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                           event.position.1.saturating_sub(4) as usize,
-                       event.position.0.saturating_sub(lineSize as u16) as usize);
+                           position.1.saturating_sub(4) as usize,
+                       position.0.saturating_sub(lineSize as u16) as usize);
         tab.cursor = (
             std::cmp::min(
                 linePos.0,
@@ -902,7 +914,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn CutCode (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    fn CutCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         // get the highlighted section of text.... or the line if none
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         let text = tab.GetSelection();
@@ -936,7 +948,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn PasteCode (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    fn PasteCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         // pasting in the text
         if let Ok(text) = clipBoard.get_text() {
             let splitText = text.split('\n');
@@ -951,7 +963,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn FindCodeReferenceLine (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    fn FindCodeReferenceLine (&mut self, _keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // finding the nearest occurrence to the cursor
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         if tab.highlighting {
@@ -1136,7 +1148,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleSettingsLeft (&mut self, keyEvents: &KeyParser) {
+    fn HandleSettingsLeft (&mut self, _keyEvents: &KeyParser) {
         match self.currentMenuSettingBox {
             0 => {
                 self.colorMode.colorType = match self.colorMode.colorType {
@@ -1154,7 +1166,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleSettingsRight (&mut self, keyEvents: &KeyParser) {
+    fn HandleSettingsRight (&mut self, _keyEvents: &KeyParser) {
         match self.currentMenuSettingBox {
             0 => {
                 self.colorMode.colorType = match self.colorMode.colorType {
@@ -1376,7 +1388,7 @@ impl <'a> App <'a> {
         );
     }
 
-    fn HandleScrolled(&self, scrolled: usize, mut newScroll: &mut usize, scopeIndex: &Vec <usize>) {
+    fn HandleScrolled(&self, scrolled: usize, newScroll: &mut usize, scopeIndex: &Vec <usize>) {
         let tab = &self.codeTabs.tabs[self.lastTab];
         if *scopeIndex == tab.scopeJumps[tab.cursor.0] &&
             matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code)
@@ -1458,7 +1470,7 @@ impl <'a> App <'a> {
             }, buf);
     }
 
-    fn CalculateInnerScope (&mut self, mut currentScope: &mut Vec <usize>, tokenSet: &mut Vec <String>) {
+    fn CalculateInnerScope (&mut self, currentScope: &mut Vec <usize>, tokenSet: &mut Vec <String>) {
         if tokenSet.is_empty() {  return;  }
 
         let mut currentElement = OutlineKeyword::TryFindKeyword(

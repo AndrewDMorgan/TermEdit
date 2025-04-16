@@ -283,7 +283,7 @@ impl KeyParser {
         }
     }
 
-    fn HandleControlArrows (&mut self, numbers: &Vec <u16>, c: char) {
+    fn HandleControlArrows (&mut self, _numbers: &Vec <u16>, c: char) {
         match c {
             'D' => {
                 self.keyModifiers.push(KeyModifiers::Control);
@@ -475,7 +475,7 @@ impl Perform for KeyParser {
         }
         //println!("byte {}: '{}'", byte, byte as char);
     }
-    
+
     #[inline(always)]
     fn csi_dispatch(&mut self, params: &vte::Params, _: &[u8], _: bool, c: char) {
         self.inEscapeSeq = false;  // resetting the escape sequence

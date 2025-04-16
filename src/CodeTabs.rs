@@ -4,7 +4,7 @@ use ratatui::{
     style::{Stylize, Modifier},
     text::{Line, Span},
 };
-
+use log::error;
 use crate::Colors::Colors;
 use crate::Tokens::*;
 
@@ -1605,6 +1605,28 @@ pub struct CodeTabs {
 }
 
 impl CodeTabs {
+    pub fn GetRelativeTabPosition (&self, positionX: u16, area: Rect, paddingLeft: u16) -> u16 {
+        let total = self.panes.len() as u16 + 1;
+        let tabSize = (area.width - paddingLeft) / total;
+
+        // getting the error
+        let error = (area.width as f64 - paddingLeft as f64) / (total as f64) - tabSize as f64;
+
+        let tabNumber = std::cmp::min(
+            (positionX - paddingLeft) / tabSize,
+            self.panes.len() as u16  // no need to sub one bc/ the main tab isn't in the vector
+        );
+        // error = 0.5
+        // offset 0, 1, 0, 1, 0, 1
+        // 0.5*(tab+1)
+        let offset = (error * (tabNumber+1) as f64) as u16;
+        // println!("Offset: {}", offset);
+        positionX.saturating_sub(paddingLeft)
+            .saturating_sub((tabSize * tabNumber) as u16)
+            .saturating_sub(tabNumber)  // no clue why this is needed tbh
+            .saturating_sub(offset)
+    }
+    
     pub fn GetTab (&mut self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> &mut CodeTab {
         let tab = self.GetTabNumber(area, paddingLeft, positionX, lastTab);
         &mut self.tabs[tab]
@@ -1640,9 +1662,6 @@ impl CodeTabs {
     ) -> Vec <ratatui::text::Line> {
         self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested)
     }
-}
-
-impl CodeTabs {
 
     pub fn CloseTab (&mut self) {
         if self.tabs.len() > 1 {  // there needs to be at least one file open
