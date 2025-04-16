@@ -4,7 +4,7 @@ use ratatui::{
     style::{Stylize, Modifier},
     text::{Line, Span},
 };
-use log::error;
+
 use crate::Colors::Colors;
 use crate::Tokens::*;
 
@@ -1626,7 +1626,7 @@ impl CodeTabs {
             .saturating_sub(tabNumber)  // no clue why this is needed tbh
             .saturating_sub(offset)
     }
-    
+
     pub fn GetTab (&mut self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> &mut CodeTab {
         let tab = self.GetTabNumber(area, paddingLeft, positionX, lastTab);
         &mut self.tabs[tab]
