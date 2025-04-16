@@ -258,7 +258,7 @@ impl <'a> App <'a> {
     fn HandleUpScroll (&mut self, event: &MouseEvent) {
         if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
             let mut tabIndex = 0;
-            self.codeTabs.GetTabNumber(
+            tabIndex = self.codeTabs.GetTabNumber(
                 &self.area, 29,
                 event.position.0 as usize,
                 &mut tabIndex
@@ -291,7 +291,7 @@ impl <'a> App <'a> {
     fn HandleDownScroll (&mut self, event: &MouseEvent) {
         if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
             let mut tabIndex = 0;
-            self.codeTabs.GetTabNumber(
+            tabIndex = self.codeTabs.GetTabNumber(
                 &self.area, 29,
                 event.position.0 as usize,
                 &mut tabIndex
@@ -316,164 +316,226 @@ impl <'a> App <'a> {
         }
     }
 
+    fn PressedCode (&mut self, events: &KeyParser, event: &MouseEvent) {
+        self.lastTab = self.codeTabs.GetTabNumber(
+            &self.area, 29,
+            event.position.0 as usize,
+            &mut self.lastTab
+        );
+        let currentTime = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards...")
+            .as_millis();
+        self.codeTabs.tabs[self.lastTab].pauseScroll = currentTime;
+        // updating the highlighting position
+        if events.ContainsMouseModifier(KeyModifiers::Shift)
+        {
+            if !self.codeTabs.tabs[self.lastTab].highlighting {
+                self.codeTabs.tabs[self.lastTab].cursorEnd =
+                    self.codeTabs.tabs[self.lastTab].cursor;
+                self.codeTabs.tabs[self.lastTab].highlighting = true;
+            }
+        } else {
+            self.codeTabs.tabs[self.lastTab].highlighting = false;
+        }
+
+        let tab = &mut self.codeTabs.tabs[self.lastTab];
+        let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+        let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                           event.position.1.saturating_sub(4) as usize,
+                       event.position.0.saturating_sub(lineSize as u16) as usize);
+        tab.cursor = (
+            std::cmp::min(
+                linePos.0,
+                tab.lines.len() - 1
+            ),
+            linePos.1.saturating_sub( {
+                if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                    1
+                } else {  0  }
+            } )
+        );
+        tab.cursor.1 = std::cmp::min(
+            tab.cursor.1,
+            tab.lines[tab.cursor.0].len()
+        );
+        tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+        tab.mouseScrolled = 0;
+        tab.mouseScrolledFlt = 0.0;
+        self.appState = AppState::Tabs;
+        self.tabState = TabState::Code;
+    }
+
+    fn PressedScopeJump (&mut self, _events: &KeyParser, event: &MouseEvent) {
+        // getting the line clicked on and jumping to it if it's in range
+        // account for the line scrolling/shifting... (not as bad as I thought it would be)
+        let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
+        let line = std::cmp::min(
+            event.position.1.saturating_sub(3) as usize + scrollTo,
+            self.codeTabs.tabs[self.lastTab].linearScopes.len() - 1
+        );
+        self.fileBrowser.outlineCursor = line;
+        let scopes = &mut self.codeTabs.tabs[self.lastTab].linearScopes[
+            line].clone();
+        scopes.reverse();
+        self.codeTabs.tabs[self.lastTab].cursor.0 =
+            self.codeTabs.tabs[self.lastTab].scopes.GetNode(
+                scopes
+            ).start;
+        self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
+        self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
+    }
+
+    fn PressedNewCodeTab (&mut self, events: &KeyParser, event: &MouseEvent) {
+        // tallying the size till the correct tab is found
+        let mut sizeCounted = 29usize;
+        for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
+            sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
+            if sizeCounted >= event.position.0 as usize {
+                if events.ContainsMouseModifier(KeyModifiers::Shift) {
+                    self.codeTabs.panes.push(index);
+                } else {
+                    self.codeTabs.currentTab = index;
+                    self.lastTab = index;
+                }
+                break;
+            }
+        }
+    }
+
+    fn PressedLoadFile (&mut self, events: &KeyParser, event: &MouseEvent) {
+        let height = event.position.1.saturating_sub(2) as usize;
+        if self.fileBrowser.files.len() > height {
+            // loading the file's contents
+            /*if !self.codeTabs.tabs.is_empty() {
+                self.codeTabs.panes.push(self.codeTabs.tabs.len());
+            } else {
+                self.codeTabs.currentTab = self.codeTabs.tabs.len();
+            }*/
+            self.codeTabs.currentTab = self.codeTabs.tabs.len();
+
+            let name = &self.fileBrowser.files[height];
+
+            let mut lines: Vec <String> = vec!();
+
+            let fullPath = &self.fileBrowser.filePaths[height];
+
+            let msg = fullPath.as_str().trim();  // temporary for debugging
+            let contents = std::fs::read_to_string(&fullPath).expect(msg);
+            let mut current = String::new();
+            for chr in contents.chars() {
+                if chr == '\n' {
+                    lines.push(current.clone());
+                    current.clear();
+                } else {
+                    current.push(chr);
+                }
+            }
+            lines.push(current);
+
+            let mut tab = CodeTab {
+                lines,
+                ..Default::default()
+            };
+
+            tab.fileName = fullPath.clone();
+
+            tab.lineTokens.clear();
+            let mut lineNumber = 0;
+            let ending = tab.fileName.split('.').last().unwrap_or("");
+            for line in tab.lines.iter() {
+                tab.lineTokenFlags.push(vec!());
+                tab.lineTokens.push(
+                    {
+                        GenerateTokens(line.clone(),
+                                       ending,
+                                       &mut tab.lineTokenFlags,
+                                       lineNumber,
+                                       &mut tab.outlineKeywords
+                        )
+                    }
+                );
+                lineNumber += 1;
+            }
+            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+
+            self.codeTabs.tabs.push(tab);
+            self.codeTabs.tabFileNames.push(name.clone());
+        }
+    }
+
     fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent) {
         if  event.position.0 > 29 &&
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 3 &&
             self.codeTabs.tabs.len() > 0
         {
-            self.lastTab = self.codeTabs.GetTabNumber(
-                &self.area, 29,
-                event.position.0 as usize,
-                &mut self.lastTab
-            );
-            let currentTime = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards...")
-                .as_millis();
-            self.codeTabs.tabs[self.lastTab].pauseScroll = currentTime;
-            // updating the highlighting position
-            if events.ContainsMouseModifier(KeyModifiers::Shift)
-            {
-                if !self.codeTabs.tabs[self.lastTab].highlighting {
-                    self.codeTabs.tabs[self.lastTab].cursorEnd =
-                        self.codeTabs.tabs[self.lastTab].cursor;
-                    self.codeTabs.tabs[self.lastTab].highlighting = true;
-                }
-            } else {
-                self.codeTabs.tabs[self.lastTab].highlighting = false;
-            }
-
-            let tab = &mut self.codeTabs.tabs[self.lastTab];
-            let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
-            let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                               event.position.1.saturating_sub(4) as usize,
-                           event.position.0.saturating_sub(lineSize as u16) as usize);
-            tab.cursor = (
-                std::cmp::min(
-                    linePos.0,
-                    tab.lines.len() - 1
-                ),
-                linePos.1.saturating_sub( {
-                    if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
-                        1
-                    } else {  0  }
-                } )
-            );
-            tab.cursor.1 = std::cmp::min(
-                tab.cursor.1,
-                tab.lines[tab.cursor.0].len()
-            );
-            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-            tab.mouseScrolled = 0;
-            tab.mouseScrolledFlt = 0.0;
-            self.appState = AppState::Tabs;
-            self.tabState = TabState::Code;
+            self.PressedCode(events, event);
         } else if
         event.position.0 <= 29 &&
             event.position.1 < self.area.height - 10 &&
             matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
             self.codeTabs.tabs.len() > 0
         {
-            // getting the line clicked on and jumping to it if it's in range
-            // account for the line scrolling/shifting... (not as bad as I thought it would be)
-            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
-            let line = std::cmp::min(
-                event.position.1.saturating_sub(3) as usize + scrollTo,
-                self.codeTabs.tabs[self.lastTab].linearScopes.len() - 1
-            );
-            self.fileBrowser.outlineCursor = line;
-            let scopes = &mut self.codeTabs.tabs[self.lastTab].linearScopes[
-                line].clone();
-            scopes.reverse();
-            self.codeTabs.tabs[self.lastTab].cursor.0 =
-                self.codeTabs.tabs[self.lastTab].scopes.GetNode(
-                    scopes
-                ).start;
-            self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
-            self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
+            self.PressedScopeJump(events, event);
         } else if
         event.position.0 > 29 &&
             event.position.1 <= 2 &&
             self.codeTabs.tabs.len() > 0
         {
-            // tallying the size till the correct tab is found
-            let mut sizeCounted = 29usize;
-            for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
-                sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
-                if sizeCounted >= event.position.0 as usize {
-                    if events.ContainsMouseModifier(KeyModifiers::Shift) {
-                        self.codeTabs.panes.push(index);
-                    } else {
-                        self.codeTabs.currentTab = index;
-                    }
-                    break;
-                }
-            }
+            self.PressedNewCodeTab(events, event);
         } else if  // selecting files to open
         event.position.0 > 1 &&
             event.position.0 < 30 && //height - 8, width 30
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 1
         {
-            let height = event.position.1.saturating_sub(2) as usize;
-            if self.fileBrowser.files.len() > height {
-                // loading the file's contents
-                /*if !self.codeTabs.tabs.is_empty() {
-                    self.codeTabs.panes.push(self.codeTabs.tabs.len());
-                } else {
-                    self.codeTabs.currentTab = self.codeTabs.tabs.len();
-                }*/
-                self.codeTabs.currentTab = self.codeTabs.tabs.len();
+            self.PressedLoadFile(events, event);
+        }
+    }
 
-                let name = &self.fileBrowser.files[height];
+    fn HighlightLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
+        // updating the highlighting position
+        self.lastTab = self.codeTabs.GetTabNumber(
+            &self.area, 29,
+            event.position.0 as usize,
+            &mut self.lastTab
+        );
+        let cursorEnding = self.codeTabs.tabs[self.lastTab].cursor;
 
-                let mut lines: Vec <String> = vec!();
+        let tab = &mut self.codeTabs.tabs[self.lastTab];
+        let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
+        let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
+                           event.position.1.saturating_sub(4) as usize,
+                       event.position.0.saturating_sub(lineSize as u16) as usize);
+        tab.cursor = (
+            std::cmp::min(
+                linePos.0,
+                tab.lines.len() - 1
+            ),
+            linePos.1.saturating_sub( {
+                if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
+                    1
+                } else {  0  }
+            } )
+        );
+        tab.cursor.1 = std::cmp::min(
+            tab.cursor.1,
+            tab.lines[tab.cursor.0].len()
+        );
+        tab.mouseScrolled = 0;
+        tab.mouseScrolledFlt = 0.0;
+        self.appState = AppState::Tabs;
+        self.tabState = TabState::Code;
 
-                let fullPath = &self.fileBrowser.filePaths[height];
-
-                let msg = fullPath.as_str().trim();  // temporary for debugging
-                let contents = std::fs::read_to_string(&fullPath).expect(msg);
-                let mut current = String::new();
-                for chr in contents.chars() {
-                    if chr == '\n' {
-                        lines.push(current.clone());
-                        current.clear();
-                    } else {
-                        current.push(chr);
-                    }
-                }
-                lines.push(current);
-
-                let mut tab = CodeTab {
-                    lines,
-                    ..Default::default()
-                };
-
-                tab.fileName = fullPath.clone();
-
-                tab.lineTokens.clear();
-                let mut lineNumber = 0;
-                let ending = tab.fileName.split('.').last().unwrap_or("");
-                for line in tab.lines.iter() {
-                    tab.lineTokenFlags.push(vec!());
-                    tab.lineTokens.push(
-                        {
-                            GenerateTokens(line.clone(),
-                                           ending,
-                                           &mut tab.lineTokenFlags,
-                                           lineNumber,
-                                           &mut tab.outlineKeywords
-                            )
-                        }
-                    );
-                    lineNumber += 1;
-                }
-                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-
-                self.codeTabs.tabs.push(tab);
-                self.codeTabs.tabFileNames.push(name.clone());
+        if cursorEnding != tab.cursor && !tab.highlighting
+        {
+            if !tab.highlighting {
+                tab.cursorEnd = cursorEnding;
+                tab.highlighting = true;
             }
+        } else if !tab.highlighting {
+            self.codeTabs.tabs[self.lastTab].highlighting = false;
         }
     }
 
@@ -484,48 +546,7 @@ impl <'a> App <'a> {
                 event.position.1 > 3 &&
                 self.codeTabs.tabs.len() > 0
             {
-                // updating the highlighting position
-                self.lastTab = self.codeTabs.GetTabNumber(
-                    &self.area, 29,
-                    event.position.0 as usize,
-                    &mut self.lastTab
-                );
-                let cursorEnding = self.codeTabs.tabs[self.lastTab].cursor;
-
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                let lineSize = 33 + tab.lines.len().to_string().len();  // account for the length of the total lines
-                let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                                   event.position.1.saturating_sub(4) as usize,
-                               event.position.0.saturating_sub(lineSize as u16) as usize);
-                tab.cursor = (
-                    std::cmp::min(
-                        linePos.0,
-                        tab.lines.len() - 1
-                    ),
-                    linePos.1.saturating_sub( {
-                        if linePos.0 == tab.cursor.0 && linePos.1 > tab.cursor.1 {
-                            1
-                        } else {  0  }
-                    } )
-                );
-                tab.cursor.1 = std::cmp::min(
-                    tab.cursor.1,
-                    tab.lines[tab.cursor.0].len()
-                );
-                tab.mouseScrolled = 0;
-                tab.mouseScrolledFlt = 0.0;
-                self.appState = AppState::Tabs;
-                self.tabState = TabState::Code;
-
-                if cursorEnding != tab.cursor && !tab.highlighting
-                {
-                    if !tab.highlighting {
-                        tab.cursorEnd = cursorEnding;
-                        tab.highlighting = true;
-                    }
-                } else if !tab.highlighting {
-                    self.codeTabs.tabs[self.lastTab].highlighting = false;
-                }
+                self.HighlightLeftClick(events, event);
             }
         } else if matches!(event.state, MouseState::Press) {
             self.HandlePress(events, event);
@@ -697,8 +718,8 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
-        // making sure command + s or other commands are being pressed
+    fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        // making sure command + s or other commands aren't being pressed
         if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
             for chr in &keyEvents.charEvents {
                 if *chr == '(' {
@@ -723,185 +744,262 @@ impl <'a> App <'a> {
                 }
             }
         }
+    }
 
-        if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-            let mut numDel = 1;
-            let mut offset = 0;
+    fn DeleteCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        let mut numDel = 1;
+        let mut offset = 0;
 
-            if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
-                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                    numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosRight();
-                    offset = numDel;
-                } else {
-                    numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosLeft();
-                }
-            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                    numDel = self.codeTabs.tabs[self.lastTab].lines[
-                        self.codeTabs.tabs[self.lastTab].cursor.0
-                        ].len() - self.codeTabs.tabs[self.lastTab].cursor.1;
-                    offset = numDel;
-                } else {
-                    numDel = self.codeTabs.tabs[self.lastTab].cursor.1;
-                }
-            } else if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                offset = numDel;
-            }
-
-            self.codeTabs.tabs[
-                self.lastTab
-                ].DelChars(numDel, offset);
-        } else if keyEvents.ContainsChar('w') &&
-            keyEvents.ContainsModifier(&KeyModifiers::Option)
-        {
-            if self.codeTabs.panes.contains(&self.lastTab) {
-                self.codeTabs.panes.remove(
-                    self.codeTabs.panes
-                        .iter()
-                        .position(|e| e == &self.lastTab)
-                        .unwrap()
-                );
-            }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
-            let highlight;
-            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-            {
-                highlight = true;
-                if !self.codeTabs.tabs[self.lastTab].highlighting {
-                    self.codeTabs.tabs[self.lastTab].cursorEnd =
-                        self.codeTabs.tabs[self.lastTab].cursor;
-                    self.codeTabs.tabs[self.lastTab].highlighting = true;
-                }
-            } else {
-                highlight = false;
-            }
-            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                self.codeTabs.tabs[self.lastTab].MoveCursorLeftToken();
-            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
-                self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
-                // checking if it's the true first value or not
-                let mut indentIndex = 0usize;
-                let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
-                for chr in self.codeTabs.tabs[self.lastTab].lines[cursorLine].chars() {
-                    if chr != ' ' {
-                        break;
-                    } indentIndex += 1;
-                }
-
-                if self.codeTabs.tabs[self.lastTab].cursor.1 <= indentIndex {
-                    self.codeTabs.tabs[self.lastTab].cursor.1 = 0;
-                } else {
-                    self.codeTabs.tabs[self.lastTab].cursor.1 = indentIndex;
-                }
-            } else {
-                self.codeTabs.tabs[self.lastTab].MoveCursorLeft(1, highlight);
-            }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-            let highlight;
-            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-            {
-                highlight = true;
-                if !self.codeTabs.tabs[self.lastTab].highlighting {
-                    self.codeTabs.tabs[self.lastTab].cursorEnd =
-                        self.codeTabs.tabs[self.lastTab].cursor;
-                    self.codeTabs.tabs[self.lastTab].highlighting = true;
-                }
-            } else {
-                highlight = false;
-            }
-            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                self.codeTabs.tabs[self.lastTab].MoveCursorRightToken();
-            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                tab.mouseScrolledFlt = 0.0;
-                tab.mouseScrolled = 0;
-
-                let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
-                self.codeTabs.tabs[self.lastTab].cursor.1 =
-                    self.codeTabs.tabs[self.lastTab].lines[cursorLine].len();
-            } else {
-                self.codeTabs.tabs[self.lastTab].MoveCursorRight(1, highlight);
-            }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
-            let highlight;
-            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-            {
-                highlight = true;
-                if !self.codeTabs.tabs[self.lastTab].highlighting {
-                    self.codeTabs.tabs[self.lastTab].cursorEnd =
-                        self.codeTabs.tabs[self.lastTab].cursor;
-                    self.codeTabs.tabs[self.lastTab].highlighting = true;
-                }
-            } else {
-                highlight = false;
-            }
-            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                jumps.reverse();
-                tab.JumpCursor(
-                    tab.scopes.GetNode(&mut jumps).start, 1
-                );
-            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                tab.mouseScrolledFlt = 0.0;
-                tab.mouseScrolled = 0;
-                tab.cursor.0 = 0;
-            } else {
-                self.codeTabs.tabs[self.lastTab].CursorUp(highlight);
-            }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
-            let highlight;
-            if keyEvents.ContainsModifier(&KeyModifiers::Shift)
-            {
-                highlight = true;
-                if !self.codeTabs.tabs[self.lastTab].highlighting {
-                    self.codeTabs.tabs[self.lastTab].cursorEnd =
-                        self.codeTabs.tabs[self.lastTab].cursor;
-                    self.codeTabs.tabs[self.lastTab].highlighting = true;
-                }
-            } else {
-                highlight = false;
-            }
-            if keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
-                jumps.reverse();
-                tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
-            } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
-                tab.mouseScrolledFlt = 0.0;
-                tab.mouseScrolled = 0;
-                tab.cursor.0 =
-                    tab.lines.len() - 1;
-            } else {
-                self.codeTabs.tabs[self.lastTab].CursorDown(highlight);
-            }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
+        if keyEvents.keyModifiers.contains(&KeyModifiers::Option) {
             if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-                self.codeTabs.tabs[self.lastTab].UnIndent();
+                numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosRight();
+                offset = numDel;
             } else {
-                if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
-                    self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("    ".to_string());
-                } else {
-                    self.codeTabs.tabs[self.lastTab]
-                        .RemoveCurrentToken_NonUpdate();
-                    self.codeTabs.tabs[self.lastTab]
-                        .InsertChars(self.suggested.clone());
+                numDel = self.codeTabs.tabs[self.lastTab].FindTokenPosLeft();
+            }
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+                numDel = self.codeTabs.tabs[self.lastTab].lines[
+                    self.codeTabs.tabs[self.lastTab].cursor.0
+                    ].len() - self.codeTabs.tabs[self.lastTab].cursor.1;
+                offset = numDel;
+            } else {
+                numDel = self.codeTabs.tabs[self.lastTab].cursor.1;
+            }
+        } else if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+            offset = numDel;
+        }
+
+        self.codeTabs.tabs[
+            self.lastTab
+        ].DelChars(numDel, offset);
+    }
+
+    fn CloseCodePane (&mut self) {
+        if self.codeTabs.panes.contains(&self.lastTab) {
+            self.codeTabs.panes.remove(
+                self.codeTabs.panes
+                    .iter()
+                    .position(|e| e == &self.lastTab)
+                    .unwrap()
+            );
+        }
+    }
+
+    fn MoveCodeCursorLeft (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        let highlight= self.HandleHighlightOnCursorMove(keyEvents);
+
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+            self.codeTabs.tabs[self.lastTab].MoveCursorLeftToken();
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
+            self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
+            // checking if it's the true first value or not
+            let mut indentIndex = 0usize;
+            let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
+            for chr in self.codeTabs.tabs[self.lastTab].lines[cursorLine].chars() {
+                if chr != ' ' {
+                    break;
+                } indentIndex += 1;
+            }
+
+            if self.codeTabs.tabs[self.lastTab].cursor.1 <= indentIndex {
+                self.codeTabs.tabs[self.lastTab].cursor.1 = 0;
+            } else {
+                self.codeTabs.tabs[self.lastTab].cursor.1 = indentIndex;
+            }
+        } else {
+            self.codeTabs.tabs[self.lastTab].MoveCursorLeft(1, highlight);
+        }
+    }
+
+    fn HandleHighlightOnCursorMove (&mut self, keyEvents: &KeyParser) -> bool {
+        if keyEvents.ContainsModifier(&KeyModifiers::Shift)
+        {
+            if !self.codeTabs.tabs[self.lastTab].highlighting {
+                self.codeTabs.tabs[self.lastTab].cursorEnd =
+                    self.codeTabs.tabs[self.lastTab].cursor;
+                self.codeTabs.tabs[self.lastTab].highlighting = true;
+            } true
+        } else {
+            false
+        }
+    }
+
+    fn MoveCodeCursorRight (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        let highlight = self.HandleHighlightOnCursorMove(keyEvents);
+
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+            self.codeTabs.tabs[self.lastTab].MoveCursorRightToken();
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+            tab.mouseScrolledFlt = 0.0;
+            tab.mouseScrolled = 0;
+
+            let cursorLine = self.codeTabs.tabs[self.lastTab].cursor.0;
+            self.codeTabs.tabs[self.lastTab].cursor.1 =
+                self.codeTabs.tabs[self.lastTab].lines[cursorLine].len();
+        } else {
+            self.codeTabs.tabs[self.lastTab].MoveCursorRight(1, highlight);
+        }
+    }
+
+    fn MoveCodeCursorUp (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        let highlight = self.HandleHighlightOnCursorMove(keyEvents);
+
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+            jumps.reverse();
+            tab.JumpCursor(
+                tab.scopes.GetNode(&mut jumps).start, 1
+            );
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+            tab.mouseScrolledFlt = 0.0;
+            tab.mouseScrolled = 0;
+            tab.cursor.0 = 0;
+        } else {
+            self.codeTabs.tabs[self.lastTab].CursorUp(highlight);
+        }
+    }
+
+    fn MoveCodeCursorDown (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        let highlight = self.HandleHighlightOnCursorMove(keyEvents);
+
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+            jumps.reverse();
+            tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
+            tab.mouseScrolledFlt = 0.0;
+            tab.mouseScrolled = 0;
+            tab.cursor.0 =
+                tab.lines.len() - 1;
+        } else {
+            self.codeTabs.tabs[self.lastTab].CursorDown(highlight);
+        }
+    }
+
+    fn HandleCodeTabPress (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
+            self.codeTabs.tabs[self.lastTab].UnIndent();
+        } else {
+            if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
+                self.codeTabs.tabs[self.lastTab]
+                    .InsertChars("    ".to_string());
+            } else {
+                self.codeTabs.tabs[self.lastTab]
+                    .RemoveCurrentToken_NonUpdate();
+                self.codeTabs.tabs[self.lastTab]
+                    .InsertChars(self.suggested.clone());
+            }
+        }
+    }
+
+    fn CutCode (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        // get the highlighted section of text.... or the line if none
+        let tab = &mut self.codeTabs.tabs[self.lastTab];
+        let text = tab.GetSelection();
+        let _ = clipBoard.set_text(text);
+
+        // clearing the rest of the selection
+        if tab.highlighting {
+            tab.DelChars(0, 0);
+        } else {
+            tab.lines[tab.cursor.0].clear();
+            tab.RecalcTokens(tab.cursor.0, 0);
+            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+        }
+    }
+
+    fn PasteCodeLoop (&mut self, splitLength: usize, i: usize) {
+        let tab = &mut self.codeTabs.tabs[self.lastTab];
+
+        if i < splitLength {
+            // why does highlight need to be set to true?????? This makes noooo sense??? I give up
+            tab.LineBreakIn(true);
+            // making sure all actions occur on the same iteration
+        }
+        if i >0 && i < splitLength {
+            if let Some(mut elements) = tab.changeBuffer.pop() {
+                while let Some(element) = elements.pop() {
+                    let size = tab.changeBuffer.len() - 1;
+                    tab.changeBuffer[size].insert(0, element);
                 }
             }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-            self.codeTabs.tabs[self.lastTab].LineBreakIn(false);  // can't be highlighting if breaking?
-        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-            keyEvents.ContainsChar('s') {
+        }
+    }
 
+    fn PasteCode (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        // pasting in the text
+        if let Ok(text) = clipBoard.get_text() {
+            let splitText = text.split('\n');
+            let splitLength = splitText.clone().count() - 1;
+            for (i, line) in splitText.enumerate() {
+                if line.is_empty() {  continue;  }
+                self.codeTabs.tabs[self.lastTab].InsertChars(
+                    line.to_string()
+                );
+                self.PasteCodeLoop(splitLength, i);
+            }
+        }
+    }
+
+    fn FindCodeReferenceLine (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        // finding the nearest occurrence to the cursor
+        let tab = &mut self.codeTabs.tabs[self.lastTab];
+        if tab.highlighting {
+            // getting the new search term (yk, it's kinda easy when done the right way the first time......not happening again though)
+            let selection = tab.GetSelection();
+            tab.searchTerm = selection;
+        }
+
+        // searching for the term
+        let mut lastDst = (usize::MAX, 0usize);
+        for (index, line) in tab.lines.iter().enumerate() {
+            let dst = (index as isize - tab.cursor.0 as isize).saturating_abs() as usize;
+            if !line.contains(&tab.searchTerm) {  continue;  }
+            if dst > lastDst.0 {  break;  }
+            lastDst = (dst, index);
+        }
+
+        if lastDst.0 < usize::MAX {
+            tab.searchIndex = lastDst.1;
+            //self.debugInfo = lastDst.1.to_string();
+        }
+    }
+
+    fn HandleUndoRedoCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+        if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
+            keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
+            self.codeTabs.tabs[self.lastTab].Redo();
+        } else {
+            self.codeTabs.tabs[self.lastTab].Undo();
+        }
+    }
+
+    fn HandleCodeCommands (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.ContainsChar('s')
+        {
             // saving the program
             self.codeTabs.tabs[self.lastTab].Save();
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            keyEvents.charEvents.contains(&'f')
+        {
+            self.FindCodeReferenceLine(keyEvents, clipBoard);
+        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
+            (keyEvents.charEvents.contains(&'z') ||  // command z = undo/redo
+                keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
+                keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
+        {
+            self.HandleUndoRedoCode(keyEvents, clipBoard);
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'c')
         {
@@ -911,89 +1009,37 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'x')
         {
-            // get the highlighted section of text.... or the line if none
-            let tab = &mut self.codeTabs.tabs[self.lastTab];
-            let text = tab.GetSelection();
-            let _ = clipBoard.set_text(text);
-
-            // clearing the rest of the selection
-            if tab.highlighting {
-                tab.DelChars(0, 0);
-            } else {
-                tab.lines[tab.cursor.0].clear();
-                tab.RecalcTokens(tab.cursor.0, 0);
-                (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-            }
+            self.CutCode(keyEvents, clipBoard);
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'v')
         {
-            // pasting in the text
-            if let Ok(text) = clipBoard.get_text() {
-                let tab = &mut self.codeTabs.tabs[self.lastTab];
-                let splitText = text.split('\n');
-                let splitLength = splitText.clone().count() - 1;
-                for (i, line) in splitText.enumerate() {
-                    if line.is_empty() {  continue;  }
-                    tab.InsertChars(
-                        line.to_string()
-                    );
-                    if i > 0 {
-                        // making sure all actions occur on the same iteration
-                        if let Some(mut elements) = tab.changeBuffer.pop() {
-                            while let Some(element) = elements.pop() {
-                                let size = tab.changeBuffer.len() - 1;
-                                tab.changeBuffer[size].insert(0, element);
-                            }
-                        }
-                    }
-                    if i < splitLength {
-                        // why does highlight need to be set to true?????? This makes noooo sense??? I give up
-                        tab.LineBreakIn(true);
-                        // making sure all actions occur on the same iteration
-                        if let Some(mut elements) = tab.changeBuffer.pop() {
-                            while let Some(element) = elements.pop() {
-                                let size = tab.changeBuffer.len() - 1;
-                                tab.changeBuffer[size].insert(0, element);
-                            }
-                        }
-                    }
-                }
-            }
-        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-            keyEvents.charEvents.contains(&'f')
-        {
-            // finding the nearest occurrence to the cursor
-            let tab = &mut self.codeTabs.tabs[self.lastTab];
-            if tab.highlighting {
-                // getting the new search term (yk, it's kinda easy when done the right way the first time......not happening again though)
-                let selection = tab.GetSelection();
-                tab.searchTerm = selection;
-            }
+            self.PasteCode(keyEvents, clipBoard);
+        }
+    }
 
-            // searching for the term
-            let mut lastDst = (usize::MAX, 0usize);
-            for (index, line) in tab.lines.iter().enumerate() {
-                let dst = (index as isize - tab.cursor.0 as isize).saturating_abs() as usize;
-                if !line.contains(&tab.searchTerm) {  continue;  }
-                if dst > lastDst.0 {  break;  }
-                lastDst = (dst, index);
-            }
+    fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        self.TypeCode(keyEvents, clipBoard);
 
-            if lastDst.0 < usize::MAX {
-                tab.searchIndex = lastDst.1;
-                //self.debugInfo = lastDst.1.to_string();
-            }
-        } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
-            (keyEvents.charEvents.contains(&'z') ||  // command z = undo/redo
-                keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
-                keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
+        if keyEvents.ContainsKeyCode(KeyCode::Delete) {
+            self.DeleteCode(keyEvents, clipBoard);
+        } else if keyEvents.ContainsChar('w') &&
+            keyEvents.ContainsModifier(&KeyModifiers::Option)
         {
-            if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
-                keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
-                self.codeTabs.tabs[self.lastTab].Redo();
-            } else {
-                self.codeTabs.tabs[self.lastTab].Undo();
-            }
+            self.CloseCodePane();
+        } else if keyEvents.ContainsKeyCode(KeyCode::Left) {
+            self.MoveCodeCursorLeft(keyEvents, clipBoard);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
+            self.MoveCodeCursorRight(keyEvents, clipBoard);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
+            self.MoveCodeCursorUp(keyEvents, clipBoard);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
+            self.MoveCodeCursorDown(keyEvents, clipBoard);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
+            self.HandleCodeTabPress(keyEvents, clipBoard);
+        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
+            self.codeTabs.tabs[self.lastTab].LineBreakIn(false);  // can't be highlighting if breaking?
+        } else {
+            self.HandleCodeCommands(keyEvents, clipBoard);
         }
     }
 
@@ -1057,68 +1103,80 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsKeyCode(KeyCode::Tab) &&
             self.currentCommand.starts_with("open ")
         {
-            // handling suggested directory auto fills
-            let currentToken = self.currentCommand
-                .split("/")
-                .last()
-                .unwrap_or("");
+            self.OpenCodeProject();
+        }
+    }
 
-            for path in &self.dirFiles {
-                if path.starts_with(currentToken) {
-                    let pathEnding = path
-                        .get(currentToken.len()..)
+    fn OpenCodeProject(&mut self) {
+        // handling suggested directory auto fills
+        let currentToken = self.currentCommand
+            .split("/")
+            .last()
+            .unwrap_or("");
+
+        for path in &self.dirFiles {
+            if path.starts_with(currentToken) {
+                let pathEnding = path
+                    .get(currentToken.len()..)
+                    .unwrap_or("")
+                    .to_string();
+                self.currentCommand.push_str(&pathEnding);
+                self.currentCommand.push('/');
+
+                // recalculating the directories
+                self.currentDir = FileBrowser::GetPathName(
+                    self.currentCommand.get(5..)
                         .unwrap_or("")
-                        .to_string();
-                    self.currentCommand.push_str(&pathEnding);
-                    self.currentCommand.push('/');
+                );
 
-                    // recalculating the directories
-                    self.currentDir = FileBrowser::GetPathName(
-                        self.currentCommand.get(5..)
-                            .unwrap_or("")
-                    );
+                self.dirFiles.clear();
+                FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
+                break;
+            }
+        }
+    }
 
-                    self.dirFiles.clear();
-                    FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
-                    break;
+    fn HandleSettingsLeft (&mut self, keyEvents: &KeyParser) {
+        match self.currentMenuSettingBox {
+            0 => {
+                self.colorMode.colorType = match self.colorMode.colorType {
+                    ColorTypes::BasicColor => ColorTypes::BasicColor,
+                    ColorTypes::PartialColor => ColorTypes::BasicColor,
+                    ColorTypes::TrueColor => ColorTypes::PartialColor,
+                }
+            },
+            1 => {
+                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                    self.preferredCommandKeybind = KeyModifiers::Command;
                 }
             }
+            _ => {},
+        }
+    }
+
+    fn HandleSettingsRight (&mut self, keyEvents: &KeyParser) {
+        match self.currentMenuSettingBox {
+            0 => {
+                self.colorMode.colorType = match self.colorMode.colorType {
+                    ColorTypes::BasicColor => ColorTypes::PartialColor,
+                    ColorTypes::PartialColor => ColorTypes::TrueColor,
+                    ColorTypes::TrueColor => ColorTypes::TrueColor,
+                }
+            },
+            1 => {
+                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                    self.preferredCommandKeybind = KeyModifiers::Control;
+                }
+            }
+            _ => {},
         }
     }
 
     fn HandleSettingsKeyEvents (&mut self, keyEvents: &KeyParser) {
         if keyEvents.ContainsKeyCode(KeyCode::Left) {
-            match self.currentMenuSettingBox {
-                0 => {
-                    self.colorMode.colorType = match self.colorMode.colorType {
-                        ColorTypes::BasicColor => ColorTypes::BasicColor,
-                        ColorTypes::PartialColor => ColorTypes::BasicColor,
-                        ColorTypes::TrueColor => ColorTypes::PartialColor,
-                    }
-                },
-                1 => {
-                    if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
-                        self.preferredCommandKeybind = KeyModifiers::Command;
-                    }
-                }
-                _ => {},
-            }
+            self.HandleSettingsLeft(keyEvents);
         } else if keyEvents.ContainsKeyCode(KeyCode::Right) {
-            match self.currentMenuSettingBox {
-                0 => {
-                    self.colorMode.colorType = match self.colorMode.colorType {
-                        ColorTypes::BasicColor => ColorTypes::PartialColor,
-                        ColorTypes::PartialColor => ColorTypes::TrueColor,
-                        ColorTypes::TrueColor => ColorTypes::TrueColor,
-                    }
-                },
-                1 => {
-                    if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
-                        self.preferredCommandKeybind = KeyModifiers::Control;
-                    }
-                }
-                _ => {},
-            }
+            self.HandleSettingsRight(keyEvents);
         } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
             self.currentMenuSettingBox = self.currentMenuSettingBox.saturating_sub(1);
         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
@@ -1175,8 +1233,8 @@ impl <'a> App <'a> {
         self.exit = true;
     }
 
-    fn RenderProject (&mut self, area: Rect, buf: &mut Buffer) {
-        // ============================================= file block here =============================================
+    // ============================================= file block here =============================================
+    fn RenderFileBlock (&mut self, area: Rect, buf: &mut Buffer){
         let mut tabBlock = Block::bordered()
             .border_set(border::THICK);
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) {
@@ -1196,177 +1254,184 @@ impl <'a> App <'a> {
                 x: area.x + 29,
                 y: area.y,
                 width: area.width - 20,
-                height: 3
+                height: 3,
             }, buf);
+    }
 
-
-        // ============================================= code block here =============================================
+    // ============================================= code block here =============================================
+    fn RenderCodeBlock (&mut self, area: Rect, buf: &mut Buffer) {
         if self.codeTabs.tabs.len() > 0 {
             let tabSize = self.codeTabs.GetTabSize(&area, 29);
 
             for tabIndex in 0..=self.codeTabs.panes.len() {
-                let codeBlockTitle = Line::from(vec![
-                    " ".to_string().white(),
-                    self.codeTabs.tabs[
-                        {
-                            if tabIndex == 0 {  self.codeTabs.currentTab  }
-                            else {  self.codeTabs.panes[tabIndex - 1]  }
-                        }
-                        ].name
-                        .clone()
-                        .bold(),
-                    " ".to_string().white(),
-                ]);
-                let mut codeBlock = Block::bordered()
-                    .title_top(codeBlockTitle.centered())
-                    .border_set(border::THICK);
-                if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-                    codeBlock = codeBlock.light_blue();
-                }
-
-                let codeText = Text::from(
-                    self.codeTabs.GetScrolledText(
-                        area,
-                        matches!(self.appState, AppState::Tabs) &&
-                            matches!(self.tabState, TabState::Code),
-                        &self.colorMode,
-                        &self.suggested,
-                        {
-                            if tabIndex == 0 {  self.codeTabs.currentTab  }
-                            else {  self.codeTabs.panes[tabIndex - 1]  }
-                        }
-                    )
-                );
-
-                Paragraph::new(codeText)
-                    .block(codeBlock)
-                    .render(Rect {
-                        x: area.x + 29 + (tabIndex*tabSize) as u16,
-                        y: area.y + 2,
-                        width: tabSize as u16,
-                        //width: area.width - 29,
-                        height: area.height - 10
-                }, buf);
+                self.RenderCodeTab(area, buf, tabIndex, tabSize);
             }
         }
+    }
 
+    fn RenderCodeTab(&mut self, area: Rect, buf: &mut Buffer, tabIndex: usize, tabSize: usize) {
+        let codeBlockTitle = Line::from(vec![
+            " ".to_string().white(),
+            self.codeTabs.tabs[
+                {
+                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
+                }
+                ].name
+                .clone()
+                .bold(),
+            " ".to_string().white(),
+        ]);
+        let mut codeBlock = Block::bordered()
+            .title_top(codeBlockTitle.centered())
+            .border_set(border::THICK);
+        if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
+            codeBlock = codeBlock.light_blue();
+        }
 
-        // ============================================= files =============================================
+        let codeText = Text::from(
+            self.codeTabs.GetScrolledText(
+                area,
+                matches!(self.appState, AppState::Tabs) &&
+                    matches!(self.tabState, TabState::Code),
+                &self.colorMode,
+                &self.suggested,
+                {
+                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
+                },
+            )
+        );
+
+        Paragraph::new(codeText)
+            .block(codeBlock)
+            .render(Rect {
+                x: area.x + 29 + (tabIndex * tabSize) as u16,
+                y: area.y + 2,
+                width: tabSize as u16,
+                //width: area.width - 29,
+                height: area.height - 10,
+        }, buf);
+    }
+
+    fn RenderOutlinePartOne (&self, scopeIndex: &Vec <usize>) -> String {
+        let mut offset = String::new();
+        if *scopeIndex ==
+            self.codeTabs.tabs[self.lastTab]
+                .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
+            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
+            offset.push('>')
+        } else if
+        matches!(self.appState, AppState::CommandPrompt) &&
+            matches!(self.tabState, TabState::Files) &&
+            self.codeTabs.tabs[self.lastTab].linearScopes[
+                self.fileBrowser.outlineCursor
+                ] == *scopeIndex {
+            offset.push('>');
+        }
+        for _ in 0..scopeIndex.len().saturating_sub(1) {
+            offset.push_str("  ");
+        }
+        offset
+    }
+
+    fn GetColoredScope <'span> (&self, scopeName: String, scopeLength: usize) -> ratatui::text::Span <'span> {
+        match scopeLength {
+            1 => scopeName.light_blue(),
+            2 => scopeName.light_magenta(),
+            3 => scopeName.light_red(),
+            4 => scopeName.light_yellow(),
+            5 => scopeName.light_green(),
+            _ => scopeName.white(),
+        }
+    }
+
+    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Line>, scopeIndex: &Vec <usize>, scope: &ScopeNode) {
+        fileStringText.push(
+            Line::from(vec![
+                {
+                    self.RenderOutlinePartOne (scopeIndex).white()
+                },
+                {
+                    // this is a mess...
+                    if *scopeIndex ==
+                        self.codeTabs.tabs[self.lastTab]
+                            .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
+                        matches!(self.appState, AppState::CommandPrompt) &&
+                        matches!(self.tabState, TabState::Code)
+                    {
+                        self.GetColoredScope(scope.name.clone(), scopeIndex.len()).underlined()
+                    } else if
+                        matches!(self.appState, AppState::CommandPrompt) &&
+                        matches!(self.tabState, TabState::Files) &&
+                        self.codeTabs.tabs[self.lastTab].linearScopes[
+                            self.fileBrowser.outlineCursor
+                            ] == *scopeIndex
+                    {
+                        self.GetColoredScope(scope.name.clone(), scopeIndex.len()).underlined()
+                    } else {
+                        self.GetColoredScope(scope.name.clone(), scopeIndex.len())
+                    }
+                },
+                //format!(" ({}, {})", scope.start + 1, scope.end + 1).white(),  // (not enough space for it to fit...)
+            ])
+        );
+    }
+
+    fn HandleScrolled(&self, scrolled: usize, mut newScroll: &mut usize, scopeIndex: &Vec <usize>) {
+        let tab = &self.codeTabs.tabs[self.lastTab];
+        if *scopeIndex == tab.scopeJumps[tab.cursor.0] &&
+            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code)
+        {
+            *newScroll = scrolled - 1;
+        }
+    }
+
+    fn RenderFilebrowserOutline (&mut self, area: Rect) -> Text {
+        let mut fileStringText = vec!();
+        let mut scopes: Vec<usize> = vec![];
+
+        let mut newScroll = self.fileBrowser.outlineCursor;
+        let mut scrolled = 0;
+        let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
+
+        for scopeIndex in &self.codeTabs.tabs[self.lastTab].scopeJumps {
+            let mut valid = true;
+            for i in 0..scopes.len() {
+                let slice = scopes.get(0..(scopes.len() - i));
+                if slice.unwrap_or(&[]) != *scopeIndex {  continue;  }
+                valid = false;
+                break;
+            }
+            if !valid || scopeIndex.is_empty() {  continue;  }
+            scopes.clear();
+
+            let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
+            for index in scopeIndex {
+                scopes.push(*index);
+                scope = &scope.children[*index];
+            }
+
+            scrolled += 1;
+            self.HandleScrolled(scrolled, &mut newScroll, &scopeIndex);
+
+            if scrolled < scrollTo { continue; }
+            self.GetFilebrowserOutline(&mut fileStringText, &scopeIndex, scope);
+        }
+        self.fileBrowser.outlineCursor = newScroll;
+        Text::from(fileStringText)
+    }
+
+    // ============================================= files =============================================
+    fn RenderFiles (&mut self, area: Rect, buf: &mut Buffer) {
         let mut fileBlock = Block::bordered()
             .border_set(border::THICK);
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
             fileBlock = fileBlock.light_blue();
         }
 
-        let mut fileStringText = vec!();
-        let mut scopes: Vec <usize> = vec![];
-
         let fileText: Text;
 
         if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
-            let mut newScroll = self.fileBrowser.outlineCursor;
-            let mut scrolled = 0;
-            let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
-            for scopeIndex in &self.codeTabs.tabs[self.lastTab].scopeJumps {
-                if {
-                    let mut valid = true;
-                    for i in 0..scopes.len() {
-                        let slice = scopes.get(0..(scopes.len()-i));
-                        if slice.unwrap_or(&[]) == *scopeIndex {
-                            valid = false;
-                            break;
-                        }
-                    }
-                    valid
-                } {
-                    scopes.clear();
-
-                    let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
-                    for index in scopeIndex {
-                        scopes.push(*index);
-                        scope = &scope.children[*index];
-                    }
-                    if scopeIndex.is_empty() {  continue;  }
-                    scrolled += 1;
-                    if *scopeIndex ==
-                        self.codeTabs.tabs[self.lastTab]
-                            .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
-                        matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-
-                        newScroll = scrolled - 1;
-                    }
-                    if scrolled < scrollTo {  continue;  }
-                    fileStringText.push(
-                        Line::from(vec![
-                            {
-                                let mut offset = String::new();
-                                if *scopeIndex ==
-                                    self.codeTabs.tabs[self.lastTab]
-                                        .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
-                                    matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-
-                                    offset.push('>')
-                                } else if
-                                matches!(self.appState, AppState::CommandPrompt) &&
-                                    matches!(self.tabState, TabState::Files) &&
-                                    self.codeTabs.tabs[self.lastTab].linearScopes[
-                                        self.fileBrowser.outlineCursor
-                                        ] == *scopeIndex {
-                                    offset.push('>');
-                                }
-                                for _ in 0..scopeIndex.len().saturating_sub(1) {
-                                    offset.push_str("  ");
-                                }
-
-                                offset.white()
-                            },
-                            {
-                                if *scopeIndex ==
-                                    self.codeTabs.tabs[self.lastTab]
-                                        .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
-                                    matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-
-                                    match scopeIndex.len() {
-                                        1 => scope.name.clone().light_blue(),
-                                        2 => scope.name.clone().light_magenta(),
-                                        3 => scope.name.clone().light_red(),
-                                        4 => scope.name.clone().light_yellow(),
-                                        5 => scope.name.clone().light_green(),
-                                        _ => scope.name.clone().white(),
-                                    }.underlined()
-                                } else if
-                                matches!(self.appState, AppState::CommandPrompt) &&
-                                    matches!(self.tabState, TabState::Files) &&
-                                    self.codeTabs.tabs[self.lastTab].linearScopes[
-                                        self.fileBrowser.outlineCursor
-                                        ] == *scopeIndex {
-
-                                    match scopeIndex.len() {
-                                        1 => scope.name.clone().light_blue().underlined(),
-                                        2 => scope.name.clone().light_magenta().underlined(),
-                                        3 => scope.name.clone().light_red().underlined(),
-                                        4 => scope.name.clone().light_yellow().underlined(),
-                                        5 => scope.name.clone().light_green().underlined(),
-                                        _ => scope.name.clone().white().underlined(),
-                                    }
-                                } else {
-                                    match scopeIndex.len() {
-                                        1 => scope.name.clone().light_blue(),
-                                        2 => scope.name.clone().light_magenta(),
-                                        3 => scope.name.clone().light_red(),
-                                        4 => scope.name.clone().light_yellow(),
-                                        5 => scope.name.clone().light_green(),
-                                        _ => scope.name.clone().white(),
-                                    }
-                                }
-                            },
-                            //format!(" ({}, {})", scope.start + 1, scope.end + 1).white(),  // (not enough space for it to fit...)
-                        ])
-                    );
-                }
-            }
-            self.fileBrowser.outlineCursor = newScroll;
-            fileText = Text::from(fileStringText);
+            fileText = self.RenderFilebrowserOutline(area);
         } else {
             let mut allFiles = vec!();
             for (index, file) in self.fileBrowser.files.iter().enumerate() {
@@ -1389,11 +1454,109 @@ impl <'a> App <'a> {
                 x: area.x,
                 y: area.y,
                 width: 30,
-                height: area.height - 8
+                height: area.height - 8,
             }, buf);
+    }
 
+    fn CalculateInnerScope (&mut self, mut currentScope: &mut Vec <usize>, tokenSet: &mut Vec <String>) {
+        if tokenSet.is_empty() {  return;  }
 
-        // ============================================= Error Bar =============================================
+        let mut currentElement = OutlineKeyword::TryFindKeyword(
+            &self.codeTabs.tabs[self.lastTab].outlineKeywords,
+            tokenSet.pop().unwrap(),
+        );
+        if let Some(set) = &currentElement {
+            let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+                set.lineNumber
+                ].clone();
+            //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
+            *currentScope = newScope;
+        }
+
+        while !tokenSet.is_empty() && currentElement.is_some() {
+            //self.debugInfo.push(' ');
+            let newToken = tokenSet.remove(0);
+            if let Some(set) = currentElement {
+                let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+                    set.lineNumber
+                    ].clone();
+                //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
+                *currentScope = newScope;
+                currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
+            }
+        }
+    }
+
+    fn ParseKeywordSuggestions (&mut self, validKeywords: Vec <OutlineKeyword>, token: String) {
+        if matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
+                    "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
+                    ".") {  return;  }
+
+        let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
+        for (i, var) in validKeywords.iter().enumerate() {
+            /*
+            if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
+                self.debugInfo.push('(');
+                self.debugInfo.push_str(var.keyword.as_str());
+                //self.debugInfo.push('/');
+                //self.debugInfo.push_str(&format!("{:?}", var.scope));
+                self.debugInfo.push(')');
+            }  // */
+            let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
+            if value < closest.0 {
+                closest = (value, vec![var.keyword.clone()], i);
+            } else if value == closest.0 {
+                closest.1.push(var.keyword.clone());
+            }
+        }
+        // getting the closest option to the size of the current token if there are multiple equal options
+        let mut finalBest = (usize::MAX, "".to_string(), 0usize);
+        for element in closest.1 {
+            let size = (element.len() as isize - token.len() as isize).unsigned_abs();
+            if size < finalBest.0 {
+                finalBest = (size, element, closest.2);
+            }
+        }
+
+        if closest.0 < 15 {  // finalBest.1 != token.as_str()
+            if token == finalBest.1 {
+            } else {
+                self.suggested = finalBest.1;
+            }
+        }
+    }
+
+    fn UpdateRenderErrorBar (&mut self, _area: Rect, _buf: &mut Buffer) {
+        if self.codeTabs.tabs.is_empty() {  return;  }
+
+        self.suggested.clear();
+        //let mut scope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+        //    self.codeTabs.tabs[self.lastTab].cursor.0
+        //    ].clone();
+        let mut tokenSet: Vec<String> = vec!();
+        self.codeTabs.tabs[self.lastTab].GetCurrentToken(&mut tokenSet);
+        if tokenSet.is_empty() {  return;  }  // token set is correct it seems
+
+        let token = tokenSet.remove(0);  // getting the item actively on the cursor
+        // self.debugInfo.push_str("{");
+        // self.debugInfo.push_str(&token);
+        // self.debugInfo.push_str("}");
+        let mut currentScope =
+            self.codeTabs.tabs[self.lastTab].scopeJumps[
+                self.codeTabs.tabs[self.lastTab].cursor.0
+                ].clone();
+        self.CalculateInnerScope(&mut currentScope, &mut tokenSet);
+
+        //scope = currentScope.clone();
+        let validKeywords = OutlineKeyword::GetValidScoped(
+            &self.codeTabs.tabs[self.lastTab].outlineKeywords,
+            &currentScope,
+        );
+        self.ParseKeywordSuggestions(validKeywords, token);
+    }
+
+    // ============================================= Error Bar =============================================
+    fn RenderErrorBar (&mut self, area: Rect, buf: &mut Buffer) {
         let errorBlock = Block::bordered()
             .border_set(border::THICK);
 
@@ -1410,101 +1573,7 @@ impl <'a> App <'a> {
             }
         }*/
 
-        if !self.codeTabs.tabs.is_empty() {
-            self.suggested.clear();
-            //let mut scope = self.codeTabs.tabs[self.lastTab].scopeJumps[
-            //    self.codeTabs.tabs[self.lastTab].cursor.0
-            //    ].clone();
-            let mut tokenSet: Vec<String> = vec!();
-            self.codeTabs.tabs[self.lastTab].GetCurrentToken(&mut tokenSet);
-            if !tokenSet.is_empty() {  // token set is correct it seems
-                let token = tokenSet.remove(0);  // getting the item actively on the cursor
-                // self.debugInfo.push_str("{");
-                // self.debugInfo.push_str(&token);
-                // self.debugInfo.push_str("}");
-                let mut currentScope =
-                    self.codeTabs.tabs[self.lastTab].scopeJumps[
-                        self.codeTabs.tabs[self.lastTab].cursor.0
-                        ].clone();
-                if !tokenSet.is_empty() {
-                    let mut currentElement = OutlineKeyword::TryFindKeyword(
-                        &self.codeTabs.tabs[self.lastTab].outlineKeywords,
-                        tokenSet.pop().unwrap()
-                    );
-                    if let Some(set) = &currentElement {
-                        let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
-                            set.lineNumber
-                            ].clone();
-                        //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
-                        currentScope = newScope;
-                    }
-
-                    while !tokenSet.is_empty() && currentElement.is_some() {
-                        //self.debugInfo.push(' ');
-                        let newToken = tokenSet.remove(0);
-                        if let Some(set) = currentElement {
-                            let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
-                                set.lineNumber
-                                ].clone();
-                            //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
-                            currentScope = newScope;
-                            currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
-                        }
-                    }
-                }
-                //scope = currentScope.clone();
-                let validKeywords = OutlineKeyword::GetValidScoped(
-                    &self.codeTabs.tabs[self.lastTab].outlineKeywords,
-                    &currentScope
-                );
-                if !matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
-                            "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
-                            ".")
-                {
-                    let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
-                    for (i, var) in validKeywords.iter().enumerate() {
-                        //*
-                        if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
-                            self.debugInfo.push('(');
-                            self.debugInfo.push_str(var.keyword.as_str());
-                            //self.debugInfo.push('/');
-                            //self.debugInfo.push_str(&format!("{:?}", var.scope));
-                            self.debugInfo.push(')');
-                        }  // */
-                        let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
-                        if value < closest.0 {
-                            closest = (value, vec![var.keyword.clone()], i);
-                        } else if value == closest.0 {
-                            closest.1.push(var.keyword.clone());
-                        }
-                    }
-                    // getting the closest option to the size of the current token if there are multiple equal options
-                    let mut finalBest = (usize::MAX, "".to_string(), 0usize);
-                    for element in closest.1 {
-                        let size = (element.len() as isize - token.len() as isize).unsigned_abs();
-                        if size < finalBest.0 {
-                            finalBest = (size, element, closest.2);
-                        }
-                    }
-                    if closest.0 < 15 {  // finalBest.1 != token.as_str()
-                        if token == finalBest.1 {
-                            /*self.debugInfo = format!("Type: {:?} Mutable: {} Publicity: {:?}",
-                                validKeywords[finalBest.2].typedType,
-                                validKeywords[finalBest.2].mutable,
-                                validKeywords[finalBest.2].public,
-                            );*/
-                        } else {
-                            self.suggested = finalBest.1;
-                        }
-                        //self.suggested.push_str(closest.0.to_string().as_str());
-                        //self.debugInfo.push(' ');
-                        //self.debugInfo.push_str(closest.0.to_string().as_str());
-                        //self.debugInfo.push_str(" / ");
-                        //self.debugInfo.push_str(closest.2.as_str());
-                    }
-                }
-            }
-        }
+        self.UpdateRenderErrorBar(area, buf);
 
         let errorText = Text::from(vec![
             Line::from(vec![
@@ -1526,7 +1595,115 @@ impl <'a> App <'a> {
                 x: area.x,
                 y: area.y + area.height - 9,
                 width: area.width,
-                height: 8
+                height: 8,
+            }, buf);
+    }
+
+    fn RenderProject (&mut self, area: Rect, buf: &mut Buffer) {
+        self.RenderFileBlock(area, buf);
+        self.RenderCodeBlock(area, buf);
+        self.RenderFiles(area, buf);
+        self.RenderErrorBar(area, buf);
+    }
+
+    fn RenderSettings (&mut self, area: Rect, buf: &mut Buffer) {
+        // ============================================= Color Settings =============================================
+        // the color mode setting
+        let settingsText = Text::from(
+            vec![
+                Line::from(vec![
+                    "Color Mode: [".white(),
+                    {
+                        if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
+                            "Basic".yellow().bold().underlined()
+                        } else {
+                            "Basic".white()
+                        }
+                    },
+                    "]".white(),
+                    " [".white(),
+                    {
+                        if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
+                            "8-bit".yellow().bold().underlined()
+                        } else {
+                            "8-bit".white()
+                        }
+                    },
+                    "]".white(),
+                    " [".white(),
+                    {
+                        if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
+                            "24-bit".yellow().bold().underlined()
+                        } else {
+                            "24-bit".white()
+                        }
+                    },
+                    "]".white(),
+                ]),
+                Line::from(vec![
+                    " * Not all terminals accept all color modes. If the colors are messed up, try lowering this".white().dim().italic()
+                ]),
+            ]
+        );
+
+        let mut colorSettingsBlock = Block::bordered()
+            .border_set(border::THICK);
+        if self.currentMenuSettingBox == 0 {
+            colorSettingsBlock = colorSettingsBlock.light_blue();
+        }
+
+        Paragraph::new(settingsText)
+            .block(colorSettingsBlock)
+            .render(Rect {
+                x: 10,//area.x + area.width / 2 - 71 / 2,
+                y: 2,//area.y + area.height / 2 - 10,
+                width: area.width - 20,
+                height: 4
+        }, buf);
+
+        // ============================================= Key Settings =============================================
+        // the color mode setting
+        let settingsText = Text::from(
+            vec![
+                Line::from(vec![
+                    "Preferred Modifier Key: [".white(),
+                    {
+                        if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                            "Command".yellow().bold().underlined()
+                        } else {
+                            "Command".white()
+                        }
+                    },
+                    "]".white(),
+                    " [".white(),
+                    {
+                        if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                            "Control".yellow().bold().underlined()
+                        } else {
+                            "Control".white()
+                        }
+                    },
+                    "]".white(),
+                ]),
+                Line::from(vec![
+                    " * The preferred modifier key for things like ctrl/cmd 'c'".white().dim().italic()
+                ]),
+            ]
+        );
+
+        let mut colorSettingsBlock = Block::bordered()
+            .border_set(border::THICK);
+        if self.currentMenuSettingBox == 1 {
+            colorSettingsBlock = colorSettingsBlock.light_blue();
+        }
+
+        Paragraph::new(settingsText)
+            .block(colorSettingsBlock)
+            .render(Rect {
+                x: 10,//area.x + area.width / 2 - 71 / 2,
+                y: 6,//area.y + area.height / 2 - 10,
+                width: area.width - 20,
+                height: 4
         }, buf);
     }
 
@@ -1544,104 +1721,7 @@ impl <'a> App <'a> {
 
         match self.menuState {
             MenuState::Settings => {
-                // ============================================= Color Settings =============================================
-                // the color mode setting
-                let settingsText = Text::from(
-                    vec![
-                        Line::from(vec![
-                            "Color Mode: [".white(),
-                            {
-                                if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
-                                    "Basic".yellow().bold().underlined()
-                                } else {
-                                    "Basic".white()
-                                }
-                            },
-                            "]".white(),
-                            " [".white(),
-                            {
-                                if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
-                                    "8-bit".yellow().bold().underlined()
-                                } else {
-                                    "8-bit".white()
-                                }
-                            },
-                            "]".white(),
-                            " [".white(),
-                            {
-                                if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
-                                    "24-bit".yellow().bold().underlined()
-                                } else {
-                                    "24-bit".white()
-                                }
-                            },
-                            "]".white(),
-                        ]),
-                        Line::from(vec![
-                            " * Not all terminals accept all color modes. If the colors are messed up, try lowering this".white().dim().italic()
-                        ]),
-                    ]
-                );
-
-                let mut colorSettingsBlock = Block::bordered()
-                    .border_set(border::THICK);
-                if self.currentMenuSettingBox == 0 {
-                    colorSettingsBlock = colorSettingsBlock.light_blue();
-                }
-
-                Paragraph::new(settingsText)
-                    .block(colorSettingsBlock)
-                    .render(Rect {
-                        x: 10,//area.x + area.width / 2 - 71 / 2,
-                        y: 2,//area.y + area.height / 2 - 10,
-                        width: area.width - 20,
-                        height: 4
-                }, buf);
-
-                // ============================================= Key Settings =============================================
-                // the color mode setting
-                let settingsText = Text::from(
-                    vec![
-                        Line::from(vec![
-                            "Preferred Modifier Key: [".white(),
-                            {
-                                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
-                                    "Command".yellow().bold().underlined()
-                                } else {
-                                    "Command".white()
-                                }
-                            },
-                            "]".white(),
-                            " [".white(),
-                            {
-                                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
-                                    "Control".yellow().bold().underlined()
-                                } else {
-                                    "Control".white()
-                                }
-                            },
-                            "]".white(),
-                        ]),
-                        Line::from(vec![
-                            " * The preferred modifier key for things like ctrl/cmd 'c'".white().dim().italic()
-                        ]),
-                    ]
-                );
-
-                let mut colorSettingsBlock = Block::bordered()
-                    .border_set(border::THICK);
-                if self.currentMenuSettingBox == 1 {
-                    colorSettingsBlock = colorSettingsBlock.light_blue();
-                }
-
-                Paragraph::new(settingsText)
-                    .block(colorSettingsBlock)
-                    .render(Rect {
-                        x: 10,//area.x + area.width / 2 - 71 / 2,
-                        y: 6,//area.y + area.height / 2 - 10,
-                        width: area.width - 20,
-                        height: 4
-                }, buf);
+                self.RenderSettings(area, buf);
             },
             MenuState::Welcome => {
                 let welcomeText = Text::from(vec![

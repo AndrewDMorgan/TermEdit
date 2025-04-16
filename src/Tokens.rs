@@ -1132,106 +1132,15 @@ pub fn GenerateScopes (
 
     let mut currentScope: Vec <usize> = vec!();
     for (lineNumber, tokens) in tokenLines.iter().enumerate() {
-        let mut bracketDepth = 0isize;
-        // track the depth; if odd than based on the type of bracket add scope; if even do nothing (scope opened and closed on the same line)
-        // use the same on functions to determine if the scope needs to continue or end on that line
-        for (index, (token, name)) in tokens.iter().enumerate() {
-            let (_lastToken, lastName) = {
-                if index == 0 {  &(TokenType::Null, "".to_string())  }
-                else {  &tokens[index - 1]  }
-            };
-            if !(matches!(token, TokenType::Comment) || (lastName == "\"" || lastName == "'") && matches!(token, TokenType::String)) {
-                // checking bracket depth
-                if name == "{" {
-                    bracketDepth += 1;
-                } else if name == "}" {
-                    bracketDepth -= 1;
-                }
-            }
-
-            // checking for something to define the name
-            if matches!(token, TokenType::Keyword | TokenType::Object | TokenType::Function) {
-                if !(VALID_NAMES_NEXT.contains(&name.trim()) || VALID_NAMES_TAKE.contains(&name.trim())) {
-                    continue;
-                }
-                
-                // checking the scope to see if ti continues or ends on the same line
-                let mut brackDepth = 0isize;
-                for (indx, (token, name)) in tokens.iter().enumerate() {
-                    let (_lastToken, lastName) = {
-                        if indx == 0 {  &(TokenType::Null, "".to_string())  }
-                        else {  &tokens[indx - 1]  }
-                    };
-                    if !(matches!(token, TokenType::Comment) || lastName == "\"" && matches!(token, TokenType::String)) &&
-                        indx > index 
-                    {
-                        if name == "{" {
-                            brackDepth += 1;
-                        } else if name == "}" {
-                            brackDepth -= 1;
-                        }
-                    }
-                }
-
-                // check bracket-depth here so any overlapping marks are accounted for
-                if bracketDepth < 0 && brackDepth > 0 {  // not pushing any jumps bc/ it'll be done later
-                    let mut scopeCopy = currentScope.clone();
-                    scopeCopy.reverse();
-                    rootNode.SetEnd(&mut scopeCopy, lineNumber);
-                    currentScope.pop();
-                }
-
-                // adding the new scope if necessary
-                if brackDepth > 0 {
-                    if VALID_NAMES_NEXT.contains(&name.trim()) {
-                        let nextName = tokens.get(index + 2).unwrap_or(&(TokenType::Null, "".to_string())).1.clone();
-                        
-                        let mut scopeCopy = currentScope.clone();
-                        scopeCopy.reverse();
-                        let mut goodName = name.clone();
-                        goodName.push(' ');
-                        goodName.push_str(nextName.as_str());
-                        let newScope = rootNode.Push(&mut scopeCopy, goodName, lineNumber);
-                        currentScope.push(newScope);
-                        linearized.push(currentScope.clone());
-                        
-                        bracketDepth = 0;
-                        break;
-                    } else if VALID_NAMES_TAKE.contains(&name.trim()) {
-                        let mut scopeCopy = currentScope.clone();
-                        scopeCopy.reverse();
-                        let goodName = name.clone();
-                        let newScope = rootNode.Push(&mut scopeCopy, goodName, lineNumber);
-                        currentScope.push(newScope);
-                        linearized.push(currentScope.clone());
-
-                        bracketDepth = 0;
-                        break;
-                    }
-                }
-            }
-        }
-        
-        // updating the scope based on the brackets
-        if bracketDepth > 0 {
-            let mut scopeCopy = currentScope.clone();
-            scopeCopy.reverse();
-            let newScope = rootNode.Push(&mut scopeCopy, "{ ... }".to_string(), lineNumber);
-            currentScope.push(newScope);
-            jumps.push(currentScope.clone());
-            linearized.push(currentScope.clone());
-            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
-        } else if bracketDepth < 0 {
-            jumps.push(currentScope.clone());
-            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
-            let mut scopeCopy = currentScope.clone();
-            scopeCopy.reverse();
-            rootNode.SetEnd(&mut scopeCopy, lineNumber);
-            currentScope.pop();
-        } else {
-            jumps.push(currentScope.clone());
-            OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
-        }
+        HandleBracketsLayer(
+            outline,
+            &mut rootNode,
+            &mut jumps,
+            &mut linearized,
+            &mut currentScope,
+            tokens,
+            lineNumber
+        );
     }
 
     // updating the keywords outline
@@ -1239,4 +1148,191 @@ pub fn GenerateScopes (
 
     (rootNode, jumps, linearized)
 }
+
+fn HandleBracketsLayer (
+    outline: &mut Vec <OutlineKeyword>,
+    rootNode: &mut ScopeNode,
+    jumps: &mut Vec <Vec <usize>>,
+    linearized: &mut Vec <Vec <usize>>,
+    currentScope: &mut Vec <usize>,
+    tokens: &Vec <(TokenType, String)>,
+    lineNumber: usize
+) {
+    let mut bracketDepth = 0isize;
+    // track the depth; if odd than based on the type of bracket add scope; if even do nothing (scope opened and closed on the same line)
+    // use the same on functions to determine if the scope needs to continue or end on that line
+    for (index, (token, name)) in tokens.iter().enumerate() {
+        CalculateBracketDepth(
+            tokens,
+            token,
+            &mut bracketDepth,
+            name,
+            index
+        );
+
+        // checking for something to define the name
+        if matches!(token, TokenType::Keyword | TokenType::Object | TokenType::Function) {
+            if !(VALID_NAMES_NEXT.contains(&name.trim()) || VALID_NAMES_TAKE.contains(&name.trim())) {
+                continue;
+            }
+
+            let invalid = CheckForScopeName(
+                tokens,
+                rootNode,
+                currentScope,
+                linearized,
+                &name,
+                &mut bracketDepth,
+                index,
+                lineNumber
+            );
+            if invalid {  break;  }
+        }
+    }
+
+    UpdateBracketDepth(outline, rootNode, currentScope, linearized, jumps, &mut bracketDepth, lineNumber);
+}
+
+fn CalculateBracketDepth (
+    tokens: &Vec <(TokenType, String)>,
+    token: &TokenType,
+    bracketDepth: &mut isize,
+    name: &String,
+    index: usize,
+) {
+    let (_lastToken, lastName) = {
+        if index == 0 {  &(TokenType::Null, "".to_string())  }
+        else {  &tokens[index - 1]  }
+    };
+    if !(matches!(token, TokenType::Comment) || (lastName == "\"" || lastName == "'") && matches!(token, TokenType::String)) {
+        // checking bracket depth
+        if name == "{" {
+            *bracketDepth += 1;
+        } else if name == "}" {
+            *bracketDepth -= 1;
+        }
+    }
+}
+
+fn CheckForScopeName (
+      tokens: &Vec <(TokenType, String)>,
+      rootNode: &mut ScopeNode,
+      currentScope: &mut Vec <usize>,
+      linearized: &mut Vec <Vec <usize>>,
+      name: &String,
+      bracketDepth: &mut isize,
+      index: usize,
+      lineNumber: usize
+) -> bool {
+    // checking the scope to see if ti continues or ends on the same line
+    let mut brackDepth = 0isize;
+    for (indx, (token, name)) in tokens.iter().enumerate() {
+        let (_lastToken, lastName) = {
+            if indx == 0 {  &(TokenType::Null, "".to_string())  }
+            else {  &tokens[indx - 1]  }
+        };
+        if !(matches!(token, TokenType::Comment) || lastName == "\"" && matches!(token, TokenType::String)) &&
+            indx > index
+        {
+            if name == "{" {
+                brackDepth += 1;
+            } else if name == "}" {
+                brackDepth -= 1;
+            }
+        }
+    }
+
+    UpdateScopes(
+        tokens,
+        rootNode,
+        currentScope,
+        linearized,
+        name,
+        bracketDepth,
+        &mut brackDepth,
+        index,
+        lineNumber
+    )
+}
+
+fn UpdateScopes (
+    tokens: &Vec <(TokenType, String)>,
+    rootNode: &mut ScopeNode,
+    currentScope: &mut Vec <usize>,
+    linearized: &mut Vec <Vec <usize>>,
+    name: &String,
+    bracketDepth: &mut isize,
+    brackDepth: &mut isize,
+    index: usize,
+    lineNumber: usize
+) -> bool {
+    // check bracket-depth here so any overlapping marks are accounted for
+    if *bracketDepth < 0 && *brackDepth > 0 {  // not pushing any jumps bc/ it'll be done later
+        let mut scopeCopy = currentScope.clone();
+        scopeCopy.reverse();
+        rootNode.SetEnd(&mut scopeCopy, lineNumber);
+        currentScope.pop();
+    }
+
+    // adding the new scope if necessary
+    if *brackDepth > 0 {
+        if VALID_NAMES_NEXT.contains(&name.trim()) {
+            let nextName = tokens.get(index + 2).unwrap_or(&(TokenType::Null, "".to_string())).1.clone();
+
+            let mut scopeCopy = currentScope.clone();
+            scopeCopy.reverse();
+            let mut goodName = name.clone();
+            goodName.push(' ');
+            goodName.push_str(nextName.as_str());
+            let newScope = rootNode.Push(&mut scopeCopy, goodName, lineNumber);
+            currentScope.push(newScope);
+            linearized.push(currentScope.clone());
+
+            *bracketDepth = 0;
+            return true;
+        } else if VALID_NAMES_TAKE.contains(&name.trim()) {
+            let mut scopeCopy = currentScope.clone();
+            scopeCopy.reverse();
+            let goodName = name.clone();
+            let newScope = rootNode.Push(&mut scopeCopy, goodName, lineNumber);
+            currentScope.push(newScope);
+            linearized.push(currentScope.clone());
+
+            *bracketDepth = 0;
+            return true;
+        }
+    } false
+}
+
+fn UpdateBracketDepth (
+    outline: &mut Vec <OutlineKeyword>,
+    rootNode: &mut ScopeNode,
+    currentScope: &mut Vec <usize>,
+    linearized: &mut Vec <Vec <usize>>,
+    jumps: &mut Vec <Vec <usize>>,
+    bracketDepth: &mut isize,
+    lineNumber: usize
+) {
+    // updating the scope based on the brackets
+    if *bracketDepth > 0 {
+        let mut scopeCopy = currentScope.clone();
+        scopeCopy.reverse();
+        let newScope = rootNode.Push(&mut scopeCopy, "{ ... }".to_string(), lineNumber);
+        currentScope.push(newScope);
+        jumps.push(currentScope.clone());
+        linearized.push(currentScope.clone());
+        OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
+    } else if *bracketDepth < 0 {
+        jumps.push(currentScope.clone());
+        OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
+        let mut scopeCopy = currentScope.clone();
+        scopeCopy.reverse();
+        rootNode.SetEnd(&mut scopeCopy, lineNumber);
+        currentScope.pop();
+    } else {
+        jumps.push(currentScope.clone());
+        OutlineKeyword::EditScopes(outline, &currentScope, lineNumber);
+    }
+}
+
 
