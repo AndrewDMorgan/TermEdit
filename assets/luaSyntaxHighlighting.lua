@@ -1,5 +1,10 @@
 keywords = {"if", "for", "while", "in", "else", "break", "elseif",
-            "return", "function", "local", "do", "then", "end", "nil"}
+            "return", "function", "local", "do", "then", "end", "nil",
+            "or", "and", "not"}
+mathLogicTokens = {"=", "<", ">", "~", "-", "+", "/", "*"}
+logicTokens = {"=", "<", ">", "~"}
+mathTokens = {"-", "+", "/", "*"}
+
 
 -- checks if a value is in an array
 function Contains (array, query)
@@ -54,13 +59,31 @@ end
 function ParseBasic (lastTokenType, lastToken, nextToken, token)
     if token == "(" or token == ")" then
         return "Parentheses"
-    elseif token == "[" or token == "]" then
+    elseif token == "[" or token == "]" or token == "{" or token == "}" then
         return "Bracket"
-    elseif token == "=" then
+    elseif token == "=" and not Contains(mathLogicTokens, lastToken) and nextToken ~= "=" then
         return "Assignment"
     end
 
     return "Null"  -- no tokens were found yet
+end
+
+-- handles various extras
+function ParseExtras (lastTokenType, lastToken, nextToken, token)
+    if token == ">" or token == "<" then
+        return "Logic"
+    elseif token == "=" and Contains(logicTokens, lastToken) then
+        return "Logic"
+    elseif Contains(logicTokens, token) and nextToken == "=" then
+        return "Logic"
+    elseif Contains(mathTokens, token) then
+        return "Math"
+    elseif token == "=" and (nextToken == "=" or Contains(mathTokens, lastToken)) then
+        return "Math"
+    elseif tonumber(string.sub(token, 1, 1)) ~= nil then
+        return "Number"
+    end
+    return "Null"
 end
 
 -- does the more complex parts of token-parsing (not multi-token flags)
@@ -71,8 +94,13 @@ function ParseTokenType (lastTokenType, lastToken, nextToken, token)
         return tokenType
     end
 
+    local startingCharacter = string.sub(token, 1, 1)
     if Contains(keywords, token) then
         return "Keyword"
+    elseif Contains(mathLogicTokens, token) then
+        return ParseExtras(lastTokenType, lastToken, nextToken, token)
+    elseif string.upper(startingCharacter) == startingCharacter then
+        return "Function"
     end
 end
 

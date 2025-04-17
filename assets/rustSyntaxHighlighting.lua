@@ -86,7 +86,7 @@ end
 
 -- checking for unsafe code
 function Unchecked (token)
-    if token == "unsafe" then
+    if token == "unsafe" or token == "from_raw" then
         return "Unsafe"
     end
 
