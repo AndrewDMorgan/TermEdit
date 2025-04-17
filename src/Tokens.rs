@@ -1,13 +1,15 @@
-// snake case is just bad
-#![allow(non_snake_case, dead_code)]
+// for the old syntax highlighting functions
+#![allow(dead_code)]
 
 // for some reason when I set something just to pass it
 // in as a parameter, it thinks it's never read even though
-// it's read in the function
+// it's read in the function it's passed to
 #![allow(unused_assignments)]
 
+use std::sync::{Arc, Mutex};
 use mlua::{Error, FromLua, Lua, Value};
-//use serde::{Serialize, Deserialize};
+use crate::LuaScripts;
+use crossbeam::thread;
 
 // language file types for syntax highlighting
 #[derive(Clone, Hash, PartialEq, Eq, Debug)]
@@ -65,11 +67,11 @@ pub struct LuaTuple {
 }
 
 impl FromLua for LuaTuple {
-    fn from_lua(values: mlua::Value, _lua: &Lua) -> mlua::Result<Self> {
+    fn from_lua(values: Value, _lua: &Lua) -> mlua::Result<Self> {
         let table: mlua::Table = match values.as_table() {
             Some(t) => t.clone(),
             _ => {
-                return Err(mlua::Error::FromLuaConversionError {
+                return Err(Error::FromLuaConversionError {
                     from: "MultiValue",
                     to: "Token".to_string(),
                     message: Some("Expected a Lua table".to_string()),
@@ -80,7 +82,7 @@ impl FromLua for LuaTuple {
         let token;
         let tokenValue: Result <Value, _> = table.get(1);
         if tokenValue.is_ok() {
-            let tokenValue = tokenValue.unwrap();
+            let tokenValue = tokenValue?;
             if tokenValue.is_string() {
                 token = match tokenValue.as_string_lossy().unwrap_or(String::new()).as_str() {
                     "Bracket" => Ok(TokenType::Bracket),
@@ -122,7 +124,7 @@ impl FromLua for LuaTuple {
         let text;
         let textValue: Result <Value, _> = table.get(2);
         if textValue.is_ok() {
-            let textValue = textValue.unwrap();
+            let textValue = textValue?;
             if textValue.is_string() {
                 text = Ok(textValue.as_string_lossy().unwrap_or(String::new()));
             } else {
@@ -251,15 +253,17 @@ lazy_static::lazy_static! {
     ];
 }
 
-fn GenerateTokenStrs (text: &str) -> Vec <String> {
+fn GenerateTokenStrs (text: &str) -> Arc <Mutex <Vec <String>>> {
     let mut current = "".to_string();
-    let mut tokenStrs: Vec <String> = vec!();
+    let tokenStrs: Arc <Mutex <Vec <String>>> = Arc::new(Mutex::new(vec![]));
+    let tokenStrsClone = Arc::clone(&tokenStrs);
+    let mut tokenStrsClone = tokenStrsClone.lock().unwrap();
     for character in text.chars() {
         if !current.is_empty() && LINE_BREAKS.contains(&character.to_string()) {
-            tokenStrs.push(current.clone());
+            tokenStrsClone.push(current.clone());
             current.clear();
             current.push(character);
-            tokenStrs.push(current.clone());
+            tokenStrsClone.push(current.clone());
             current.clear();
             continue
         }
@@ -273,10 +277,10 @@ fn GenerateTokenStrs (text: &str) -> Vec <String> {
         }
 
         if !valid {  continue;  }
-        tokenStrs.push(current.clone());
+        tokenStrsClone.push(current.clone());
         current.clear();
     }
-    tokenStrs.push(current);
+    tokenStrsClone.push(current);
     tokenStrs
 }
 
@@ -829,12 +833,12 @@ fn HandleGettingImpl (
     }
 }
 
-pub async fn GenerateTokens (
+pub async fn GenerateTokens <'a> (
     text: String, fileType: &str,
     mut lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
     lineNumber: usize,
     mut outline: &mut Vec<OutlineKeyword>,
-    luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>,
+    luaSyntaxHighlightScripts: &LuaScripts,
 ) -> Vec <LuaTuple> {
     let tokenStrs = GenerateTokenStrs(text.as_str());
 
@@ -848,46 +852,58 @@ pub async fn GenerateTokens (
     }
 
     // calling the lua script
-    let asyncLuaCall;
-    if let Some(script) = luaSyntaxHighlightScripts.get(&language) {
-        asyncLuaCall = script.call_async(tokenStrs);
+    //let luaHighlightingScripts = Arc::clone(&luaSyntaxHighlightScripts);
+    //let luaHighlightingScripts: &'a MutexGuard <std::collections::HashMap <Languages, mlua::Function>> =
+    //    &luaHighlightingScripts.lock().unwrap();
+    let script: Arc <&mlua::Function>;
+    let highlightingScript = luaSyntaxHighlightScripts.lock().unwrap();
+    if highlightingScript.contains_key(&language) {
+        script = Arc::clone(&Arc::from(&highlightingScript[&language]));
     } else {
-        // there has to be at least a null option
-        let script = luaSyntaxHighlightScripts
-            .get(&Languages::Null)
-            .unwrap();
-        asyncLuaCall = script.call_async(tokenStrs);
+        script = Arc::clone(&Arc::from(&highlightingScript[&Languages::Null]));
     }
 
-    // replace this with lua
-    // getting any necessary flags
-    //let flags = GetLineFlags (&tokenStrs);
-    
-    // replace this with lua
-    //let mut tokens = GetTokens(&tokenStrs, flags, fileType);
+    // spawning the threads
+    let mut tokens: Vec <LuaTuple> = vec!();
+    let mut line: Vec <Vec <LineTokenFlags>> = vec!();  // all of these have to be pre-allocated (and initialized)
+    let mut previousFlagSet: &Vec <LineTokenFlags> = &vec!();
+    let _ = thread::scope(|s| {
+        let tokensWrapped: Arc<Mutex<Vec <LuaTuple>>> = Arc::new(Mutex::new(vec!()));
 
-    // dealing with the line token stuff (running while lua is doing async stuff)
-    while lineTokenFlags.len() < lineNumber + 1 {
-        lineTokenFlags.push(vec!());  // new line
-    }
+        let scriptClone = Arc::clone(&script);
+        let tokensClone = Arc::clone(&tokensWrapped);
+        let tokenStrsClone = Arc::clone(&tokenStrs);
+        let handle = s.spawn(move |_| {
+            let result = scriptClone.call(tokenStrsClone.lock().unwrap().clone());
+            *tokensClone.lock().unwrap() = result.unwrap();
+        });
 
-    // dealing with the line token stuff (running while lua is doing async stuff)
-    let line: Vec <Vec <LineTokenFlags>>;
-    let previousFlagSet: &Vec <LineTokenFlags> = {
-        if lineNumber == 0 || lineTokenFlags[lineNumber - 1].len() == 0 {  &vec!()  }
-        else {
-            line = lineTokenFlags[lineNumber - 1].clone();
-            line.last().unwrap()
+
+        // intermediary code
+        while lineTokenFlags.len() < lineNumber + 1 {
+            lineTokenFlags.push(vec!());  // new line
         }
-    };
 
-    lineTokenFlags[lineNumber].clear();
+        // dealing with the line token stuff (running while lua is doing async stuff)
+        if lineNumber != 0 && lineTokenFlags[lineNumber - 1].len() != 0 {
+            previousFlagSet = {
+                line = lineTokenFlags[lineNumber - 1].clone();
+                line.last().unwrap()
+            };
+        }
 
-    // join lua in right here
-    let mut tokens: Vec <LuaTuple> = asyncLuaCall.await.unwrap();
-    //let mut tokens = vec!();
+        lineTokenFlags[lineNumber].clear();
 
 
+        // joining the thread
+        let _ = handle.join();
+        tokens = Arc::try_unwrap(tokensWrapped)
+            .unwrap()
+            .into_inner()
+            .unwrap();
+    }).unwrap();
+
+    // handling everything that requires the tokens to be calculated
     GenerateLineTokenFlags(&mut lineTokenFlags,
                            &tokens,
                            &previousFlagSet,

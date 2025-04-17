@@ -5,6 +5,7 @@ use ratatui::{
     text::{Line, Span},
 };
 use crate::Colors::Colors;
+use crate::LuaScripts;
 use crate::Tokens::*;
 
 
@@ -15,10 +16,10 @@ const CENTER_BOUNDS: usize = 0;
 
 pub mod Edits {
     use crate::Tokens::*;
-    use crate::CodeTab;
+    use crate::{CodeTab, LuaScripts};
 
     // private sense it's not needed elsewhere (essentially just a modified copy of handleHighlights...)
-    async fn RemoveText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    async fn RemoveText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), luaSyntaxHighlightScripts: &LuaScripts) {
         if end.0 == start.0 {
             tab.lines[end.0].replace_range(end.1..start.1, "");
             tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
@@ -47,7 +48,7 @@ pub mod Edits {
         tab.cursor = end;
     }
 
-    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String, luaSyntaxHighlightScripts: &LuaScripts) {
         let splitText = text.split('\n');
         //let splitLength = splitText.clone().count() - 1;
         for (i, line) in splitText.enumerate() {
@@ -86,11 +87,11 @@ pub mod Edits {
     }
 
     impl Deletion {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await
         }
     }
@@ -103,11 +104,11 @@ pub mod Edits {
     }
 
     impl Addition {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await;
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
         }
     }
@@ -118,7 +119,7 @@ pub mod Edits {
     }
 
     impl NewLine {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.remove(self.position.0 + 1);
             tab.lineTokenFlags.remove(self.position.0 + 1);
@@ -130,7 +131,7 @@ pub mod Edits {
             (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
@@ -153,7 +154,7 @@ pub mod Edits {
     }
 
     impl RemoveLine {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
@@ -169,7 +170,7 @@ pub mod Edits {
             (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.remove(self.position.0 + 1);
             tab.lineTokenFlags.remove(self.position.0 + 1);
@@ -264,7 +265,7 @@ impl CodeTab {
         }
     }
 
-    pub async fn Undo (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn Undo (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
             0
@@ -294,7 +295,7 @@ impl CodeTab {
         }
     }
 
-    pub async fn Redo (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn Redo (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
         // resetting a bunch of things
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -502,7 +503,7 @@ impl CodeTab {
         );
     }
 
-    pub async fn InsertChars (&mut self, chs: String, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn InsertChars (&mut self, chs: String, luaSyntaxHighlightScripts: &LuaScripts) {
         self.redoneBuffer.clear();
         let mut changeBuff = vec!();
 
@@ -551,7 +552,7 @@ impl CodeTab {
         (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
-    pub async fn UnIndent (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn UnIndent (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
         self.redoneBuffer.clear();
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -653,7 +654,7 @@ impl CodeTab {
         );
     }
 
-    pub async fn LineBreakIn (&mut self, highlight: bool, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn LineBreakIn (&mut self, highlight: bool, luaSyntaxHighlightScripts: &LuaScripts) {
         self.redoneBuffer.clear();
         self.changeBuffer.push(
             vec![
@@ -709,7 +710,7 @@ impl CodeTab {
 
     }
 
-    pub async fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) -> bool {
+    pub async fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>, luaSyntaxHighlightScripts: &LuaScripts) -> bool {
         self.redoneBuffer.clear();
         if self.highlighting && self.cursorEnd != self.cursor {
             if self.cursorEnd.0 < self.cursor.0 ||
@@ -854,7 +855,7 @@ impl CodeTab {
     // cursorOffset can be used to delete in multiple directions
     // if the cursorOffset is equal to numDel, it'll delete to the right
     // cursorOffset = 0 is default and dels to the left
-    pub async fn DelChars (&mut self, numDel: usize, cursorOffset: usize, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+    pub async fn DelChars (&mut self, numDel: usize, cursorOffset: usize, luaSyntaxHighlightScripts: &LuaScripts) {
         self.redoneBuffer.clear();
 
         // deleting characters from scrolling
@@ -975,8 +976,7 @@ impl CodeTab {
     pub async fn RecalcTokens (&mut self,
                          lineNumber: usize,
                          recursed: usize,
-                         luaSyntaxHighlightScripts:
-                            &std::collections::HashMap <Languages, mlua::Function>
+                         luaSyntaxHighlightScripts: &LuaScripts
     ) {
         if lineNumber >= self.lines.len() {  return;  }
         let containedComment =

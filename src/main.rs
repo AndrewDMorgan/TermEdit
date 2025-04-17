@@ -105,7 +105,7 @@ impl FileBrowser {
             .into_owned();
         if let Ok(paths) = std::fs::read_dir(pathInput.clone()) {
             for path in paths.flatten() {
-                if std::fs::FileType::is_file(&path.file_type().unwrap()) {
+                if std::fs::FileType::is_file(&path.file_type()?) {
                     let name = path.file_name().to_str().unwrap_or("").to_string();
 
                     // so it doesn't try and load invalid files
@@ -162,6 +162,7 @@ pub enum MenuState {
     Settings
 }
 
+type LuaScripts = std::sync::Arc<std::sync::Mutex<std::collections::HashMap <Languages, mlua::Function>>>;
 
 #[derive(Debug, Default)]
 pub struct App <'a> {
@@ -189,7 +190,7 @@ pub struct App <'a> {
 
     lastTab: usize,
 
-    luaSyntaxHighlightScripts: std::collections::HashMap <Languages, mlua::Function>,
+    luaSyntaxHighlightScripts: LuaScripts,
 }
 
 impl <'a> App <'a> {
@@ -205,7 +206,7 @@ impl <'a> App <'a> {
             std::fs::read_to_string("assets/nullSyntaxHighlighting.lua")?
         ).exec().unwrap();
 
-        self.luaSyntaxHighlightScripts.insert(
+        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
             Languages::Null,
                 lua.globals().get("GetTokens").unwrap()
         );
@@ -216,7 +217,7 @@ impl <'a> App <'a> {
             std::fs::read_to_string("assets/rustSyntaxHighlighting.lua")?
         ).exec().unwrap();
 
-        self.luaSyntaxHighlightScripts.insert(
+        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
             Languages::Null,
                 lua.globals().get("GetTokens").unwrap()
         );
@@ -227,7 +228,7 @@ impl <'a> App <'a> {
             std::fs::read_to_string("assets/luaSyntaxHighlighting.lua")?
         ).exec().unwrap();
 
-        self.luaSyntaxHighlightScripts.insert(
+        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
             Languages::Lua,
             lua.globals().get("GetTokens").unwrap()
         );
