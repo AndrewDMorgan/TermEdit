@@ -50,14 +50,16 @@ pub struct FileBrowser {
     outlineCursor: usize,
 }
 
-static VALID_EXTENSIONS: [&str; 7] = [
+static VALID_EXTENSIONS: [&str; 9] = [
     "txt",
     "rs",
     "py",
     "cpp",
     "hpp",
     "c",
-    "h"
+    "h",
+    "lua",
+    "toml",
 ];
 
 // manages the files for a given project
@@ -186,6 +188,8 @@ pub struct App <'a> {
     currentMenuSettingBox: usize,
 
     lastTab: usize,
+
+    luaSyntaxHighlightScripts: std::collections::HashMap <Languages, mlua::Function>,
 }
 
 impl <'a> App <'a> {
@@ -193,6 +197,40 @@ impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
+
+        // loading the lua syntax highlighting scripts
+        // make this a procedural macro to avoid repetitive writing
+        let lua = mlua::Lua::new();
+        lua.load(
+            std::fs::read_to_string("assets/nullSyntaxHighlighting.lua")?
+        ).exec().unwrap();
+
+        self.luaSyntaxHighlightScripts.insert(
+            Languages::Null,
+                lua.globals().get("GetTokens").unwrap()
+        );
+
+        // rust
+        let lua = mlua::Lua::new();
+        lua.load(
+            std::fs::read_to_string("assets/rustSyntaxHighlighting.lua")?
+        ).exec().unwrap();
+
+        self.luaSyntaxHighlightScripts.insert(
+            Languages::Null,
+                lua.globals().get("GetTokens").unwrap()
+        );
+
+        // lua
+        let lua = mlua::Lua::new();
+        lua.load(
+            std::fs::read_to_string("assets/luaSyntaxHighlighting.lua")?
+        ).exec().unwrap();
+
+        self.luaSyntaxHighlightScripts.insert(
+            Languages::Lua,
+            lua.globals().get("GetTokens").unwrap()
+        );
 
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
@@ -243,8 +281,8 @@ impl <'a> App <'a> {
             }
 
             self.area = terminal.get_frame().area();  // ig this is a thing
-            self.HandleKeyEvents(&keyParser, &mut clipboard);
-            self.HandleMouseEvents(&keyParser);  // not sure if this will be delayed, but I think it should work? idk
+            self.HandleKeyEvents(&keyParser, &mut clipboard).await;
+            self.HandleMouseEvents(&keyParser).await;  // not sure if this will be delayed, but I think it should work? idk
             keyParser.ClearEvents();
         }
 
@@ -409,7 +447,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
+    async fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
         let height = event.position.1.saturating_sub(2) as usize;
         if self.fileBrowser.files.len() > height {
             // loading the file's contents
@@ -443,6 +481,7 @@ impl <'a> App <'a> {
                 lines,
                 ..Default::default()
             };
+            tab.name = name.clone();
 
             tab.fileName = fullPath.clone();
 
@@ -457,8 +496,9 @@ impl <'a> App <'a> {
                                        ending,
                                        &mut tab.lineTokenFlags,
                                        lineNumber,
-                                       &mut tab.outlineKeywords
-                        )
+                                       &mut tab.outlineKeywords,
+                                       &self.luaSyntaxHighlightScripts
+                        ).await
                     }
                 );
                 lineNumber += 1;
@@ -470,7 +510,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent) {
+    async fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent) {
         if  event.position.0 > 29 &&
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 3 &&
@@ -496,7 +536,7 @@ impl <'a> App <'a> {
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 1
         {
-            self.PressedLoadFile(events, event);
+            self.PressedLoadFile(events, event).await;
         }
     }
 
@@ -551,7 +591,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
+    async fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
         // checking for code selection
         if matches!(event.state, MouseState::Release | MouseState::Hold) {
             if event.position.0 > 29 && event.position.1 < self.area.height - 8 &&
@@ -561,7 +601,7 @@ impl <'a> App <'a> {
                 self.HighlightLeftClick(events, event);
             }
         } else if matches!(event.state, MouseState::Press) {
-            self.HandlePress(events, event);
+            self.HandlePress(events, event).await;
         }
     }
 
@@ -569,7 +609,7 @@ impl <'a> App <'a> {
         // todo!
     }
 
-    fn HandleMouseEvents (&mut self, events: &KeyParser) {
+    async fn HandleMouseEvents (&mut self, events: &KeyParser) {
         if let Some(event) = &events.mouseEvent {
             if matches!(self.appState, AppState::Menu) {
                 self.HandleMenuMouseEvents(events, event);
@@ -584,7 +624,7 @@ impl <'a> App <'a> {
                     self.HandleUpScroll(event);
                 },
                 MouseEventType::Left => {
-                    self.HandleLeftClick(events, event);
+                    self.HandleLeftClick(events, event).await;
                 },
                 MouseEventType::Middle => {},
                 MouseEventType::Right => {},
@@ -727,38 +767,41 @@ impl <'a> App <'a> {
             self.codeTabs.tabs.remove(self.lastTab);
             self.codeTabs.tabFileNames.remove(self.codeTabs.currentTab);
             self.codeTabs.currentTab = self.codeTabs.currentTab.saturating_sub(1);
+            if self.lastTab >= self.codeTabs.tabs.len() {
+                self.lastTab = self.codeTabs.tabs.len() - 1;
+            }
         }
     }
 
-    fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // making sure command + s or other commands aren't being pressed
         if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
             for chr in &keyEvents.charEvents {
                 if *chr == '(' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("()".to_string());
+                        .InsertChars("()".to_string(), &self.luaSyntaxHighlightScripts).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '{' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("{}".to_string());
+                        .InsertChars("{}".to_string(), &self.luaSyntaxHighlightScripts).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '[' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("[]".to_string());
+                        .InsertChars("[]".to_string(), &self.luaSyntaxHighlightScripts).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '\"' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("\"\"".to_string());
+                        .InsertChars("\"\"".to_string(), &self.luaSyntaxHighlightScripts).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars(chr.to_string());
+                        .InsertChars(chr.to_string(), &self.luaSyntaxHighlightScripts).await;
                 }
             }
         }
     }
 
-    fn DeleteCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn DeleteCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         let mut numDel = 1;
         let mut offset = 0;
 
@@ -784,7 +827,7 @@ impl <'a> App <'a> {
 
         self.codeTabs.tabs[
             self.lastTab
-        ].DelChars(numDel, offset);
+        ].DelChars(numDel, offset, &self.luaSyntaxHighlightScripts).await;
     }
 
     fn CloseCodePane (&mut self) {
@@ -898,23 +941,23 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleCodeTabPress (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn HandleCodeTabPress (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-            self.codeTabs.tabs[self.lastTab].UnIndent();
+            self.codeTabs.tabs[self.lastTab].UnIndent(&self.luaSyntaxHighlightScripts).await;
         } else {
             if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
                 self.codeTabs.tabs[self.lastTab]
-                    .InsertChars("    ".to_string());
+                    .InsertChars("    ".to_string(), &self.luaSyntaxHighlightScripts).await;
             } else {
                 self.codeTabs.tabs[self.lastTab]
                     .RemoveCurrentToken_NonUpdate();
                 self.codeTabs.tabs[self.lastTab]
-                    .InsertChars(self.suggested.clone());
+                    .InsertChars(self.suggested.clone(), &self.luaSyntaxHighlightScripts).await;
             }
         }
     }
 
-    fn CutCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn CutCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         // get the highlighted section of text.... or the line if none
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         let text = tab.GetSelection();
@@ -922,20 +965,20 @@ impl <'a> App <'a> {
 
         // clearing the rest of the selection
         if tab.highlighting {
-            tab.DelChars(0, 0);
+            tab.DelChars(0, 0, &self.luaSyntaxHighlightScripts).await;
         } else {
             tab.lines[tab.cursor.0].clear();
-            tab.RecalcTokens(tab.cursor.0, 0);
+            tab.RecalcTokens(tab.cursor.0, 0, &self.luaSyntaxHighlightScripts).await;
             (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
 
-    fn PasteCodeLoop (&mut self, splitLength: usize, i: usize) {
+    async fn PasteCodeLoop (&mut self, splitLength: usize, i: usize) {
         let tab = &mut self.codeTabs.tabs[self.lastTab];
 
         if i < splitLength {
             // why does highlight need to be set to true?????? This makes noooo sense??? I give up
-            tab.LineBreakIn(true);
+            tab.LineBreakIn(true, &self.luaSyntaxHighlightScripts).await;
             // making sure all actions occur on the same iteration
         }
         if i >0 && i < splitLength {
@@ -948,7 +991,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn PasteCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn PasteCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         // pasting in the text
         if let Ok(text) = clipBoard.get_text() {
             let splitText = text.split('\n');
@@ -956,9 +999,9 @@ impl <'a> App <'a> {
             for (i, line) in splitText.enumerate() {
                 if line.is_empty() {  continue;  }
                 self.codeTabs.tabs[self.lastTab].InsertChars(
-                    line.to_string()
-                );
-                self.PasteCodeLoop(splitLength, i);
+                    line.to_string(), &self.luaSyntaxHighlightScripts
+                ).await;
+                self.PasteCodeLoop(splitLength, i).await;
             }
         }
     }
@@ -987,16 +1030,16 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleUndoRedoCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn HandleUndoRedoCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
             keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
-            self.codeTabs.tabs[self.lastTab].Redo();
+            self.codeTabs.tabs[self.lastTab].Redo(&self.luaSyntaxHighlightScripts).await;
         } else {
-            self.codeTabs.tabs[self.lastTab].Undo();
+            self.codeTabs.tabs[self.lastTab].Undo(&self.luaSyntaxHighlightScripts).await;
         }
     }
 
-    fn HandleCodeCommands (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn HandleCodeCommands (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.ContainsChar('s')
         {
@@ -1011,7 +1054,7 @@ impl <'a> App <'a> {
                 keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
                 keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
         {
-            self.HandleUndoRedoCode(keyEvents, clipBoard);
+            self.HandleUndoRedoCode(keyEvents, clipBoard).await;
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'c')
         {
@@ -1021,19 +1064,19 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'x')
         {
-            self.CutCode(keyEvents, clipBoard);
+            self.CutCode(keyEvents, clipBoard).await;
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'v')
         {
-            self.PasteCode(keyEvents, clipBoard);
+            self.PasteCode(keyEvents, clipBoard).await;
         }
     }
 
-    fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
-        self.TypeCode(keyEvents, clipBoard);
+    async fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+        self.TypeCode(keyEvents, clipBoard).await;
 
         if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-            self.DeleteCode(keyEvents, clipBoard);
+            self.DeleteCode(keyEvents, clipBoard).await;
         } else if keyEvents.ContainsChar('w') &&
             keyEvents.ContainsModifier(&KeyModifiers::Option)
         {
@@ -1047,11 +1090,11 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
             self.MoveCodeCursorDown(keyEvents, clipBoard);
         } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-            self.HandleCodeTabPress(keyEvents, clipBoard);
+            self.HandleCodeTabPress(keyEvents, clipBoard).await;
         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-            self.codeTabs.tabs[self.lastTab].LineBreakIn(false);  // can't be highlighting if breaking?
+            self.codeTabs.tabs[self.lastTab].LineBreakIn(false, &self.luaSyntaxHighlightScripts).await;  // can't be highlighting if breaking?
         } else {
-            self.HandleCodeCommands(keyEvents, clipBoard);
+            self.HandleCodeCommands(keyEvents, clipBoard).await;
         }
     }
 
@@ -1196,7 +1239,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
         match self.appState {
             AppState::CommandPrompt => {
                 self.HandleCommandPromptKeyEvents(keyEvents);
@@ -1204,7 +1247,7 @@ impl <'a> App <'a> {
             AppState::Tabs => {
                 match self.tabState {
                     TabState::Code if self.codeTabs.tabs.len() > 0 => {
-                        self.HandleCodeKeyEvents(keyEvents, clipBoard);
+                        self.HandleCodeKeyEvents(keyEvents, clipBoard).await;
                     },
                     _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
                 }
@@ -2003,6 +2046,26 @@ todo!! make it so when too many tabs are open it doesn't just crash and die...
 
 Todo!!! Make it so that when typing, it only recalculates the current token selected rather than the whole line
 Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage
+
+fix the scroll bar rendering and general right most interface rendering when in a split pane
+
+use lua for syntax highlighting and dynamically dispatch the files
+    find an efficient way to interface with it without constantly re-compiling or anything
+    it'll need it's own thread
+    maybe do a joint system to allow instant re-calcs while still giving customization
+only update the basic 1-line token syntax highlighting for the token currently selected?
+
+it seems the farthest right panes tend to run slower?
+
+tokio and ratatui seem to be the biggest cpu hogs. It might be worth managing threads on
+    this end or even doing custom rendering instead of using ratatui.
+    I can't even see really much of anything coming from this project's end of the code
+    (using flamegraph)
+
+    why not, just remake it all. Ig I must hate myself or something
+    Hopefully it'll be faster, and ig I'll learn much more about async rust
+
+there are some bugs with closing tabs
 
 */
 

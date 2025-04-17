@@ -4,7 +4,6 @@ use ratatui::{
     style::{Stylize, Modifier},
     text::{Line, Span},
 };
-
 use crate::Colors::Colors;
 use crate::Tokens::*;
 
@@ -19,15 +18,15 @@ pub mod Edits {
     use crate::CodeTab;
 
     // private sense it's not needed elsewhere (essentially just a modified copy of handleHighlights...)
-    fn RemoveText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize)) {
+    async fn RemoveText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         if end.0 == start.0 {
             tab.lines[end.0].replace_range(end.1..start.1, "");
-            tab.RecalcTokens(end.0, 0);
+            tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
         } else {
             tab.lines[end.0].replace_range(end.1.., "");
-            tab.RecalcTokens(end.0, 0);
+            tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
             tab.lines[end.0].replace_range(..start.1, "");
-            tab.RecalcTokens(start.0, 0);
+            tab.RecalcTokens(start.0, 0, luaSyntaxHighlightScripts).await;
             // go through any inbetween lines and delete them. Also delete one extra line so there aren't to blanks?
             let numBetween = start.0 - end.0 - 1;
             for _ in 0..numBetween {
@@ -38,7 +37,7 @@ pub mod Edits {
             // push the next line onto the first...
             let nextLine = tab.lines[end.0 + 1].clone();
             tab.lines[end.0].push_str(nextLine.as_str());
-            tab.RecalcTokens(end.0, 0);
+            tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
             tab.lines.remove(end.0 + 1);
             tab.lineTokens.remove(end.0 + 1);
             tab.lineTokenFlags.remove(end.0 + 1);
@@ -48,7 +47,7 @@ pub mod Edits {
         tab.cursor = end;
     }
 
-    fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String) {
+    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         let splitText = text.split('\n');
         //let splitLength = splitText.clone().count() - 1;
         for (i, line) in splitText.enumerate() {
@@ -56,7 +55,7 @@ pub mod Edits {
                 tab.lines.insert(end.0 + i, "".to_string());
                 tab.lineTokens.insert(end.0 + i, vec![]);
                 tab.lineTokenFlags.insert(end.0 + i, vec![]);
-                tab.RecalcTokens(end.0 + i, 0);
+                tab.RecalcTokens(end.0 + i, 0, luaSyntaxHighlightScripts).await;
                 continue;
             }
 
@@ -66,12 +65,12 @@ pub mod Edits {
                 } else {
                     tab.lines[end.0].insert_str(end.1, line);
                 }
-                tab.RecalcTokens(end.0, 0);
+                tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
             } else {
                 tab.lines.insert(end.0 + i, line.to_string());
                 tab.lineTokenFlags.insert(end.0 + i, vec![]);
                 tab.lineTokens.insert(end.0 + i, vec![]);
-                tab.RecalcTokens(end.0 + i, 0);
+                tab.RecalcTokens(end.0 + i, 0, luaSyntaxHighlightScripts).await;
             }
         }
         
@@ -87,12 +86,12 @@ pub mod Edits {
     }
 
     impl Deletion {
-        pub fn Undo (&self, tab: &mut CodeTab) {
-            AddText(tab, self.start, self.end, &self.text);
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
         }
         
-        pub fn Redo (&self, tab: &mut CodeTab) {
-            RemoveText(tab, self.start, self.end)
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await
         }
     }
     
@@ -104,12 +103,12 @@ pub mod Edits {
     }
 
     impl Addition {
-        pub fn Undo (&self, tab: &mut CodeTab) {
-            RemoveText(tab, self.start, self.end);
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await;
         }
         
-        pub fn Redo (&self, tab: &mut CodeTab) {
-            AddText(tab, self.start, self.end, &self.text);
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
+            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
         }
     }
 
@@ -119,26 +118,26 @@ pub mod Edits {
     }
 
     impl NewLine {
-        pub fn Undo (&self, tab: &mut CodeTab) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.remove(self.position.0 + 1);
             tab.lineTokenFlags.remove(self.position.0 + 1);
             tab.lines[self.position.0].push_str(text.as_str());
-            tab.RecalcTokens(self.position.0, 0);
+            tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
             (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub fn Redo (&self, tab: &mut CodeTab) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
             tab.lineTokens.insert(self.position.0 + 1, vec![]);
             tab.lineTokenFlags.insert(self.position.0 + 1, vec![]);
-            tab.RecalcTokens(self.position.0 + 1, 0);
-            tab.RecalcTokens(self.position.0, 0);
+            tab.RecalcTokens(self.position.0 + 1, 0, luaSyntaxHighlightScripts).await;
+            tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor = (
                 self.position.0 + 1,
@@ -154,14 +153,14 @@ pub mod Edits {
     }
 
     impl RemoveLine {
-        pub fn Undo (&self, tab: &mut CodeTab) {
+        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
             tab.lineTokens.insert(self.position.0 + 1, vec![]);
             tab.lineTokenFlags.insert(self.position.0 + 1, vec![]);
-            tab.RecalcTokens(self.position.0 + 1, 0);
-            tab.RecalcTokens(self.position.0, 0);
+            tab.RecalcTokens(self.position.0 + 1, 0, luaSyntaxHighlightScripts).await;
+            tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor = (
                 self.position.0 + 1,
@@ -170,12 +169,12 @@ pub mod Edits {
             (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub fn Redo (&self, tab: &mut CodeTab) {
+        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.remove(self.position.0 + 1);
             tab.lineTokenFlags.remove(self.position.0 + 1);
             tab.lines[self.position.0].push_str(text.as_str());
-            tab.RecalcTokens(self.position.0, 0);
+            tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
@@ -197,7 +196,7 @@ pub mod Edits {
 pub struct CodeTab {
     pub cursor: (usize, usize),  // line pos, char pos inside line
     pub lines: Vec <String>,
-    pub lineTokens: Vec <Vec <(TokenType, String)>>,
+    pub lineTokens: Vec <Vec <LuaTuple>>,
     pub scopeJumps: Vec <Vec <usize>>,  // points to the index of the scope (needs adjusting as the tree is modified)
     pub scopes: ScopeNode,
     pub linearScopes: Vec <Vec <usize>>,
@@ -228,44 +227,44 @@ impl CodeTab {
 
     pub fn GetCurrentToken (&self, tokenOutput: &mut Vec <String>) {
         let mut accumulate = 0;
-        for (tokenIndex, (_token, text)) in self.lineTokens[self.cursor.0].iter().enumerate() {
+        for (tokenIndex, token) in self.lineTokens[self.cursor.0].iter().enumerate() {
             // the cursor can be just right of it, in it, but not just left
-            if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
-                tokenOutput.push(text.clone());
+            if (accumulate + token.text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
+                tokenOutput.push(token.text.clone());
                 for index in (0..tokenIndex).rev() {
-                    if matches!(self.lineTokens[self.cursor.0][index].1.as_str(),
+                    if matches!(self.lineTokens[self.cursor.0][index].text.as_str(),
                         " " | "," | "(" | ")" | ";")
                         {  break;  }
                     if index > 1 &&
-                        self.lineTokens[self.cursor.0][index].1 == ":" &&
-                        self.lineTokens[self.cursor.0][index - 1].1 == ":"
+                        self.lineTokens[self.cursor.0][index].text == ":" &&
+                        self.lineTokens[self.cursor.0][index - 1].text == ":"
                     {
-                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 2].1.clone());
-                    } else if index > 0 && self.lineTokens[self.cursor.0][index].1 == "." {
-                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 1].1.clone());
+                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 2].text.clone());
+                    } else if index > 0 && self.lineTokens[self.cursor.0][index].text == "." {
+                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 1].text.clone());
                     }
                 }
                 return;
             }
-            accumulate += text.len();
+            accumulate += token.text.len();
         }
     }
 
     // doesn't update the tokens or scopes; requires that to be done elsewhere
     pub fn RemoveCurrentToken_NonUpdate (&mut self) {
         let mut accumulate = 0;
-        for (_token, text) in self.lineTokens[self.cursor.0].iter() {
+        for token in self.lineTokens[self.cursor.0].iter() {
             // the cursor can be just right of it, in it, but not just left
-            if (accumulate + text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
-                self.lines[self.cursor.0].replace_range(accumulate..accumulate+text.len(), "");
+            if (accumulate + token.text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
+                self.lines[self.cursor.0].replace_range(accumulate..accumulate+token.text.len(), "");
                 self.cursor.1 = accumulate;
                 return;
             }
-            accumulate += text.len();
+            accumulate += token.text.len();
         }
     }
 
-    pub fn Undo (&mut self) {
+    pub async fn Undo (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
             0
@@ -278,16 +277,16 @@ impl CodeTab {
             for edit in &edits {
                 match edit {
                     Edits::Edit::Addition (action) => {
-                        action.Undo( self);
+                        action.Undo( self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::Deletion (action) => {
-                        action.Undo(self);
+                        action.Undo(self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::RemoveLine (action) => {
-                        action.Undo(self);
+                        action.Undo(self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::NewLine (action) => {
-                        action.Undo(self);
+                        action.Undo(self, luaSyntaxHighlightScripts).await;
                     },
                 }
             }
@@ -295,7 +294,7 @@ impl CodeTab {
         }
     }
 
-    pub fn Redo (&mut self) {
+    pub async fn Redo (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         // resetting a bunch of things
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -309,16 +308,16 @@ impl CodeTab {
             for edit in &edits {
                 match edit {
                     Edits::Edit::Addition (action)      => {
-                        action.Redo(self);
+                        action.Redo(self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::Deletion (action)      => {
-                        action.Redo(self);
+                        action.Redo(self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::RemoveLine (action) => {
-                        action.Redo(self);
+                        action.Redo(self, luaSyntaxHighlightScripts).await;
                     },
                     Edits::Edit::NewLine (action)       => {
-                        action.Redo(self);
+                        action.Redo(self, luaSyntaxHighlightScripts).await;
                     },
                 }
             }
@@ -358,12 +357,12 @@ impl CodeTab {
         }
         
         let mut totalLine = String::new();
-        for (_token, name) in &self.lineTokens[self.cursor.0] {
-            if totalLine.len() + name.len() >= self.cursor.1 {
+        for token in &self.lineTokens[self.cursor.0] {
+            if totalLine.len() + token.text.len() >= self.cursor.1 {
                 self.cursor.1 = totalLine.len();
                 return;
             }
-            totalLine.push_str(name);
+            totalLine.push_str(token.text.as_str());
         }
     }
 
@@ -382,12 +381,12 @@ impl CodeTab {
         }
 
         let mut totalLine = String::new();
-        for (_token, name) in &self.lineTokens[self.cursor.0] {
-            if totalLine.len() + name.len() >= newCursor {
+        for token in &self.lineTokens[self.cursor.0] {
+            if totalLine.len() + token.text.len() >= newCursor {
                 newCursor = totalLine.len();
                 break;
             }
-            totalLine.push_str(name);
+            totalLine.push_str(token.text.as_str());
         }
 
         self.cursor.1 - newCursor
@@ -411,12 +410,12 @@ impl CodeTab {
         }
 
         let mut totalLine = String::new();
-        for (_token, name) in &self.lineTokens[self.cursor.0] {
-            if totalLine.len() + name.len() > newCursor {
-                newCursor = totalLine.len() + name.len();
+        for token in &self.lineTokens[self.cursor.0] {
+            if totalLine.len() + token.text.len() > newCursor {
+                newCursor = totalLine.len() + token.text.len();
                 break;
             }
-            totalLine.push_str(name);
+            totalLine.push_str(token.text.as_str());
         }
 
         newCursor - self.cursor.1
@@ -430,12 +429,12 @@ impl CodeTab {
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         let mut totalLine = String::new();
-        for (_token, name) in &self.lineTokens[self.cursor.0] {
-            if *name != " " && totalLine.len() + name.len() > self.cursor.1 {
-                self.cursor.1 = totalLine.len() + name.len();
+        for token in &self.lineTokens[self.cursor.0] {
+            if token.text != " " && totalLine.len() + token.text.len() > self.cursor.1 {
+                self.cursor.1 = totalLine.len() + token.text.len();
                 return;
             }
-            totalLine.push_str(name);
+            totalLine.push_str(token.text.as_str());
         }
     }
     
@@ -503,12 +502,12 @@ impl CodeTab {
         );
     }
 
-    pub fn InsertChars (&mut self, chs: String) {
+    pub async fn InsertChars (&mut self, chs: String, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         self.redoneBuffer.clear();
         let mut changeBuff = vec!();
 
         // doesn't need to exit bc/ chars should still be added
-        self.HandleHighlight(&mut changeBuff);
+        self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts).await;
 
         let preCursor = self.cursor;
 
@@ -547,12 +546,12 @@ impl CodeTab {
             changeBuff
         );
 
-        self.RecalcTokens(self.cursor.0, 0);
+        self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
         (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
-    pub fn UnIndent (&mut self) {
+    pub async fn UnIndent (&mut self, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         self.redoneBuffer.clear();
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -576,7 +575,7 @@ impl CodeTab {
                 for _ in 0..4 {  self.lines[self.cursor.0].remove(0);  }
                 self.cursor.1 = self.cursor.1.saturating_sub(4);
 
-                self.RecalcTokens(self.cursor.0, 0);
+                self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
                 (self.scopes, self.scopeJumps, self.linearScopes) =
                     GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
@@ -654,7 +653,7 @@ impl CodeTab {
         );
     }
 
-    pub fn LineBreakIn (&mut self, highlight: bool) {
+    pub async fn LineBreakIn (&mut self, highlight: bool, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         self.redoneBuffer.clear();
         self.changeBuffer.push(
             vec![
@@ -701,8 +700,8 @@ impl CodeTab {
         );
         self.lineTokenFlags.insert(self.cursor.0 + 1, vec!());
         
-        self.RecalcTokens(self.cursor.0, 0);
-        self.RecalcTokens(self.cursor.0 + 1, 0);
+        self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
+        self.RecalcTokens(self.cursor.0 + 1, 0, luaSyntaxHighlightScripts).await;
         self.cursor.1 = 0;
         self.CursorDown(highlight);
         
@@ -710,7 +709,7 @@ impl CodeTab {
 
     }
 
-    pub fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>) -> bool {
+    pub async fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) -> bool {
         self.redoneBuffer.clear();
         if self.highlighting && self.cursorEnd != self.cursor {
             if self.cursorEnd.0 < self.cursor.0 ||
@@ -727,7 +726,7 @@ impl CodeTab {
                     }));
                     self.lines[self.cursorEnd.0]
                         .replace_range(self.cursorEnd.1..self.cursor.1, "");
-                    self.RecalcTokens(self.cursor.0, 0);
+                    self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
                 } else {
                     let mut accumulative = String::new();
                     accumulative.push_str(
@@ -737,7 +736,7 @@ impl CodeTab {
                     accumulative.push('\n');
                     self.lines[self.cursorEnd.0]
                         .replace_range(self.cursorEnd.1.., "");
-                    self.RecalcTokens(self.cursorEnd.0, 0);
+                    self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
 
                     // go through any inbetween lines and delete them. Also delete one extra line so there aren't to blanks?
                     let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
@@ -758,14 +757,14 @@ impl CodeTab {
                     accumulative.push('\n');
                     self.lines[self.cursorEnd.0 + 1]
                         .replace_range(..self.cursor.1, "");
-                    self.RecalcTokens(self.cursor.0, 0);
+                    self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
                     // push the next line onto the first...
                     let nextLine = self.lines[self.cursorEnd.0 + 1].clone();
                     accumulative.push_str(
                         nextLine.clone().as_str()
                     );  // does a \n go right after this? Or is it not needed??????
                     self.lines[self.cursorEnd.0].push_str(nextLine.as_str());
-                    self.RecalcTokens(self.cursorEnd.0, 0);
+                    self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
                     self.lines.remove(self.cursorEnd.0 + 1);
                     self.lineTokens.remove(self.cursorEnd.0 + 1);
                     self.lineTokenFlags.remove(self.cursorEnd.0 + 1);
@@ -792,7 +791,9 @@ impl CodeTab {
             } else {
                 // swapping the cursor and ending points so the other calculations work
                 (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
-                return self.HandleHighlight(changeBuff);
+                return Box::pin(async move {
+                    self.HandleHighlight(changeBuff, luaSyntaxHighlightScripts).await
+                }).await;
             }
         } false
     }
@@ -853,12 +854,12 @@ impl CodeTab {
     // cursorOffset can be used to delete in multiple directions
     // if the cursorOffset is equal to numDel, it'll delete to the right
     // cursorOffset = 0 is default and dels to the left
-    pub fn DelChars (&mut self, numDel: usize, cursorOffset: usize) {
+    pub async fn DelChars (&mut self, numDel: usize, cursorOffset: usize, luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>) {
         self.redoneBuffer.clear();
 
         // deleting characters from scrolling
         let mut changeBuff = vec!();
-        if self.HandleHighlight(&mut changeBuff) {
+        if self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts).await {
             self.changeBuffer.push(changeBuff);
             return;
         }
@@ -891,7 +892,7 @@ impl CodeTab {
             self.cursor.1 = self.lines[self.cursor.0].len();
 
             self.lines[self.cursor.0].push_str(remaining.as_str());
-            self.RecalcTokens(self.cursor.0, 0);
+            self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
             changeBuff.insert(0,
                 Edits::Edit::Deletion(Edits::Deletion{
@@ -965,13 +966,18 @@ impl CodeTab {
             changeBuff
         );
 
-        self.RecalcTokens(self.cursor.0, 0);
+        self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
         (self.scopes, self.scopeJumps, self.linearScopes) =
             GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
-    pub fn RecalcTokens (&mut self, lineNumber: usize, recursed: usize) {
+    pub async fn RecalcTokens (&mut self,
+                         lineNumber: usize,
+                         recursed: usize,
+                         luaSyntaxHighlightScripts:
+                            &std::collections::HashMap <Languages, mlua::Function>
+    ) {
         if lineNumber >= self.lines.len() {  return;  }
         let containedComment =
             self.lineTokenFlags[lineNumber]
@@ -989,7 +995,8 @@ impl CodeTab {
                     ending, &mut self.lineTokenFlags,
                     lineNumber,
                     &mut self.outlineKeywords,
-        );
+                    luaSyntaxHighlightScripts
+        ).await;
         self.lineTokens[lineNumber] = newTokens;
 
         let currentFlags = self.lineTokenFlags[lineNumber][
@@ -1004,7 +1011,10 @@ impl CodeTab {
                     containedComment || currentFlags.contains(&LineTokenFlags::Comment)
                 ) || recursed < 25
             ) {
-            self.RecalcTokens(lineNumber + 1, recursed + 1);  // cascading any changes further down the file (kinda slow)
+            
+            Box::pin(async move {
+                self.RecalcTokens(lineNumber + 1, recursed + 1, luaSyntaxHighlightScripts).await;  // cascading any changes further down the file (kinda slow)
+            }).await;
         }
         
         // recalculating variables, methods, etc...
@@ -1157,7 +1167,7 @@ impl CodeTab {
                 )
             },
             TokenType::Comment | TokenType::CommentLong => {
-                if text == "todo" || text == "!" ||
+                if text == "todo" || text == "!" || text == "Todo" ||
                     text == "error" || text == "condition" ||
                     text == "conditions" || text == "fix" {
                         text.fg(
@@ -1207,6 +1217,9 @@ impl CodeTab {
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                 ).italic().underlined().on_dark_gray().bold()
+            },
+            TokenType::Grayed => {
+                text.white().dim().italic()
             }
         }
     }
@@ -1302,59 +1315,59 @@ impl CodeTab {
             } else {
                 coloredLeft.push((lineNumberText.len(), lineNumberText.gray().italic()));
             }
-
+            
             let mut currentCharNum = 0;
-            for (token, text) in &self.lineTokens[lineNumber] {
-                if lineNumber == self.cursor.0 && currentCharNum + text.len() > self.cursor.1 {
+            for token in &self.lineTokens[lineNumber] {
+                if lineNumber == self.cursor.0 && currentCharNum + token.text.len() > self.cursor.1 {
                     if currentCharNum >= self.cursor.1 {
                         if currentCharNum == self.cursor.1 && editingCode {
                             coloredLeft.push((1, "|".to_string().white().bold()));
                         }
                         if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
-                            if self.highlighting && (lineNumber == self.cursorEnd.0 && currentCharNum + text.len() <= self.cursorEnd.1 ||
+                            if self.highlighting && (lineNumber == self.cursorEnd.0 && currentCharNum + token.text.len() <= self.cursorEnd.1 ||
                                 lineNumber == self.cursor.0 && currentCharNum >= self.cursor.1) && self.cursor.0 != self.cursorEnd.0 ||
                                 (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
                                 (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
-                                    currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
+                                    currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                             {
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, text.as_str(), colorMode)
+                                    (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
                                         .on_dark_gray())
                                 );
-                            } else if self.highlighting && currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                                let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
-                                let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
+                            } else if self.highlighting && currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                                let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
+                                let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, txtLeft, colorMode)
+                                    (token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
                                         .on_dark_gray())
                                 );
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, txtRight, colorMode))
+                                    (token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode))
                                 );
                             } else {
                                 coloredRight.push(
-                                    (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
+                                    (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
                                 );
                             }
                         } else {
                             coloredRight.push(
-                                (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
+                                (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
                             );
                         }
                     } else {
                         // (fixed... ugly but works) this can't handle non utf-8 chars... it just crashes because of the char-boundaries
-                        let txt = &text.get(0..text.len() - (
-                                currentCharNum + text.len() - self.cursor.1
+                        let txt = &token.text.get(0..token.text.len() - (
+                                currentCharNum + token.text.len() - self.cursor.1
                         )).unwrap_or("");
                         let leftSize = txt.len();
                         if self.highlighting && (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) {
-                            if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < text.len() &&
+                            if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < token.text.len() &&
                                 self.cursor.0 == self.cursorEnd.0
                             {
                                 coloredLeft.push((
                                     self.cursorEnd.1 - currentCharNum,  // this is greater than the text length.....
                                     self.GenerateColor(
-                                        token,
+                                        &token.token,
                                         &txt[..self.cursorEnd.1 - currentCharNum],
                                         colorMode
                                     )
@@ -1362,7 +1375,7 @@ impl CodeTab {
                                 coloredLeft.push((
                                     txt.len() - (self.cursorEnd.1 - currentCharNum),
                                     self.GenerateColor(
-                                        token,
+                                        &token.token,
                                         &txt[self.cursorEnd.1 - currentCharNum..],
                                         colorMode
                                     ).on_dark_gray()
@@ -1370,13 +1383,13 @@ impl CodeTab {
                             } else {
                                 coloredLeft.push((
                                     txt.len(),
-                                    self.GenerateColor(token, txt, colorMode).on_dark_gray()
+                                    self.GenerateColor(&token.token, txt, colorMode).on_dark_gray()
                                 ));
                             }
                         } else {
                             coloredLeft.push((
                                 txt.len(),
-                                self.GenerateColor(token, txt, colorMode)
+                                self.GenerateColor(&token.token, txt, colorMode)
                             ));
                         }
                         if editingCode {
@@ -1385,18 +1398,18 @@ impl CodeTab {
                                 .white()
                                 .bold()))
                         };
-                        let txt = &text.get(
-                                text.len() - (
-                                    currentCharNum + text.len() - self.cursor.1
-                                )..text.len()
+                        let txt = &token.text.get(
+                            token.text.len() - (
+                                currentCharNum + token.text.len() - self.cursor.1
+                            )..token.text.len()
                         ).unwrap_or("");
 
                         if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
-                            if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + text.len() {
+                            if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + token.text.len() {
                                 coloredRight.push((
                                     self.cursorEnd.1 - (currentCharNum + leftSize),
                                     self.GenerateColor(
-                                        token,
+                                        &token.token,
                                         &txt[..self.cursorEnd.1 - (currentCharNum + leftSize)],
                                         colorMode
                                     ).on_dark_gray()
@@ -1404,7 +1417,7 @@ impl CodeTab {
                                 coloredRight.push((
                                     txt.len() - (self.cursorEnd.1 - (currentCharNum + leftSize)),
                                     self.GenerateColor(
-                                        token,
+                                        &token.token,
                                         &txt[self.cursorEnd.1 - (currentCharNum + leftSize)..],
                                         colorMode
                                     )
@@ -1412,50 +1425,50 @@ impl CodeTab {
                             } else {
                                 coloredRight.push((
                                     txt.len(),
-                                    self.GenerateColor(token, txt, colorMode).on_dark_gray()
+                                    self.GenerateColor(&token.token, txt, colorMode).on_dark_gray()
                                 ));
                             }
                         } else {
                             coloredRight.push((
                                 txt.len(),
-                                self.GenerateColor(token, txt, colorMode)
+                                self.GenerateColor(&token.token, txt, colorMode)
                             ));
                         }
                     }
                 } else if (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) && self.highlighting {
                     if (lineNumber > self.cursorEnd.0 && lineNumber < self.cursor.0) ||
                         (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
-                            currentCharNum >= self.cursorEnd.1 && currentCharNum + text.len() <= self.cursor.1)
+                            currentCharNum >= self.cursorEnd.1 && currentCharNum + token.text.len() <= self.cursor.1)
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
                             .on_dark_gray()));
-                    } else if currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                        let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
-                        let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorMode)));
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorMode)
+                    } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                        let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
+                        let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)));
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)
                             .on_dark_gray()));
-                    } else if (lineNumber == self.cursor.0 && currentCharNum + text.len() <= self.cursor.1 ||
+                    } else if (lineNumber == self.cursor.0 && currentCharNum + token.text.len() <= self.cursor.1 ||
                         lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
                             .on_dark_gray()));
                     } else {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)));
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)));
                     }
                 } else if self.highlighting {
                     if (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
                         (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
-                            currentCharNum >= self.cursor.1 && currentCharNum + text.len() <= self.cursorEnd.1)
+                            currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                     {
-                        coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
                             .on_dark_gray()));
-                    } else if currentCharNum + text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                        let txtRight = &text[self.cursorEnd.1 - currentCharNum..];
-                        let txtLeft = &text[..self.cursorEnd.1 - currentCharNum];
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtLeft, colorMode)
+                    } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
+                        let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
+                        let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
                             .on_dark_gray()));
-                        coloredLeft.push((text.len(), self.GenerateColor(token, txtRight, colorMode)));
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)));
                     } else if (
                         lineNumber == self.cursorEnd.0 &&
                             currentCharNum <= self.cursorEnd.1 ||
@@ -1464,20 +1477,20 @@ impl CodeTab {
                         self.cursorEnd.0 != self.cursor.0
                     {
                         coloredLeft.push(
-                            (text.len(), self.GenerateColor(token, text.as_str(), colorMode)
+                            (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
                                 .on_dark_gray())
                         );
                     } else {
                         coloredLeft.push(
-                            (text.len(), self.GenerateColor(token, text.as_str(), colorMode))
+                            (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
                         );
                     }
                 } else {
-                    coloredLeft.push((text.len(), self.GenerateColor(token, text.as_str(), colorMode)));
+                    coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)));
                     //coloredLeft.push((1, "|".white()))  // shows the tokens    todo (just to pin this line idk)
                 }
 
-                currentCharNum += text.len();
+                currentCharNum += token.text.len();
             }
             if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
                 coloredLeft.push((1, "|".to_string().white().bold()));
@@ -1613,7 +1626,7 @@ impl CodeTabs {
         let error = (area.width as f64 - paddingLeft as f64) / (total as f64) - tabSize as f64;
 
         let tabNumber = std::cmp::min(
-            (positionX - paddingLeft) / tabSize,
+            (positionX.saturating_sub(paddingLeft)) / tabSize,
             self.panes.len() as u16  // no need to sub one bc/ the main tab isn't in the vector
         );
         // error = 0.5

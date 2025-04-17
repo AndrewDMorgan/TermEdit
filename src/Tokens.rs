@@ -1,25 +1,30 @@
 // snake case is just bad
-#![allow(non_snake_case)]
+#![allow(non_snake_case, dead_code)]
 
 // for some reason when I set something just to pass it
 // in as a parameter, it thinks it's never read even though
 // it's read in the function
 #![allow(unused_assignments)]
 
+use mlua::{Error, FromLua, Lua, Value};
+//use serde::{Serialize, Deserialize};
+
 // language file types for syntax highlighting
-#[derive(Clone)]
+#[derive(Clone, Hash, PartialEq, Eq, Debug)]
 pub enum Languages {
     Rust,
     Cpp,
     Python,
     Null,
+    Lua,
 }
 
-static LANGS: [(Languages, &str); 4] = [
+static LANGS: [(Languages, &str); 5] = [
     (Languages::Cpp , "cpp"),
     (Languages::Cpp , "hpp"),
     (Languages::Rust, "rs" ),
     (Languages::Python, "py"),
+    (Languages::Lua, "lua"),
 ];
 
 
@@ -42,7 +47,7 @@ pub enum TokenType {
     Macro,
     Const,
     Barrow,
-    Lifetime,  // goo luck figuring this out vs. a regular string.........
+    Lifetime,
     String,
     Comment,
     Null,
@@ -50,6 +55,85 @@ pub enum TokenType {
     Keyword,
     CommentLong,
     Unsafe,
+    Grayed,
+}
+
+#[derive(Debug)]
+pub struct LuaTuple {
+    pub token: TokenType,
+    pub text: String,
+}
+
+impl FromLua for LuaTuple {
+    fn from_lua(values: mlua::Value, _lua: &Lua) -> mlua::Result<Self> {
+        let table: mlua::Table = match values.as_table() {
+            Some(t) => t.clone(),
+            _ => {
+                return Err(mlua::Error::FromLuaConversionError {
+                    from: "MultiValue",
+                    to: "Token".to_string(),
+                    message: Some("Expected a Lua table".to_string()),
+                })
+            }
+        };
+
+        let token;
+        let tokenValue: Result <Value, _> = table.get(1);
+        if tokenValue.is_ok() {
+            let tokenValue = tokenValue.unwrap();
+            if tokenValue.is_string() {
+                token = match tokenValue.as_string_lossy().unwrap_or(String::new()).as_str() {
+                    "Bracket" => Ok(TokenType::Bracket),
+                    "SquirlyBracket" => Ok(TokenType::SquirlyBracket),
+                    "Parentheses" => Ok(TokenType::Parentheses),
+                    "Variable" => Ok(TokenType::Variable),
+                    "Member" => Ok(TokenType::Member),
+                    "Object" => Ok(TokenType::Object),
+                    "Function" => Ok(TokenType::Function),
+                    "Method" => Ok(TokenType::Method),
+                    "Number" => Ok(TokenType::Number),
+                    "Logic" => Ok(TokenType::Logic),
+                    "Math" => Ok(TokenType::Math),
+                    "Assignment" => Ok(TokenType::Assignment),
+                    "Endl" => Ok(TokenType::Endl),
+                    "Macro" => Ok(TokenType::Macro),
+                    "Const" => Ok(TokenType::Const),
+                    "Barrow" => Ok(TokenType::Barrow),
+                    "Lifetime" => Ok(TokenType::Lifetime),
+                    "String" => Ok(TokenType::String),
+                    "Comment" => Ok(TokenType::Comment),
+                    "Primitive" => Ok(TokenType::Primitive),
+                    "Keyword" => Ok(TokenType::Keyword),
+                    "CommentLong" => Ok(TokenType::CommentLong),
+                    "Unsafe" => Ok(TokenType::Unsafe),
+                    "Grayed" => Ok(TokenType::Grayed),
+                    _ => Ok(TokenType::Null),
+                };
+            } else {
+                //let text = format!("Invalid token arg {:?}", tokenValue);
+                //panic!("{}", text);
+                //token = Err(Error::UserDataTypeMismatch);
+                token = Ok(TokenType::Null)
+            }
+        } else {
+            token = Err(Error::UserDataTypeMismatch);
+        }
+
+        let text;
+        let textValue: Result <Value, _> = table.get(2);
+        if textValue.is_ok() {
+            let textValue = textValue.unwrap();
+            if textValue.is_string() {
+                text = Ok(textValue.as_string_lossy().unwrap_or(String::new()));
+            } else {
+                text = Err(Error::UserDataTypeMismatch);
+            }
+        } else {
+            text = Err(Error::UserDataTypeMismatch);
+        }
+
+        Ok( LuaTuple {token: token?, text: text?} )
+    }
 }
 
 
@@ -408,7 +492,7 @@ fn GetComplexRustTokens (
 
 fn GetTokens (
     tokenStrs: &Vec <String>,
-    flags: &Vec <TokenFlags>,
+    flags: Vec <TokenFlags>,
     fileType: &str
 ) -> Vec <(TokenType, String)> {
     // track strings and track chars and generic inputs (this might allow for detecting lifetimes properly)
@@ -439,19 +523,19 @@ fn GetTokens (
             match language {
                 Languages::Python => GetPythonToken(
                     strToken,
-                    flags,
+                    &flags,
                     index,
                     (nextToken, prevToken)
                 ),
                 Languages::Cpp => GetCppToken(
                     strToken,
-                    flags,
+                    &flags,
                     index,
                     (nextToken, prevToken)
                 ),
                 Languages::Rust => GetRustToken(
                     strToken,
-                    flags,
+                    &flags,
                     index,
                     &tokenStrs,
                     (
@@ -468,24 +552,24 @@ fn GetTokens (
 
 fn GenerateLineTokenFlags (
     lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     previousFlagSet: &Vec <LineTokenFlags>,
     text: &String,
     lineNumber: usize,
 ) {
     // generating the new set
     let mut currentFlags = previousFlagSet.clone();
-    for (index, (token, tokenText)) in tokens.iter().enumerate() {
-        let lastTokenText = tokens[index.saturating_sub(1)].1.clone();
+    for (index, token) in tokens.iter().enumerate() {
+        let lastTokenText = tokens[index.saturating_sub(1)].text.clone();
 
         // not a great system for generics, but hopefully it'll work for now
-        match tokenText.as_str() {
+        match token.text.as_str() {
             // removing comments can still happen within // comments
             "/" if lastTokenText == "*" && currentFlags.contains(&LineTokenFlags::Comment) => {
                 RemoveLineFlag(&mut currentFlags, LineTokenFlags::Comment);
             }
 
-            _ if matches!(token, TokenType::Comment) => {},
+            _ if matches!(token.token, TokenType::Comment) => {},
             // generics
             "<" if text.contains("fn") ||
                 text.contains("struct") ||
@@ -523,7 +607,7 @@ fn GenerateLineTokenFlags (
 }
 
 fn HandleKeyword (
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     text: &String,
@@ -602,7 +686,7 @@ fn HandleKeyword (
 }
 
 fn HandleBinding (
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     txt: &str,
@@ -623,7 +707,7 @@ fn HandleBinding (
             if keyword.keyword.is_empty() {
                 keyword.keyword = tokenText.to_string();
             } else if prevTokens.len() > 1 &&
-                tokens[index.saturating_sub(2)].1 == ":" &&
+                tokens[index.saturating_sub(2)].text == ":" &&
                 !passedEq && keyword.typedType == None
             {
                 if matches!(keyword.kwType, OutlineType::Function) {
@@ -645,7 +729,7 @@ fn HandleBinding (
 
 fn HandleFunctionDef (
     keyword: &mut OutlineKeyword,
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     tokenText: &String,
     index: usize,
@@ -654,15 +738,15 @@ fn HandleFunctionDef (
     if keyword.parameters.is_none() {  keyword.parameters = Some(vec!());  }
     if let Some(parameters) = &mut keyword.parameters {
         parameters.push((
-            tokens[index.saturating_sub(3)].1.clone(),
+            tokens[index.saturating_sub(3)].text.clone(),
             Some({  // collecting all terms until the parameter field ends or a ','
                 let mut text = tokenText.clone();
                 for nextIndex in index+1..tokens.len() {
-                    if tokens[nextIndex].1 == "," ||
+                    if tokens[nextIndex].text == "," ||
                         !lineTokenFlags[lineNumber][nextIndex]
                             .contains(&LineTokenFlags::Parameter)
                     {  break;  }
-                    text.push_str(&tokens[nextIndex].1.clone());
+                    text.push_str(&tokens[nextIndex].text.clone());
                 }
                 text
             })
@@ -671,7 +755,7 @@ fn HandleFunctionDef (
 }
 
 fn HandleDefinitions(
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     outline: &mut Vec <OutlineKeyword>,
     text: &String,
@@ -680,7 +764,7 @@ fn HandleDefinitions(
     let mut nonSet = false;
     let mut prevTokens: Vec <&TokenType> = vec!();
     let mut currentContainer: Option <OutlineKeyword> = None;
-    for (index, (token, tokenText)) in tokens.iter().enumerate() {
+    for (index, token) in tokens.iter().enumerate() {
         // dealing with the outline portion now... (does this need to be in another for-loop?)
         if !nonSet {
             HandleKeyword(
@@ -688,7 +772,7 @@ fn HandleDefinitions(
                 lineTokenFlags,
                 &mut currentContainer,
                 text,
-                tokenText,
+                &token.text,
                 lineNumber,
                 &mut nonSet,
                 &prevTokens,
@@ -696,7 +780,7 @@ fn HandleDefinitions(
             );
         }
 
-        prevTokens.push(token);
+        prevTokens.push(&token.token);
     }
     let mut newOutline: Vec <OutlineKeyword> = vec!();
     for keyWord in outline.iter() {
@@ -715,7 +799,7 @@ fn HandleDefinitions(
 fn HandleImpl (
     currentContainer: Option <OutlineKeyword>,
     outline: &mut Vec <OutlineKeyword>,
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     text: &String,
     lineNumber: usize
 ) {
@@ -724,8 +808,8 @@ fn HandleImpl (
     } else if text.contains("impl") {
         let mut queryName = None;
         for index in (0..tokens.len()).rev() {
-            if !matches!(tokens[index].0, TokenType::Function) {  continue;  }
-            queryName = Some(tokens[index].1.clone());
+            if !matches!(tokens[index].token, TokenType::Function) {  continue;  }
+            queryName = Some(tokens[index].text.clone());
         }
         HandleGettingImpl(outline, &queryName, lineNumber);
     }
@@ -745,24 +829,49 @@ fn HandleGettingImpl (
     }
 }
 
-pub fn GenerateTokens (
+pub async fn GenerateTokens (
     text: String, fileType: &str,
     mut lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
     lineNumber: usize,
     mut outline: &mut Vec<OutlineKeyword>,
-) -> Vec <(TokenType, String)> {
+    luaSyntaxHighlightScripts: &std::collections::HashMap <Languages, mlua::Function>,
+) -> Vec <LuaTuple> {
     let tokenStrs = GenerateTokenStrs(text.as_str());
 
-    // getting any necessary flags
-    let flags = GetLineFlags (&tokenStrs);
-    
-    let mut tokens = GetTokens(&tokenStrs, &flags, fileType);
+    // start a lua execution thread here
+    let mut language = Languages::Null;  // the default
+    for (lang, extension) in LANGS.iter() {
+        if *extension == fileType {
+            language = lang.clone();
+            break;
+        }
+    }
 
-    // dealing with the line token stuff
+    // calling the lua script
+    let asyncLuaCall;
+    if let Some(script) = luaSyntaxHighlightScripts.get(&language) {
+        asyncLuaCall = script.call_async(tokenStrs);
+    } else {
+        // there has to be at least a null option
+        let script = luaSyntaxHighlightScripts
+            .get(&Languages::Null)
+            .unwrap();
+        asyncLuaCall = script.call_async(tokenStrs);
+    }
+
+    // replace this with lua
+    // getting any necessary flags
+    //let flags = GetLineFlags (&tokenStrs);
+    
+    // replace this with lua
+    //let mut tokens = GetTokens(&tokenStrs, flags, fileType);
+
+    // dealing with the line token stuff (running while lua is doing async stuff)
     while lineTokenFlags.len() < lineNumber + 1 {
         lineTokenFlags.push(vec!());  // new line
     }
 
+    // dealing with the line token stuff (running while lua is doing async stuff)
     let line: Vec <Vec <LineTokenFlags>>;
     let previousFlagSet: &Vec <LineTokenFlags> = {
         if lineNumber == 0 || lineTokenFlags[lineNumber - 1].len() == 0 {  &vec!()  }
@@ -773,7 +882,12 @@ pub fn GenerateTokens (
     };
 
     lineTokenFlags[lineNumber].clear();
-    
+
+    // join lua in right here
+    let mut tokens: Vec <LuaTuple> = asyncLuaCall.await.unwrap();
+    //let mut tokens = vec!();
+
+
     GenerateLineTokenFlags(&mut lineTokenFlags,
                            &tokens,
                            &previousFlagSet,
@@ -781,17 +895,17 @@ pub fn GenerateTokens (
                            lineNumber
     );
 
+    for i in 0..tokens.len() {
+        if lineTokenFlags[lineNumber][i].contains(&LineTokenFlags::Comment) {
+            tokens[i].token = TokenType::CommentLong;
+        }
+    }
+
     HandleDefinitions(&tokens,
                       &lineTokenFlags,
                       &mut outline,
                       &text, lineNumber
     );
-
-    for i in 0..tokens.len() {
-        if lineTokenFlags[lineNumber][i].contains(&LineTokenFlags::Comment) {
-            tokens[i].0 = TokenType::CommentLong;
-        }
-    }
     
     tokens
 }
@@ -897,7 +1011,7 @@ fn HandleKeywordIndexes (
 }
 
 fn HandleKeywords (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     outline: &mut Vec <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
@@ -926,7 +1040,7 @@ fn HandleKeywords (
 }
 
 fn HandleKeywordsLoop (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     scopeJumps: &Vec <Vec <usize>>,
     keyword: &mut OutlineKeyword,
@@ -943,11 +1057,11 @@ fn HandleKeywordsLoop (
     {
         let mut public = false;
         let mut currentContainer: Option <OutlineKeyword> = None;
-        for (index, (token, text)) in tokenLines[lineNumber].iter().enumerate() {
-            if text == "}" {  break 'lines;  }
-            else if text == "pub" {  public = true;  }
+        for (index, token) in tokenLines[lineNumber].iter().enumerate() {
+            if token.text == "}" {  break 'lines;  }
+            else if token.text == "pub" {  public = true;  }
 
-            if matches!(token, TokenType::Comment | TokenType::String)
+            if matches!(token.token, TokenType::Comment | TokenType::String)
             {  continue;  }
 
             HandleScopeChecks(
@@ -956,7 +1070,7 @@ fn HandleKeywordsLoop (
                 &mut currentContainer,
                 scopeJumps,
                 keyword,
-                text,
+                &token.text,
                 index,
                 lineNumber,
                 public
@@ -971,7 +1085,7 @@ fn HandleKeywordsLoop (
 }
 
 fn HandleScopeChecks (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     currentContainer: &mut Option <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
@@ -1016,7 +1130,7 @@ fn HandleScopeChecks (
 }
 
 fn HandleKeywordParameterSet (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     keyword: &mut OutlineKeyword,
@@ -1039,13 +1153,13 @@ fn HandleKeywordParameterSet (
         for newCharIndex in index + 2..tokenLines[lineNumber].len() {
             if lineFlags[lineNumber][index].contains(&LineTokenFlags::Comment) ||
                 text == "," {  break;  }
-            let string = &tokenLines[lineNumber][newCharIndex].1.clone();
+            let string = &tokenLines[lineNumber][newCharIndex].text.clone();
             parameterType.push_str(string);
         }
         if let Some(container) = &mut currentContainer {
             container.parameters = Some(
                 vec![(
-                    tokenLines[lineNumber][index.saturating_sub(1)].1.clone(),
+                    tokenLines[lineNumber][index.saturating_sub(1)].text.clone(),
                     Some(parameterType)
                 )]
             );
@@ -1054,7 +1168,7 @@ fn HandleKeywordParameterSet (
 }
 
 fn HandleKeywordParameter (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     keyword: &mut OutlineKeyword,
@@ -1067,7 +1181,7 @@ fn HandleKeywordParameter (
         if !lineFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) {
             break;
         }
-        parameterType.push_str(&tokenLines[lineNumber][newCharIndex].1.clone());
+        parameterType.push_str(&tokenLines[lineNumber][newCharIndex].text.clone());
     }
     if keyword.parameters.is_none() {  keyword.parameters = Some(Vec::new());  }
     if let Some(container) = &mut currentContainer {
@@ -1082,7 +1196,7 @@ fn HandleKeywordParameter (
 }
 
 pub fn UpdateKeywordOutline (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     outline: &mut Vec <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
@@ -1115,7 +1229,7 @@ static VALID_NAMES_TAKE: [&str; 6] = [
 ];
 
 pub fn GenerateScopes (
-    tokenLines: &[Vec <(TokenType, String)>],
+    tokenLines: &[Vec <LuaTuple>],
     lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
     outline: &mut Vec <OutlineKeyword>
 ) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
@@ -1155,24 +1269,24 @@ fn HandleBracketsLayer (
     jumps: &mut Vec <Vec <usize>>,
     linearized: &mut Vec <Vec <usize>>,
     currentScope: &mut Vec <usize>,
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     lineNumber: usize
 ) {
     let mut bracketDepth = 0isize;
     // track the depth; if odd than based on the type of bracket add scope; if even do nothing (scope opened and closed on the same line)
     // use the same on functions to determine if the scope needs to continue or end on that line
-    for (index, (token, name)) in tokens.iter().enumerate() {
+    for (index, token) in tokens.iter().enumerate() {
         CalculateBracketDepth(
             tokens,
-            token,
+            &token.token,
             &mut bracketDepth,
-            name,
+            &token.text,
             index
         );
 
         // checking for something to define the name
-        if matches!(token, TokenType::Keyword | TokenType::Object | TokenType::Function) {
-            if !(VALID_NAMES_NEXT.contains(&name.trim()) || VALID_NAMES_TAKE.contains(&name.trim())) {
+        if matches!(token.token, TokenType::Keyword | TokenType::Object | TokenType::Function) {
+            if !(VALID_NAMES_NEXT.contains(&token.text.trim()) || VALID_NAMES_TAKE.contains(&token.text.trim())) {
                 continue;
             }
 
@@ -1181,7 +1295,7 @@ fn HandleBracketsLayer (
                 rootNode,
                 currentScope,
                 linearized,
-                &name,
+                &token.text,
                 &mut bracketDepth,
                 index,
                 lineNumber
@@ -1194,17 +1308,17 @@ fn HandleBracketsLayer (
 }
 
 fn CalculateBracketDepth (
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     token: &TokenType,
     bracketDepth: &mut isize,
     name: &String,
     index: usize,
 ) {
-    let (_lastToken, lastName) = {
-        if index == 0 {  &(TokenType::Null, "".to_string())  }
+    let lastToken = {
+        if index == 0 {  &LuaTuple { token: TokenType::Null, text: String::new() }  }
         else {  &tokens[index - 1]  }
     };
-    if !(matches!(token, TokenType::Comment) || (lastName == "\"" || lastName == "'") && matches!(token, TokenType::String)) {
+    if !(matches!(token, TokenType::Comment) || (lastToken.text == "\"" || lastToken.text == "'") && matches!(token, TokenType::String)) {
         // checking bracket depth
         if name == "{" {
             *bracketDepth += 1;
@@ -1215,7 +1329,7 @@ fn CalculateBracketDepth (
 }
 
 fn CheckForScopeName (
-      tokens: &Vec <(TokenType, String)>,
+      tokens: &Vec <LuaTuple>,
       rootNode: &mut ScopeNode,
       currentScope: &mut Vec <usize>,
       linearized: &mut Vec <Vec <usize>>,
@@ -1226,12 +1340,12 @@ fn CheckForScopeName (
 ) -> bool {
     // checking the scope to see if ti continues or ends on the same line
     let mut brackDepth = 0isize;
-    for (indx, (token, name)) in tokens.iter().enumerate() {
-        let (_lastToken, lastName) = {
-            if indx == 0 {  &(TokenType::Null, "".to_string())  }
+    for (indx, token) in tokens.iter().enumerate() {
+        let lastToken = {
+            if indx == 0 {  &LuaTuple { token: TokenType::Null, text: String::new() }  }
             else {  &tokens[indx - 1]  }
         };
-        if !(matches!(token, TokenType::Comment) || lastName == "\"" && matches!(token, TokenType::String)) &&
+        if !(matches!(token.token, TokenType::Comment) || lastToken.text == "\"" && matches!(token.token, TokenType::String)) &&
             indx > index
         {
             if name == "{" {
@@ -1256,7 +1370,7 @@ fn CheckForScopeName (
 }
 
 fn UpdateScopes (
-    tokens: &Vec <(TokenType, String)>,
+    tokens: &Vec <LuaTuple>,
     rootNode: &mut ScopeNode,
     currentScope: &mut Vec <usize>,
     linearized: &mut Vec <Vec <usize>>,
@@ -1277,7 +1391,11 @@ fn UpdateScopes (
     // adding the new scope if necessary
     if *brackDepth > 0 {
         if VALID_NAMES_NEXT.contains(&name.trim()) {
-            let nextName = tokens.get(index + 2).unwrap_or(&(TokenType::Null, "".to_string())).1.clone();
+            let nextName = tokens
+                .get(index + 2)
+                .unwrap_or( &LuaTuple { token: TokenType::Null, text: String::new() } )
+                .text
+                .clone();
 
             let mut scopeCopy = currentScope.clone();
             scopeCopy.reverse();
