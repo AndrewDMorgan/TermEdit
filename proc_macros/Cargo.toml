@@ -1,0 +1,13 @@
+[package]
+name = "proc_macros"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0.79", features = ["extra-traits"] }
+mlua = { version = "0.10.3", features = ["luau", "send"] }
+quote = "1.0.40"
+

@@ -9,15 +9,17 @@ use crossterm::terminal::enable_raw_mode;
 use arboard::Clipboard;  // for copy + paste + cut
 use dirs::home_dir;  // auto gets the starting file path
 
+use proc_macros::load_lua_script;
+
+mod StringPatternMatching;
+mod eventHandler;
 mod CodeTabs;
 mod Tokens;
-mod eventHandler;
-mod StringPatternMatching;
 mod Colors;
 
 use StringPatternMatching::*;
-use eventHandler::*;
 use Colors::Colors::*;
+use eventHandler::*;
 use Tokens::*;
 
 use CodeTabs::CodeTab;
@@ -199,38 +201,21 @@ impl <'a> App <'a> {
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
-        // loading the lua syntax highlighting scripts
-        // make this a procedural macro to avoid repetitive writing
-        let lua = mlua::Lua::new();
-        lua.load(
-            std::fs::read_to_string("assets/nullSyntaxHighlighting.lua")?
-        ).exec().unwrap();
-
-        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
+        // loading the lua syntax highlighting scripts (using proc_macros)
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
             Languages::Null,
-                lua.globals().get("GetTokens").unwrap()
+            "assets/nullSyntaxHighlighting.lua"
         );
-
-        // rust
-        let lua = mlua::Lua::new();
-        lua.load(
-            std::fs::read_to_string("assets/rustSyntaxHighlighting.lua")?
-        ).exec().unwrap();
-
-        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
-            Languages::Null,
-                lua.globals().get("GetTokens").unwrap()
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
+            Languages::Rust,
+            "assets/rustSyntaxHighlighting.lua"
         );
-
-        // lua
-        let lua = mlua::Lua::new();
-        lua.load(
-            std::fs::read_to_string("assets/luaSyntaxHighlighting.lua")?
-        ).exec().unwrap();
-
-        self.luaSyntaxHighlightScripts.lock().unwrap().insert(
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
             Languages::Lua,
-            lua.globals().get("GetTokens").unwrap()
+            "assets/luaSyntaxHighlighting.lua"
         );
 
         let mut stdout = std::io::stdout();
@@ -275,6 +260,10 @@ impl <'a> App <'a> {
                     else {5}  // this bit of code is a mess...
                 })) => {
                     terminal.draw(|frame| self.draw(frame))?;
+
+                    // updating any scope threads (very important)
+                    self.codeTabs.CheckScopeThreads();
+
                     if self.exit {
                         break;
                     }
@@ -417,16 +406,19 @@ impl <'a> App <'a> {
         let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((self.area.height - 8) / 2) as usize);
         let line = std::cmp::min(
             event.position.1.saturating_sub(3) as usize + scrollTo,
-            self.codeTabs.tabs[self.lastTab].linearScopes.len() - 1
+            self.codeTabs.tabs[self.lastTab].linearScopes.read().len() - 1
         );
         self.fileBrowser.outlineCursor = line;
-        let scopes = &mut self.codeTabs.tabs[self.lastTab].linearScopes[
+        let scopes = &mut self.codeTabs.tabs[self.lastTab].linearScopes.read()[
             line].clone();
         scopes.reverse();
-        self.codeTabs.tabs[self.lastTab].cursor.0 =
-            self.codeTabs.tabs[self.lastTab].scopes.GetNode(
+        let newCursor = self.codeTabs.tabs[self.lastTab]
+            .scopes
+            .read()
+            .GetNode(
                 scopes
             ).start;
+        self.codeTabs.tabs[self.lastTab].cursor.0 = newCursor;
         self.codeTabs.tabs[self.lastTab].mouseScrolled = 0;
         self.codeTabs.tabs[self.lastTab].mouseScrolledFlt = 0.0;
     }
@@ -486,12 +478,12 @@ impl <'a> App <'a> {
 
             tab.fileName = fullPath.clone();
 
-            tab.lineTokens.clear();
+            tab.lineTokens.write().clear();
             let mut lineNumber = 0;
             let ending = tab.fileName.split('.').last().unwrap_or("");
             for line in tab.lines.iter() {
-                tab.lineTokenFlags.push(vec!());
-                tab.lineTokens.push(
+                tab.lineTokenFlags.write().push(vec!());
+                tab.lineTokens.write().push(
                     {
                         GenerateTokens(line.clone(),
                                        ending,
@@ -504,7 +496,8 @@ impl <'a> App <'a> {
                 );
                 lineNumber += 1;
             }
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
 
             self.codeTabs.tabs.push(tab);
             self.codeTabs.tabFileNames.push(name.clone());
@@ -730,20 +723,23 @@ impl <'a> App <'a> {
     fn HandleFilebrowserKeyEvents (&mut self, keyEvents: &KeyParser) {
         if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
             if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
-                let mut nodePath = self.codeTabs.tabs[self.lastTab].linearScopes[
+                let mut nodePath = self.codeTabs.tabs[self.lastTab].linearScopes.read()[
                     self.fileBrowser.outlineCursor].clone();
                 nodePath.reverse();
-                let node = self.codeTabs.tabs[self.lastTab].scopes.GetNode(
-                    &mut nodePath
-                );
-                let start = node.start;
+                let scopesRead = self.codeTabs.tabs[self.lastTab].scopes.read();
+                let start: usize;
+                {
+                    let node = scopesRead.GetNode(&mut nodePath);
+                    start = node.start;
+                }
+                drop(scopesRead);  // dropped the read
                 self.codeTabs.tabs[self.lastTab].JumpCursor(start, 1);
             } else if keyEvents.ContainsKeyCode(KeyCode::Up) {
                 self.fileBrowser.MoveCursorUp();
             } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
                 self.fileBrowser.MoveCursorDown(
-                    &self.codeTabs.tabs[self.lastTab].linearScopes,
-                    &self.codeTabs.tabs[self.lastTab].scopes);
+                    &self.codeTabs.tabs[self.lastTab].linearScopes.read(),
+                    &self.codeTabs.tabs[self.lastTab].scopes.read());
             }
         }
     }
@@ -906,10 +902,11 @@ impl <'a> App <'a> {
 
         if keyEvents.ContainsModifier(&KeyModifiers::Option) {
             let tab = &mut self.codeTabs.tabs[self.lastTab];
-            let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+            let mut jumps = tab.scopeJumps.read()[tab.cursor.0].clone();
             jumps.reverse();
+            let start = tab.scopes.read().GetNode(&mut jumps).start;
             tab.JumpCursor(
-                tab.scopes.GetNode(&mut jumps).start, 1
+                start, 1
             );
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
             let tab = &mut self.codeTabs.tabs[self.lastTab];
@@ -927,9 +924,10 @@ impl <'a> App <'a> {
 
         if keyEvents.ContainsModifier(&KeyModifiers::Option) {
             let tab = &mut self.codeTabs.tabs[self.lastTab];
-            let mut jumps = tab.scopeJumps[tab.cursor.0].clone();
+            let mut jumps = tab.scopeJumps.read()[tab.cursor.0].clone();
             jumps.reverse();
-            tab.JumpCursor( tab.scopes.GetNode(&mut jumps).end, 1);
+            let end = tab.scopes.read().GetNode(&mut jumps).end;
+            tab.JumpCursor(end, 1);
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
             let tab = &mut self.codeTabs.tabs[self.lastTab];
             tab.scrolled = std::cmp::max(tab.mouseScrolledFlt as isize + tab.scrolled as isize, 0) as usize;
@@ -970,7 +968,8 @@ impl <'a> App <'a> {
         } else {
             tab.lines[tab.cursor.0].clear();
             tab.RecalcTokens(tab.cursor.0, 0, &self.luaSyntaxHighlightScripts).await;
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
 
@@ -1320,7 +1319,12 @@ impl <'a> App <'a> {
             let tabSize = self.codeTabs.GetTabSize(&area, 29);
 
             for tabIndex in 0..=self.codeTabs.panes.len() {
-                self.RenderCodeTab(area, buf, tabIndex, tabSize);
+                self.RenderCodeTab(Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: 29 + tabSize as u16,
+                    height: area.height
+                }, buf, tabIndex, tabSize);
             }
         }
     }
@@ -1372,13 +1376,13 @@ impl <'a> App <'a> {
         let mut offset = String::new();
         if *scopeIndex ==
             self.codeTabs.tabs[self.lastTab]
-                .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
+                .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
             matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
             offset.push('>')
         } else if
         matches!(self.appState, AppState::CommandPrompt) &&
             matches!(self.tabState, TabState::Files) &&
-            self.codeTabs.tabs[self.lastTab].linearScopes[
+            self.codeTabs.tabs[self.lastTab].linearScopes.read()[
                 self.fileBrowser.outlineCursor
                 ] == *scopeIndex {
             offset.push('>');
@@ -1400,7 +1404,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Line>, scopeIndex: &Vec <usize>, scope: &ScopeNode) {
+    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Line>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
         fileStringText.push(
             Line::from(vec![
                 {
@@ -1410,21 +1414,21 @@ impl <'a> App <'a> {
                     // this is a mess...
                     if *scopeIndex ==
                         self.codeTabs.tabs[self.lastTab]
-                            .scopeJumps[self.codeTabs.tabs[self.lastTab].cursor.0] &&
+                            .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
                         matches!(self.appState, AppState::CommandPrompt) &&
                         matches!(self.tabState, TabState::Code)
                     {
-                        self.GetColoredScope(scope.name.clone(), scopeIndex.len()).underlined()
+                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()).underlined()
                     } else if
                         matches!(self.appState, AppState::CommandPrompt) &&
                         matches!(self.tabState, TabState::Files) &&
-                        self.codeTabs.tabs[self.lastTab].linearScopes[
+                        self.codeTabs.tabs[self.lastTab].linearScopes.read()[
                             self.fileBrowser.outlineCursor
                             ] == *scopeIndex
                     {
-                        self.GetColoredScope(scope.name.clone(), scopeIndex.len()).underlined()
+                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()).underlined()
                     } else {
-                        self.GetColoredScope(scope.name.clone(), scopeIndex.len())
+                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len())
                     }
                 },
                 //format!(" ({}, {})", scope.start + 1, scope.end + 1).white(),  // (not enough space for it to fit...)
@@ -1434,7 +1438,7 @@ impl <'a> App <'a> {
 
     fn HandleScrolled(&self, scrolled: usize, newScroll: &mut usize, scopeIndex: &Vec <usize>) {
         let tab = &self.codeTabs.tabs[self.lastTab];
-        if *scopeIndex == tab.scopeJumps[tab.cursor.0] &&
+        if *scopeIndex == tab.scopeJumps.read()[tab.cursor.0] &&
             matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code)
         {
             *newScroll = scrolled - 1;
@@ -1449,7 +1453,7 @@ impl <'a> App <'a> {
         let mut scrolled = 0;
         let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
 
-        for scopeIndex in &self.codeTabs.tabs[self.lastTab].scopeJumps {
+        for scopeIndex in self.codeTabs.tabs[self.lastTab].scopeJumps.read().iter() {
             let mut valid = true;
             for i in 0..scopes.len() {
                 let slice = scopes.get(0..(scopes.len() - i));
@@ -1460,17 +1464,20 @@ impl <'a> App <'a> {
             if !valid || scopeIndex.is_empty() {  continue;  }
             scopes.clear();
 
-            let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
-            for index in scopeIndex {
-                scopes.push(*index);
-                scope = &scope.children[*index];
+            {
+                let scopesWrite = &mut self.codeTabs.tabs[self.lastTab].scopes.write();
+                //let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
+                for index in scopeIndex {
+                    scopes.push(*index);
+                    **scopesWrite = scopesWrite.children[*index].clone();
+                }  // the write is naturally dropped
             }
 
             scrolled += 1;
             self.HandleScrolled(scrolled, &mut newScroll, &scopeIndex);
 
             if scrolled < scrollTo { continue; }
-            self.GetFilebrowserOutline(&mut fileStringText, &scopeIndex, scope);
+            self.GetFilebrowserOutline(&mut fileStringText, &scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
         }
         self.fileBrowser.outlineCursor = newScroll;
         Text::from(fileStringText)
@@ -1522,7 +1529,7 @@ impl <'a> App <'a> {
             tokenSet.pop().unwrap(),
         );
         if let Some(set) = &currentElement {
-            let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+            let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                 set.lineNumber
                 ].clone();
             //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
@@ -1533,12 +1540,15 @@ impl <'a> App <'a> {
             //self.debugInfo.push(' ');
             let newToken = tokenSet.remove(0);
             if let Some(set) = currentElement {
-                let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps[
+                let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                     set.lineNumber
                     ].clone();
                 //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
                 *currentScope = newScope;
-                currentElement = OutlineKeyword::TryFindKeyword(&set.childKeywords, newToken);
+                currentElement = OutlineKeyword::TryFindKeyword(
+                    &std::sync::Arc::new(parking_lot::RwLock::new(set.childKeywords)),
+                    newToken
+                );
             }
         }
     }
@@ -1598,7 +1608,7 @@ impl <'a> App <'a> {
         // self.debugInfo.push_str(&token);
         // self.debugInfo.push_str("}");
         let mut currentScope =
-            self.codeTabs.tabs[self.lastTab].scopeJumps[
+            self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                 self.codeTabs.tabs[self.lastTab].cursor.0
                 ].clone();
         self.CalculateInnerScope(&mut currentScope, &mut tokenSet);
@@ -1618,6 +1628,10 @@ impl <'a> App <'a> {
 
         // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
         self.debugInfo.clear();
+        if self.codeTabs.tabs.len() > 0 {
+            // tracking the memory leak in the scope generation threads (within scope generation)
+            self.debugInfo = format!("Total handles: {} Scope: {} Jumps: {} Outline: {}", self.codeTabs.tabs[0].scopeGenerationHandles.len(), self.codeTabs.tabs[0].linearScopes.read().len(), self.codeTabs.tabs[0].scopeJumps.read().len(), self.codeTabs.tabs[0].outlineKeywords.read().len());
+        }
         /*
         for var in &self.codeTabs.tabs[self.lastTab].outlineKeywords {
             if matches!(var.kwType, OutlineType::Function) {
@@ -2031,42 +2045,23 @@ make a better system that can store keybindings; the user can make a custom one,
 
 Todo! Add the undo-redo change thingy for the replacing chars stuff when auto-filling
 
-
 make the syntax highlighting use known variable/function syntax types once it's known (before use the single line context).
 make the larger context and recalculation of scopes & specific variables be calculated on a thread based on a queue and joined
     once a channel indicates completion. (maybe run this once every second if a change is detected).
 only update the terminal screen if a key input is detected.
-cut down on cpu usage
-
-make suggested code completions render in-line similar to how the file-directories are done
 
 multi-line parameters on functions/methods aren't correctly read
-multi-line comments aren't updated properly when just pressing return
+multi-line comments aren't updated properly when just pressing return (on empty lines)
+    it may not be storing anything on empty lines?
 
 todo!! make it so when too many tabs are open it doesn't just crash and die...
 
 Todo!!! Make it so that when typing, it only recalculates the current token selected rather than the whole line
 Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage
 
-fix the scroll bar rendering and general right most interface rendering when in a split pane
+maybe look at using jit for the lua interfacing.
 
-use lua for syntax highlighting and dynamically dispatch the files
-    find an efficient way to interface with it without constantly re-compiling or anything
-    it'll need it's own thread
-    maybe do a joint system to allow instant re-calcs while still giving customization
-only update the basic 1-line token syntax highlighting for the token currently selected?
-
-it seems the farthest right panes tend to run slower?
-
-tokio and ratatui seem to be the biggest cpu hogs. It might be worth managing threads on
-    this end or even doing custom rendering instead of using ratatui.
-    I can't even see really much of anything coming from this project's end of the code
-    (using flamegraph)
-
-    why not, just remake it all. Ig I must hate myself or something
-    Hopefully it'll be faster, and ig I'll learn much more about async rust
-
-there are some bugs with closing tabs
+it seems the farthest right panes tend to run slower? honestly I'm not sure actually
 
 */
 

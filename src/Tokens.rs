@@ -6,9 +6,11 @@
 // it's read in the function it's passed to
 #![allow(unused_assignments)]
 
-use std::sync::{Arc, Mutex};
 use mlua::{Error, FromLua, Lua, Value};
 use crate::LuaScripts;
+
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 use crossbeam::thread;
 
 // language file types for syntax highlighting
@@ -182,32 +184,44 @@ pub struct OutlineKeyword {
 
 impl OutlineKeyword {
     pub fn EditScopes (outline: &mut Vec <OutlineKeyword>, scope: &Vec <usize>, lineNumber: usize) {
-        for keyword in outline {
+        //let mut outlineWrite = outline.write();
+        for keyword in outline.iter_mut() {
             if keyword.lineNumber == lineNumber {
                 keyword.scope = scope.clone();
                 if matches!(keyword.kwType, OutlineType::Function | OutlineType::Enum | OutlineType::Struct) {
                     keyword.scope.pop();  // seems to fix things? idk
                 }
+                // outlineWrite is dropped
+                //drop(outlineWrite);
                 return;
             }
         }
+        // outlineWrite is dropped
+        //drop(outlineWrite);
     }
 
-    pub fn GetValidScoped (outline: &Vec <OutlineKeyword>, scope: &Vec <usize>) -> Vec <OutlineKeyword> {
+    pub fn GetValidScoped (outline: &Arc <parking_lot::RwLock <Vec <OutlineKeyword>>>, scope: &Vec <usize>) -> Vec <OutlineKeyword> {
         let mut valid: Vec <OutlineKeyword> = vec!();
-        for keyword in outline {
+        let outlineRead = outline.read();
+        for keyword in outlineRead.iter() {
             if keyword.scope.is_empty() || scope.as_slice().starts_with(&keyword.scope.as_slice()) {
                 valid.push(keyword.clone());
             }
-        } valid
+        }
+        // outlineRead is dropped
+        drop(outlineRead);
+        valid
     }
 
-    pub fn TryFindKeyword (outline: &Vec <OutlineKeyword>, queryWord: String) -> Option <OutlineKeyword> {
-        for keyword in outline {
+    pub fn TryFindKeyword (outline: &Arc <parking_lot::RwLock <Vec <OutlineKeyword>>>, queryWord: String) -> Option <OutlineKeyword> {
+        let outlineRead = outline.read();
+        for keyword in outlineRead.iter() {
             if queryWord == keyword.keyword {
                 return Some(keyword.clone());
             }
         }
+        // outlineRead is dropped
+        drop(outlineRead);
         None
     }
 }
@@ -257,7 +271,7 @@ fn GenerateTokenStrs (text: &str) -> Arc <Mutex <Vec <String>>> {
     let mut current = "".to_string();
     let tokenStrs: Arc <Mutex <Vec <String>>> = Arc::new(Mutex::new(vec![]));
     let tokenStrsClone = Arc::clone(&tokenStrs);
-    let mut tokenStrsClone = tokenStrsClone.lock().unwrap();
+    let mut tokenStrsClone = tokenStrsClone.lock();
     for character in text.chars() {
         if !current.is_empty() && LINE_BREAKS.contains(&character.to_string()) {
             tokenStrsClone.push(current.clone());
@@ -555,7 +569,7 @@ fn GetTokens (
 }
 
 fn GenerateLineTokenFlags (
-    lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     tokens: &Vec <LuaTuple>,
     previousFlagSet: &Vec <LineTokenFlags>,
     text: &String,
@@ -606,13 +620,18 @@ fn GenerateLineTokenFlags (
 
             _ => {}
         }
-        lineTokenFlags[lineNumber].push(currentFlags.clone());
+
+        // the .write is being called in a loop, but writes block all other threads and
+        // this is async so it's better to stall this one than the main one
+        let mut tokenFlagsWrite = lineTokenFlags.write();
+        tokenFlagsWrite[lineNumber].push(currentFlags.clone());
+        drop(tokenFlagsWrite);  // dropped the write
     }
 }
 
 fn HandleKeyword (
     tokens: &Vec <LuaTuple>,
-    lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     text: &String,
     tokenText: &String,
@@ -691,7 +710,7 @@ fn HandleKeyword (
 
 fn HandleBinding (
     tokens: &Vec <LuaTuple>,
-    lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     txt: &str,
     tokenText: &String,
@@ -734,7 +753,7 @@ fn HandleBinding (
 fn HandleFunctionDef (
     keyword: &mut OutlineKeyword,
     tokens: &Vec <LuaTuple>,
-    lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     tokenText: &String,
     index: usize,
     lineNumber: usize
@@ -745,13 +764,16 @@ fn HandleFunctionDef (
             tokens[index.saturating_sub(3)].text.clone(),
             Some({  // collecting all terms until the parameter field ends or a ','
                 let mut text = tokenText.clone();
+                let tokenFlagsRead = lineTokenFlags.read();
                 for nextIndex in index+1..tokens.len() {
                     if tokens[nextIndex].text == "," ||
-                        !lineTokenFlags[lineNumber][nextIndex]
+                        !tokenFlagsRead[lineNumber][nextIndex]
                             .contains(&LineTokenFlags::Parameter)
                     {  break;  }
                     text.push_str(&tokens[nextIndex].text.clone());
                 }
+                // tokenFlagsRead is dropped
+                drop(tokenFlagsRead);
                 text
             })
         ));
@@ -760,8 +782,8 @@ fn HandleFunctionDef (
 
 fn HandleDefinitions(
     tokens: &Vec <LuaTuple>,
-    lineTokenFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
-    outline: &mut Vec <OutlineKeyword>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
+    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
     text: &String,
     lineNumber: usize
 ) {
@@ -787,28 +809,34 @@ fn HandleDefinitions(
         prevTokens.push(&token.token);
     }
     let mut newOutline: Vec <OutlineKeyword> = vec!();
-    for keyWord in outline.iter() {
+    let outlineRead = outline.read();
+    for keyWord in outlineRead.iter() {
         if keyWord.lineNumber == lineNumber {  continue;  }
         newOutline.push(keyWord.clone());
     }
+    drop(outlineRead);  // dropped the read
 
-    outline.clear();
+    let mut outlineWrite = outline.write();
+    outlineWrite.clear();  // clearing so this is fine
     for keyWord in newOutline {
-        outline.push(keyWord);
+        outlineWrite.push(keyWord);
     }
+    drop(outlineWrite);  // dropped the .write
 
     HandleImpl(currentContainer, outline, tokens, text, lineNumber);
 }
 
 fn HandleImpl (
     currentContainer: Option <OutlineKeyword>,
-    outline: &mut Vec <OutlineKeyword>,
+    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
     tokens: &Vec <LuaTuple>,
     text: &String,
     lineNumber: usize
 ) {
     if let Some(container) = currentContainer {
-        outline.push(container);
+        // writing to outline; drops in the same line as called
+        // should be fine sense this is called right after being cleared
+        outline.write().push(container);
     } else if text.contains("impl") {
         let mut queryName = None;
         for index in (0..tokens.len()).rev() {
@@ -820,24 +848,28 @@ fn HandleImpl (
 }
 
 fn HandleGettingImpl (
-    outline: &mut Vec <OutlineKeyword>,
+    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
     queryName: &Option <String>,
     lineNumber: usize
 ) {
     if let Some(queryName) = queryName {
-        for container in outline.iter_mut() {
+        // was just cleared so should be fine
+        let mut outlineWrite = outline.write();
+        for container in outlineWrite.iter_mut() {
             if container.keyword != *queryName {  continue;  }
             container.implLines.push(lineNumber);
             break;
         }
+        // outlineWrite is dropped here
+        drop(outlineWrite);
     }
 }
 
-pub async fn GenerateTokens <'a> (
+pub async fn GenerateTokens (
     text: String, fileType: &str,
-    mut lineTokenFlags: &mut Vec <Vec <Vec <LineTokenFlags>>>,
+    lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     lineNumber: usize,
-    mut outline: &mut Vec<OutlineKeyword>,
+    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
     luaSyntaxHighlightScripts: &LuaScripts,
 ) -> Vec <LuaTuple> {
     let tokenStrs = GenerateTokenStrs(text.as_str());
@@ -851,10 +883,7 @@ pub async fn GenerateTokens <'a> (
         }
     }
 
-    // calling the lua script
-    //let luaHighlightingScripts = Arc::clone(&luaSyntaxHighlightScripts);
-    //let luaHighlightingScripts: &'a MutexGuard <std::collections::HashMap <Languages, mlua::Function>> =
-    //    &luaHighlightingScripts.lock().unwrap();
+    // calling the lua script (dealing with annoying async stuff)
     let script: Arc <&mlua::Function>;
     let highlightingScript = luaSyntaxHighlightScripts.lock().unwrap();
     if highlightingScript.contains_key(&language) {
@@ -874,52 +903,59 @@ pub async fn GenerateTokens <'a> (
         let tokensClone = Arc::clone(&tokensWrapped);
         let tokenStrsClone = Arc::clone(&tokenStrs);
         let handle = s.spawn(move |_| {
-            let result = scriptClone.call(tokenStrsClone.lock().unwrap().clone());
-            *tokensClone.lock().unwrap() = result.unwrap();
+            let result = scriptClone.call(tokenStrsClone.lock().clone());
+            *tokensClone.lock() = result.unwrap();
         });
 
 
         // intermediary code
-        while lineTokenFlags.len() < lineNumber + 1 {
-            lineTokenFlags.push(vec!());  // new line
+        let mut tokenFlagsWrite = lineTokenFlags.write();
+        while tokenFlagsWrite.len() < lineNumber + 1 {
+            tokenFlagsWrite.push(vec!());  // new line
         }
+        drop(tokenFlagsWrite);  // dropped the .write
 
         // dealing with the line token stuff (running while lua is doing async stuff)
-        if lineNumber != 0 && lineTokenFlags[lineNumber - 1].len() != 0 {
+        let tokenFlagsRead = lineTokenFlags.read();
+        if lineNumber != 0 && tokenFlagsRead[lineNumber - 1].len() != 0 {
             previousFlagSet = {
-                line = lineTokenFlags[lineNumber - 1].clone();
+                line = tokenFlagsRead[lineNumber - 1].clone();
                 line.last().unwrap()
             };
         }
+        drop(tokenFlagsRead);  // dropped the read
 
-        lineTokenFlags[lineNumber].clear();
+        let mut tokenFlagsWrite = lineTokenFlags.write();
+        tokenFlagsWrite[lineNumber].clear();
+        drop(tokenFlagsWrite);  // dropped the write
 
 
         // joining the thread
         let _ = handle.join();
         tokens = Arc::try_unwrap(tokensWrapped)
             .unwrap()
-            .into_inner()
-            .unwrap();
+            .into_inner();
     }).unwrap();
 
     // handling everything that requires the tokens to be calculated
-    GenerateLineTokenFlags(&mut lineTokenFlags,
+    GenerateLineTokenFlags(lineTokenFlags,
                            &tokens,
                            &previousFlagSet,
                            &text,
                            lineNumber
     );
 
+    let tokenFlagsRead = lineTokenFlags.read();
     for i in 0..tokens.len() {
-        if lineTokenFlags[lineNumber][i].contains(&LineTokenFlags::Comment) {
+        if tokenFlagsRead[lineNumber][i].contains(&LineTokenFlags::Comment) {
             tokens[i].token = TokenType::CommentLong;
         }
     }
+    drop(tokenFlagsRead);  // dropped the read
 
     HandleDefinitions(&tokens,
-                      &lineTokenFlags,
-                      &mut outline,
+                      lineTokenFlags,
+                      outline,
                       &text, lineNumber
     );
     
@@ -936,7 +972,7 @@ fn RemoveLineFlag(currentFlags: &mut Vec<LineTokenFlags>, removeFlag: LineTokenF
 }
 
 // application stuff
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScopeNode {
     pub children: Vec <ScopeNode>,
     pub name: String,
@@ -986,6 +1022,8 @@ impl ScopeNode {
 fn GetImplKeywordIndex (outline: &mut Vec <OutlineKeyword>) -> Vec <usize> {
     // make this a non-clone at some point; me lazy rn (always lazy actually...)    I actually did it!
     let mut implKeywordIndex: Vec <usize> = vec![];
+
+    //let mut outlineWrite = outline.write();
     for (index, keyword) in outline.iter_mut().enumerate() {
         // handling impls and mods
         match keyword.kwType {
@@ -998,7 +1036,10 @@ fn GetImplKeywordIndex (outline: &mut Vec <OutlineKeyword>) -> Vec <usize> {
             }
             _ => {}
         }
-    } implKeywordIndex
+    }
+    // outlineWrite is dropped here
+    //drop(outlineWrite);
+    implKeywordIndex
 }
 
 fn HandleKeywordIndexes (
@@ -1008,11 +1049,20 @@ fn HandleKeywordIndexes (
     root: &ScopeNode
 ) {
     for keywordIndex in implKeywordIndex {
+        //let outlineRead = outline.read();
+
         // the first scope should be the impl or mod, right?
         let keyword = outline[keywordIndex].clone();
         let mut newScope: Option <Vec <usize>> = None;
+
+        //if keywordIndex >= outline.len() || outline[keywordIndex].scope.is_empty() {  return;  }
+        //if outline[keywordIndex].scope[0] >= root.children.len() {  return;  }
         if root.children.len() < outline[keywordIndex].scope[0] {  continue;  }
         let scopeStart = root.children[outline[keywordIndex].scope[0]].start;
+
+        //drop(outlineRead);
+        //let mut outlineWrite = outline;//.write();
+
         for otherKeyword in outline.iter_mut() {
             if otherKeyword.implLines.contains(&scopeStart) {
                 otherKeyword.childKeywords.push(keyword);
@@ -1020,49 +1070,90 @@ fn HandleKeywordIndexes (
                 break;
             }
         }
+
         if let Some(newScope) = newScope {
             outline[keywordIndex].scope = newScope;
         }
+
+        // makings ure there aren't any active writes
+        //drop(outlineWrite);
     }
 }
 
 fn HandleKeywords (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     outline: &mut Vec <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
     root: &ScopeNode
 ) -> Vec <OutlineKeyword> {
+    // getting a write channel for outline
+    // this will block any read calls until completion
+    // anything inbetween this and the dropping of its memory
+    // should be optimized and performant to not stall
+    // the main thread (which calls lots of reads)
+    //let outlineRead = outline.read();
+    //let outlineSize = outline.len();
+    // write is used on this so reading has to be very sparing and controlled
+    //drop(outlineRead);
+
+    // !!!the memory leak has to due with this vector
     let mut newKeywords: Vec <OutlineKeyword> = Vec::new();
     for keyword in outline.iter_mut() {
+        //{
+        //let outlineRead = outline.read();
+        //let keywordOption = &outline.get(keywordIndex);
+        //if keywordOption.is_none() {
+            // error; probably an out of data thread (there should be future ones to take over)
+            //drop(outlineRead);
+        //    return vec!();
+        //}
+        //let keyword = keywordOption.unwrap();
+
         if !matches!(keyword.kwType, OutlineType::Enum | OutlineType::Struct)
-            {  continue;  }
+            { continue; }
+        //}  // outline read is dropped; same with keyword
+
+        //let mut outlineWrite = outline.write();
         if !keyword.childKeywords.is_empty() {
             keyword.childKeywords.clear()
         }
-        // getting the following members
-        if keyword.lineNumber > scopeJumps.len() {  continue;  }
+        // freeing the .write to allow reading
+        //drop(outlineWrite);
 
+        // getting the following members
+        //let outlineRead = outline.read();
+        if keyword.lineNumber > scopeJumps.len() {  continue;  }
+        //drop(outlineRead);  // dropping the read
+
+        // there are no active reads or writes here (in terms of local)
+        // the memory leak is inside here
         HandleKeywordsLoop(
             tokenLines,
             lineFlags,
             scopeJumps,
+            // tracking the index and outline to allow
+            // more controlled .read's and .writes
             keyword,
             &mut newKeywords,
             root
         );
-
     } newKeywords
 }
 
 fn HandleKeywordsLoop (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     scopeJumps: &Vec <Vec <usize>>,
     keyword: &mut OutlineKeyword,
+    //(outline, keywordIndex): (&mut Vec <OutlineKeyword>, usize),
     newKeywords: &mut Vec<OutlineKeyword>,
     root: &ScopeNode,
 ) {
+    //let outlineRead = outline.read();
+    //drop(outlineRead);  // dropping the read
+    // no local reads
+
     'lines: for lineNumber in
         keyword.lineNumber+1..
             ({
@@ -1071,59 +1162,91 @@ fn HandleKeywordsLoop (
                 root.GetNode(&mut scope).end
             })
     {
+        //let tokenLinesRead = tokenLines.read();
+
         let mut public = false;
         let mut currentContainer: Option <OutlineKeyword> = None;
-        for (index, token) in tokenLines[lineNumber].iter().enumerate() {
-            if token.text == "}" {  break 'lines;  }
-            else if token.text == "pub" {  public = true;  }
+        // this is the issue right here
+        let tokensSize = tokenLines.read()[lineNumber].len();
+        for index in 0..tokensSize {
+        //for (index, token) in tokenLines.read()[lineNumber].iter().enumerate() {
+            //let tokenText: String;
+            {
+                //if lineNumber > tokenLines.read().len() || index > tokenLines.read()[lineNumber].len() {  return;  }
+                // index error
+                let tokenLinesRead = tokenLines.read();
+                //if lineNumber >= tokenLinesRead.len() || index >= tokenLinesRead[lineNumber].len() {  return;  }
+                if tokenLinesRead[lineNumber][index].text == "}" { break 'lines; }
+                else if tokenLinesRead[lineNumber][index].text == "pub" { public = true; }
 
-            if matches!(token.token, TokenType::Comment | TokenType::String)
-            {  continue;  }
+                //tokenText = tokenLinesRead[lineNumber][index].text.clone();
+                drop(tokenLinesRead);
+            }
+            if matches!(tokenLines.read()[lineNumber][index].token, TokenType::Comment | TokenType::String)
+                {  continue;  }
 
+            // no active read's or writes here (safe to continue)
+            // wrong, the iter takes a reference.... (fixed now)
+            // the memory leak is inside here
             HandleScopeChecks(
                 tokenLines,
                 lineFlags,
                 &mut currentContainer,
                 scopeJumps,
                 keyword,
-                &token.text,
+                index,
                 index,
                 lineNumber,
                 public
             );
         }
 
+        // dropping the read channel/guard (bruh, clearly there was a read.....) me dumb
+        //drop(tokenLinesRead);
+
         if let Some(container) = currentContainer {
+            // !!!!This next line is the continuation of the leak
             newKeywords.push(container.clone());
+
+            //let mut outlineWrite = outline.write();
             keyword.childKeywords.push(container);  // adding the variant
+            //drop(outlineWrite);  // dropping the .write
         }
     }
 }
 
 fn HandleScopeChecks (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     currentContainer: &mut Option <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
     keyword: &mut OutlineKeyword,
-    text: &String,
+    textIndex: usize,
     index: usize,
     lineNumber: usize,
     public: bool
 ) {
-    if lineFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) && currentContainer.is_some() {
+    // getting than dropping a read channel
+    //let lineFlagsRead = lineFlags.read();
+    let condition = lineFlags.read()[lineNumber][index].contains(&LineTokenFlags::Parameter);
+    //drop(lineFlagsRead);  // quickly dropped
+
+    if condition && currentContainer.is_some() {
+        // no active local read's or writes
+        // !the memory leak isn't in here. It's somewhere else in this function
         HandleKeywordParameterSet(
             tokenLines,
             lineFlags,
             currentContainer,
             keyword,
-            text,
+            textIndex,
             index,
             lineNumber
         );
-    } else if !matches!(text.as_str(), " " | "(" | "Some" | "Ok" | "_" | "mut" | "," | "pub") && currentContainer.is_none() {
+    } else if !matches!(tokenLines.read()[lineNumber][textIndex].text.as_str(), " " | "(" | "Some" | "Ok" | "_" | "mut" | "," | "pub") && currentContainer.is_none() {
+        //let outlineRead = outline.read();
         let newKey = OutlineKeyword {
-            keyword: text.clone(),
+            keyword: tokenLines.read()[lineNumber][textIndex].text.clone(),
             kwType: {
                 if matches!(keyword.kwType, OutlineType::Enum) {
                     OutlineType::Variant
@@ -1141,21 +1264,24 @@ fn HandleScopeChecks (
             lineNumber,
             implLines: vec!(),
         };
+        //drop(outlineRead);  // dropped (no functions calls are between creation & death)
+        // !!!!!this line is the root of the memory leak
         currentContainer.replace(newKey);
     }
 }
 
 fn HandleKeywordParameterSet (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     keyword: &mut OutlineKeyword,
-    text: &String,
+    textIndex: usize,
     index: usize,
     lineNumber: usize,
 ) {
     let mut parameterType = String::new();
-    if text == "(" {
+    if tokenLines.read()[lineNumber][textIndex].text == "(" {
+        // no local active reads or writes
         HandleKeywordParameter(
             tokenLines,
             lineFlags,
@@ -1165,41 +1291,62 @@ fn HandleKeywordParameterSet (
             index,
             lineNumber
         );
-    } else if text == ":" {
-        for newCharIndex in index + 2..tokenLines[lineNumber].len() {
-            if lineFlags[lineNumber][index].contains(&LineTokenFlags::Comment) ||
-                text == "," {  break;  }
-            let string = &tokenLines[lineNumber][newCharIndex].text.clone();
+    } else if tokenLines.read()[lineNumber][textIndex].text == ":" {
+        // opening reads for lineFlags and tokenLines
+        let lineFlagsRead = lineFlags.read();
+        let tokenLinesRead = tokenLines.read();
+
+        // !!! There are active read's so don't call functions that need to read or write from these
+
+        for newCharIndex in index + 2..tokenLinesRead[lineNumber].len() {
+            if lineFlagsRead[lineNumber][index].contains(&LineTokenFlags::Comment) ||
+                tokenLinesRead[lineNumber][textIndex].text == "," {  break;  }
+            let string = &tokenLinesRead[lineNumber][newCharIndex].text.clone();
             parameterType.push_str(string);
         }
+        // dropping the read for lineFlags
+        drop(lineFlagsRead);
+
         if let Some(container) = &mut currentContainer {
             container.parameters = Some(
                 vec![(
-                    tokenLines[lineNumber][index.saturating_sub(1)].text.clone(),
+                    tokenLinesRead[lineNumber][index.saturating_sub(1)].text.clone(),
                     Some(parameterType)
                 )]
             );
         }
+        // the read for tokenLines drops here
+        drop(tokenLinesRead);
     }
 }
 
 fn HandleKeywordParameter (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     mut currentContainer: &mut Option <OutlineKeyword>,
     keyword: &mut OutlineKeyword,
     mut parameterType: String,
     index: usize,
     lineNumber: usize,
 ) {
+    let tokenLinesRead = tokenLines.read();
+    let lineFlagsRead = lineFlags.read();
+
     // getting the parameters type
-    for newCharIndex in index + 1..tokenLines[lineNumber].len() {
-        if !lineFlags[lineNumber][index].contains(&LineTokenFlags::Parameter) {
+    for newCharIndex in index + 1..tokenLinesRead[lineNumber].len() {
+        if !lineFlagsRead[lineNumber][index].contains(&LineTokenFlags::Parameter) {
             break;
         }
-        parameterType.push_str(&tokenLines[lineNumber][newCharIndex].text.clone());
+        parameterType.push_str(&tokenLinesRead[lineNumber][newCharIndex].text.clone());
     }
+    drop(tokenLinesRead);
+    drop(lineFlagsRead);
+
+    // active write for outline here
+    //let mut outlineWrite = outline.write();
+
     if keyword.parameters.is_none() {  keyword.parameters = Some(Vec::new());  }
+
     if let Some(container) = &mut currentContainer {
         let params = vec![(container.keyword.clone(), Some(parameterType))];
         if let Some(parameters) = &mut keyword.parameters {
@@ -1209,11 +1356,13 @@ fn HandleKeywordParameter (
         }
         //container.parameters = Some(params);  // I don't think this line is needed?
     }
+    // making sure no writes are active
+    //drop(outlineWrite);
 }
 
 pub fn UpdateKeywordOutline (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     outline: &mut Vec <OutlineKeyword>,
     scopeJumps: &Vec <Vec <usize>>,
     root: &ScopeNode
@@ -1221,10 +1370,15 @@ pub fn UpdateKeywordOutline (
     let implKeywordIndex = GetImplKeywordIndex(outline);
     HandleKeywordIndexes(outline, implKeywordIndex, scopeJumps, root);
 
+    // it's in here... (the mem leak)
     let mut newKeywords = HandleKeywords(tokenLines, lineFlags, outline, scopeJumps, root);
+
+    //let mut outlineWrite = outline.write();
     while let Some(newKeyword) = newKeywords.pop() {
         outline.push(newKeyword);
     }
+    // making sure there are no active writes
+    //drop(outlineWrite);
 }
 
 static VALID_NAMES_NEXT: [&str; 5] = [
@@ -1245,25 +1399,35 @@ static VALID_NAMES_TAKE: [&str; 6] = [
 ];
 
 pub fn GenerateScopes (
-    tokenLines: &[Vec <LuaTuple>],
-    lineFlags: &Vec <Vec <Vec <LineTokenFlags>>>,
-    outline: &mut Vec <OutlineKeyword>
+    tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
+    _lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
+    outlineOriginal: &Arc <RwLock <Vec <OutlineKeyword>>>,
 ) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
+    // creating a clone of outline to avoid external influence that may lead to a memory leak
+    // beforehand multiple threads were appending to the outline at the same time
+    // duplicating various elements
+    let mut outline = &mut outlineOriginal.read().clone();
+    // confirmed, the memory leak is inside here
+
+    // opening a reading channel for tokenLines (writing is very rare, so I'm not worried)
+    // this pauses until any write channels are closed (there can be multiple read channels)
+    let tokenLinesRead = tokenLines.read();
+
     // tracking the scope (functions = new scope; struct/enums = new scope; for/while = new scope)
     let mut rootNode = ScopeNode {
         children: vec![],
         name: "Root".to_string(),
         start: 0,
-        end: tokenLines.len().saturating_sub(1),
+        end: tokenLinesRead.len().saturating_sub(1),
     };
 
     let mut jumps: Vec <Vec <usize>> = vec!();
     let mut linearized: Vec <Vec <usize>> = vec!();
 
     let mut currentScope: Vec <usize> = vec!();
-    for (lineNumber, tokens) in tokenLines.iter().enumerate() {
+    for (lineNumber, tokens) in tokenLinesRead.iter().enumerate() {
         HandleBracketsLayer(
-            outline,
+            &mut outline,
             &mut rootNode,
             &mut jumps,
             &mut linearized,
@@ -1273,8 +1437,31 @@ pub fn GenerateScopes (
         );
     }
 
+    // dropping the memory for reading tokenLines
+    // hopefully anything needing to write has a brief chance here
+    // !!!!!!! Make sure there aren't any writes to tokenLines or it'll crash
+    drop(tokenLinesRead);
+
+    // updating the original
+    let mut outlineWrite = outlineOriginal.write();
+    outlineWrite.clear();
+    while let Some(keyword) = outline.pop() {
+        outlineWrite.push(keyword);
+    } drop(outlineWrite);
+
+    // replace all the logic to fit in here, probably. It would make it simpler?
+    // remove any references within the basic syntax highlighting method?
+    // this isn't doing a whole-lot, but it's logic will be necessary at some point
     // updating the keywords outline
-    UpdateKeywordOutline(tokenLines, lineFlags, outline, &jumps, &rootNode);
+    // the memory leak is in this function
+    //UpdateKeywordOutline(tokenLines, lineFlags, outline, &jumps, &rootNode);
+
+    // updating the original
+    /*let mut outlineWrite = outlineOriginal.write();
+    outlineWrite.clear();
+    while let Some(keyword) = outline.pop() {
+        outlineWrite.push(keyword);
+    } drop(outlineWrite);*/
 
     (rootNode, jumps, linearized)
 }

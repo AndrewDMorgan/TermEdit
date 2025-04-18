@@ -4,6 +4,7 @@ use ratatui::{
     style::{Stylize, Modifier},
     text::{Line, Span},
 };
+
 use crate::Colors::Colors;
 use crate::LuaScripts;
 use crate::Tokens::*;
@@ -15,7 +16,6 @@ const CENTER_BOUNDS: usize = 0;
 
 
 pub mod Edits {
-    use crate::Tokens::*;
     use crate::{CodeTab, LuaScripts};
 
     // private sense it's not needed elsewhere (essentially just a modified copy of handleHighlights...)
@@ -32,19 +32,20 @@ pub mod Edits {
             let numBetween = start.0 - end.0 - 1;
             for _ in 0..numBetween {
                 tab.lines.remove(end.0 + 1);
-                tab.lineTokens.remove(end.0 + 1);
-                tab.lineTokenFlags.remove(end.0 + 1);
+                tab.lineTokens.write().remove(end.0 + 1);
+                tab.lineTokenFlags.write().remove(end.0 + 1);
             }
             // push the next line onto the first...
             let nextLine = tab.lines[end.0 + 1].clone();
             tab.lines[end.0].push_str(nextLine.as_str());
             tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
             tab.lines.remove(end.0 + 1);
-            tab.lineTokens.remove(end.0 + 1);
-            tab.lineTokenFlags.remove(end.0 + 1);
+            tab.lineTokens.write().remove(end.0 + 1);
+            tab.lineTokenFlags.write().remove(end.0 + 1);
         }
         
-        (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+        tab.CreateScopeThread();
+        //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         tab.cursor = end;
     }
 
@@ -54,8 +55,8 @@ pub mod Edits {
         for (i, line) in splitText.enumerate() {
             if line.is_empty() {
                 tab.lines.insert(end.0 + i, "".to_string());
-                tab.lineTokens.insert(end.0 + i, vec![]);
-                tab.lineTokenFlags.insert(end.0 + i, vec![]);
+                tab.lineTokens.write().insert(end.0 + i, vec![]);
+                tab.lineTokenFlags.write().insert(end.0 + i, vec![]);
                 tab.RecalcTokens(end.0 + i, 0, luaSyntaxHighlightScripts).await;
                 continue;
             }
@@ -69,13 +70,14 @@ pub mod Edits {
                 tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
             } else {
                 tab.lines.insert(end.0 + i, line.to_string());
-                tab.lineTokenFlags.insert(end.0 + i, vec![]);
-                tab.lineTokens.insert(end.0 + i, vec![]);
+                tab.lineTokenFlags.write().insert(end.0 + i, vec![]);
+                tab.lineTokens.write().insert(end.0 + i, vec![]);
                 tab.RecalcTokens(end.0 + i, 0, luaSyntaxHighlightScripts).await;
             }
         }
-        
-        (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+
+        tab.CreateScopeThread();
+        //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         tab.cursor = start;
     }
     
@@ -121,22 +123,23 @@ pub mod Edits {
     impl NewLine {
         pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let text = tab.lines.remove(self.position.0 + 1);
-            tab.lineTokens.remove(self.position.0 + 1);
-            tab.lineTokenFlags.remove(self.position.0 + 1);
+            tab.lineTokens.write().remove(self.position.0 + 1);
+            tab.lineTokenFlags.write().remove(self.position.0 + 1);
             tab.lines[self.position.0].push_str(text.as_str());
             tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
         pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
-            tab.lineTokens.insert(self.position.0 + 1, vec![]);
-            tab.lineTokenFlags.insert(self.position.0 + 1, vec![]);
+            tab.lineTokens.write().insert(self.position.0 + 1, vec![]);
+            tab.lineTokenFlags.write().insert(self.position.0 + 1, vec![]);
             tab.RecalcTokens(self.position.0 + 1, 0, luaSyntaxHighlightScripts).await;
             tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
@@ -144,7 +147,8 @@ pub mod Edits {
                 self.position.0 + 1,
                 0
             );
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
 
@@ -158,8 +162,8 @@ pub mod Edits {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
-            tab.lineTokens.insert(self.position.0 + 1, vec![]);
-            tab.lineTokenFlags.insert(self.position.0 + 1, vec![]);
+            tab.lineTokens.write().insert(self.position.0 + 1, vec![]);
+            tab.lineTokenFlags.write().insert(self.position.0 + 1, vec![]);
             tab.RecalcTokens(self.position.0 + 1, 0, luaSyntaxHighlightScripts).await;
             tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
@@ -167,19 +171,21 @@ pub mod Edits {
                 self.position.0 + 1,
                 0
             );
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
         pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
             let text = tab.lines.remove(self.position.0 + 1);
-            tab.lineTokens.remove(self.position.0 + 1);
-            tab.lineTokenFlags.remove(self.position.0 + 1);
+            tab.lineTokens.write().remove(self.position.0 + 1);
+            tab.lineTokenFlags.write().remove(self.position.0 + 1);
             tab.lines[self.position.0].push_str(text.as_str());
             tab.RecalcTokens(self.position.0, 0, luaSyntaxHighlightScripts).await;
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
-            (tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+            tab.CreateScopeThread();
+            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
     
@@ -193,14 +199,28 @@ pub mod Edits {
 }
 
 
+// only access the inner value explicitly editing the value, then return ownership
+// otherwise the element will block usage of the main item in the codeTab, which
+// would block the main thread (aka not good)
+/*type ScopeHandle = std::thread::JoinHandle< Box <dyn Fn(
+        std::sync::Arc < parking_lot::RwLock <ScopeNode>>,
+        std::sync::Arc < parking_lot::RwLock <Vec <Vec <usize>>>>,
+        std::sync::Arc < parking_lot::RwLock <Vec <Vec <usize>>>>,
+        crossbeam::channel::Sender <bool>,
+) -> () >>;*/
+
+// this isn't nearly as long as I thought it would be lol (too lazy to inline it)
+type ScopeHandle = std::thread::JoinHandle <()>;
+
 #[derive(Debug)]
 pub struct CodeTab {
     pub cursor: (usize, usize),  // line pos, char pos inside line
     pub lines: Vec <String>,
-    pub lineTokens: Vec <Vec <LuaTuple>>,
-    pub scopeJumps: Vec <Vec <usize>>,  // points to the index of the scope (needs adjusting as the tree is modified)
-    pub scopes: ScopeNode,
-    pub linearScopes: Vec <Vec <usize>>,
+    pub lineTokens: std::sync::Arc <parking_lot::RwLock <Vec <Vec <LuaTuple>>>>,
+    // points to the index of the scope (needs adjusting as the tree is modified)
+    pub scopeJumps: std::sync::Arc <parking_lot::RwLock <Vec <Vec <usize>>>>,
+    pub scopes: std::sync::Arc <parking_lot::RwLock <ScopeNode>>,
+    pub linearScopes: std::sync::Arc <parking_lot::RwLock <Vec <Vec <usize>>>>,
 
     pub scrolled: usize,
     pub mouseScrolled: isize,
@@ -217,44 +237,122 @@ pub struct CodeTab {
 
     pub changeBuffer: Vec <Vec <Edits::Edit>>,
     pub redoneBuffer: Vec <Vec <Edits::Edit>>,  // stores redo's (cleared if undone then edited)
-    pub pinedLines: Vec <usize>,  // todo figure out a way to have a color for the pinned points (maybe an enum?)
+    pub pinedLines: Vec <usize>,  // todo figure out a way to have a color for the pinned points (maybe an enum?--or just a color....)
 
-    pub outlineKeywords: Vec <OutlineKeyword>,
+    pub outlineKeywords: std::sync::Arc <parking_lot::RwLock <Vec <OutlineKeyword>>>,
     // each line can have multiple flags depending on the depth (each line has a set for each token......)
-    pub lineTokenFlags: Vec <Vec < Vec <LineTokenFlags>>>,
+    pub lineTokenFlags: std::sync::Arc <parking_lot::RwLock <Vec <Vec < Vec <LineTokenFlags>>>>>,
+
+    pub scopeGenerationHandles: Vec <(ScopeHandle, crossbeam::channel::Receiver <bool>)>,
 }
 
 impl CodeTab {
 
+    pub fn CreateScopeThread (&mut self) {
+        // the memory leak is independent of the number of threads or when they're joined
+        //if !self.scopeGenerationHandles.is_empty() {  return;  }
+        let (sender, receiver) = crossbeam::channel::bounded(1);
+        let scopeClone = std::sync::Arc::clone(&self.scopes);
+        let jumpsClone = std::sync::Arc::clone(&self.scopeJumps);
+        let linearClone = std::sync::Arc::clone(&self.linearScopes);
+
+        let lineTokensClone = std::sync::Arc::clone(&self.lineTokens);
+        let lineFlagsClone = std::sync::Arc::clone(&self.lineTokenFlags);
+        let outlineClone = std::sync::Arc::clone(&self.outlineKeywords);
+        self.scopeGenerationHandles.push((
+            std::thread::spawn(move || {
+                let (newScopes, newJumps, newLinear) =
+                    GenerateScopes(&lineTokensClone, &lineFlagsClone, &outlineClone);
+
+                // waiting for a free spot to let it write (and immediately dropping it)
+                let mut writeGuard = scopeClone.write();
+                *writeGuard = newScopes;
+                // making sure it's not blocking the main thread
+                // if something's trying to read, it has to wait for
+                // this to be called/finished
+                drop(writeGuard);
+
+                // waiting for a free spot to let it write (and immediately dropping it)
+                let mut writeGuard = jumpsClone.write();
+                *writeGuard = newJumps;
+                // making sure it's not blocking the main thread
+                // if something's trying to read, it has to wait for
+                // this to be called/finished
+                drop(writeGuard);
+
+                // waiting for a free spot to let it write (and immediately dropping it)
+                let mut writeGuard = linearClone.write();
+                *writeGuard = newLinear;
+                // making sure it's not blocking the main thread
+                // if something's trying to read, it has to wait for
+                // this to be called/finished
+                drop(writeGuard);
+
+                // sending a message to join the thread
+                sender.send(true).unwrap();
+            }),
+            receiver
+        ));
+        //let (thread, rec) = self.scopeGenerationHandles.pop().unwrap();
+        //thread.join().unwrap();
+    }
+
+    pub fn CheckScopeThreads (&mut self) {
+        // the indexes of finished threads so they can be removed and joined
+        let mut finishedThreads: Vec <usize> = vec!();
+
+        // checking all thread channels
+        for i in 0..self.scopeGenerationHandles.len() {
+            let thread = &self.scopeGenerationHandles[i];
+            if thread.1.try_recv().is_ok() {
+                finishedThreads.push(i);
+            }
+        }
+
+        // joining necessary threads
+        // the indexes are in descending order (ascending order but reversed with .rev)
+        // because of this, the indexes shouldn't interfere
+        // with the following remove operations
+        for index in finishedThreads.into_iter().rev() {
+            let thread = self.scopeGenerationHandles.remove(index);
+            // ignoring any errors for now
+            // all the memory of the thread should be killed
+            // all the memory is shared so it should be fine as is
+            let _ = thread.0.join();
+        }
+    }
+
     pub fn GetCurrentToken (&self, tokenOutput: &mut Vec <String>) {
         let mut accumulate = 0;
-        for (tokenIndex, token) in self.lineTokens[self.cursor.0].iter().enumerate() {
+        let lineTokensRead = self.lineTokens.read();
+        for (tokenIndex, token) in lineTokensRead[self.cursor.0].iter().enumerate() {
             // the cursor can be just right of it, in it, but not just left
             if (accumulate + token.text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
                 tokenOutput.push(token.text.clone());
                 for index in (0..tokenIndex).rev() {
-                    if matches!(self.lineTokens[self.cursor.0][index].text.as_str(),
+                    if matches!(lineTokensRead[self.cursor.0][index].text.as_str(),
                         " " | "," | "(" | ")" | ";")
                         {  break;  }
                     if index > 1 &&
-                        self.lineTokens[self.cursor.0][index].text == ":" &&
-                        self.lineTokens[self.cursor.0][index - 1].text == ":"
+                        lineTokensRead[self.cursor.0][index].text == ":" &&
+                        lineTokensRead[self.cursor.0][index - 1].text == ":"
                     {
-                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 2].text.clone());
-                    } else if index > 0 && self.lineTokens[self.cursor.0][index].text == "." {
-                        tokenOutput.push(self.lineTokens[self.cursor.0][index - 1].text.clone());
+                        tokenOutput.push(lineTokensRead[self.cursor.0][index - 2].text.clone());
+                    } else if index > 0 && lineTokensRead[self.cursor.0][index].text == "." {
+                        tokenOutput.push(lineTokensRead[self.cursor.0][index - 1].text.clone());
                     }
                 }
                 return;
             }
             accumulate += token.text.len();
-        }
+        } // lineTokensRead is dropped naturally
     }
 
     // doesn't update the tokens or scopes; requires that to be done elsewhere
     pub fn RemoveCurrentToken_NonUpdate (&mut self) {
         let mut accumulate = 0;
-        for token in self.lineTokens[self.cursor.0].iter() {
+        let lineTokensRead = self.lineTokens.read();
+        for token in lineTokensRead[self.cursor.0].iter() {
             // the cursor can be just right of it, in it, but not just left
             if (accumulate + token.text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
                 self.lines[self.cursor.0].replace_range(accumulate..accumulate+token.text.len(), "");
@@ -262,7 +360,7 @@ impl CodeTab {
                 return;
             }
             accumulate += token.text.len();
-        }
+        }  // lineTokensRead is naturally dropped
     }
 
     pub async fn Undo (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
@@ -358,13 +456,14 @@ impl CodeTab {
         }
         
         let mut totalLine = String::new();
-        for token in &self.lineTokens[self.cursor.0] {
+        let lineTokensRead = self.lineTokens.read();
+        for token in &lineTokensRead[self.cursor.0] {
             if totalLine.len() + token.text.len() >= self.cursor.1 {
                 self.cursor.1 = totalLine.len();
                 return;
             }
             totalLine.push_str(token.text.as_str());
-        }
+        }  // lineTokensRead is naturally dropped
     }
 
     pub fn FindTokenPosLeft (&mut self) -> usize {
@@ -382,13 +481,15 @@ impl CodeTab {
         }
 
         let mut totalLine = String::new();
-        for token in &self.lineTokens[self.cursor.0] {
+        let lineTokensRead = self.lineTokens.read();
+        for token in &lineTokensRead[self.cursor.0] {
             if totalLine.len() + token.text.len() >= newCursor {
                 newCursor = totalLine.len();
                 break;
             }
             totalLine.push_str(token.text.as_str());
         }
+        drop(lineTokensRead);
 
         self.cursor.1 - newCursor
     }
@@ -411,13 +512,15 @@ impl CodeTab {
         }
 
         let mut totalLine = String::new();
-        for token in &self.lineTokens[self.cursor.0] {
+        let lineTokensRead = self.lineTokens.read();
+        for token in &lineTokensRead[self.cursor.0] {
             if totalLine.len() + token.text.len() > newCursor {
                 newCursor = totalLine.len() + token.text.len();
                 break;
             }
             totalLine.push_str(token.text.as_str());
         }
+        drop(lineTokensRead);
 
         newCursor - self.cursor.1
     }
@@ -430,13 +533,14 @@ impl CodeTab {
         self.mouseScrolled = 0;
         self.mouseScrolledFlt = 0.0;
         let mut totalLine = String::new();
-        for token in &self.lineTokens[self.cursor.0] {
+        let lineTokensRead = self.lineTokens.read();
+        for token in &lineTokensRead[self.cursor.0] {
             if token.text != " " && totalLine.len() + token.text.len() > self.cursor.1 {
                 self.cursor.1 = totalLine.len() + token.text.len();
                 return;
             }
             totalLine.push_str(token.text.as_str());
-        }
+        }  // lineTokensRead is naturally dropped
     }
     
     pub fn MoveCursorLeft (&mut self, amount: usize, highlight: bool) {
@@ -549,7 +653,8 @@ impl CodeTab {
 
         self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-        (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+        self.CreateScopeThread();
+        //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
     pub async fn UnIndent (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
@@ -578,8 +683,9 @@ impl CodeTab {
 
                 self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-                (self.scopes, self.scopeJumps, self.linearScopes) =
-                    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+                self.CreateScopeThread();
+                //(self.scopes, self.scopeJumps, self.linearScopes) =
+                //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
             }
         }
     }
@@ -674,11 +780,14 @@ impl CodeTab {
 
         if length == 0 {
             self.lines.insert(self.cursor.0, "".to_string());
-            self.lineTokens[self.cursor.0].clear();
-            self.lineTokens.insert(self.cursor.0, vec!());
-            self.lineTokenFlags.insert(self.cursor.0, vec!());
+            let mut lineTokensWrite = self.lineTokens.write();
+            lineTokensWrite[self.cursor.0].clear();
+            lineTokensWrite.insert(self.cursor.0, vec!());
+            drop(lineTokensWrite);  // the .write is dropped (writes can back up all the reads)
+            self.lineTokenFlags.write().insert(self.cursor.0, vec!());
 
-            (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+            self.CreateScopeThread();
+            //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
             self.cursor.1 = 0;
             self.CursorDown(highlight);
@@ -695,18 +804,19 @@ impl CodeTab {
             self.cursor.0 + 1,
             rightSide,
         );
-        self.lineTokens.insert(
+        self.lineTokens.write().insert(
             self.cursor.0 + 1,
             vec!(),
         );
-        self.lineTokenFlags.insert(self.cursor.0 + 1, vec!());
+        self.lineTokenFlags.write().insert(self.cursor.0 + 1, vec!());
         
         self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
         self.RecalcTokens(self.cursor.0 + 1, 0, luaSyntaxHighlightScripts).await;
         self.cursor.1 = 0;
         self.CursorDown(highlight);
-        
-        (self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+
+        self.CreateScopeThread();
+        //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
     }
 
@@ -747,8 +857,8 @@ impl CodeTab {
                         );
                         accumulative.push('\n');
                         self.lines.remove(self.cursorEnd.0 + 1);
-                        self.lineTokens.remove(self.cursorEnd.0 + 1);
-                        self.lineTokenFlags.remove(self.cursorEnd.0 + 1);
+                        self.lineTokens.write().remove(self.cursorEnd.0 + 1);
+                        self.lineTokenFlags.write().remove(self.cursorEnd.0 + 1);
                     }
 
                     accumulative.push_str(
@@ -767,8 +877,8 @@ impl CodeTab {
                     self.lines[self.cursorEnd.0].push_str(nextLine.as_str());
                     self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
                     self.lines.remove(self.cursorEnd.0 + 1);
-                    self.lineTokens.remove(self.cursorEnd.0 + 1);
-                    self.lineTokenFlags.remove(self.cursorEnd.0 + 1);
+                    self.lineTokens.write().remove(self.cursorEnd.0 + 1);
+                    self.lineTokenFlags.write().remove(self.cursorEnd.0 + 1);
 
                     changeBuff.push(Edits::Edit::Deletion(Edits::Deletion {
                         start: self.cursor,
@@ -786,8 +896,9 @@ impl CodeTab {
                 
                 self.highlighting = false;
                 self.cursor = self.cursorEnd;
-                (self.scopes, self.scopeJumps, self.linearScopes) =
-                    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+                self.CreateScopeThread();
+                //(self.scopes, self.scopeJumps, self.linearScopes) =
+                //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
                 return true;
             } else {
                 // swapping the cursor and ending points so the other calculations work
@@ -887,8 +998,8 @@ impl CodeTab {
             let remaining = self.lines[self.cursor.0].split_off(self.cursor.1);
 
             self.lines.remove(self.cursor.0);
-            self.lineTokens.remove(self.cursor.0);
-            self.lineTokenFlags.remove(self.cursor.0);
+            self.lineTokens.write().remove(self.cursor.0);
+            self.lineTokenFlags.write().remove(self.cursor.0);
             self.cursor.0 = self.cursor.0.saturating_sub(1);
             self.cursor.1 = self.lines[self.cursor.0].len();
 
@@ -914,8 +1025,9 @@ impl CodeTab {
                 changeBuff
             );
 
-            (self.scopes, self.scopeJumps, self.linearScopes) =
-                GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+            self.CreateScopeThread();
+            //self.linearScopes) =
+            //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
             return;
         }
@@ -969,8 +1081,9 @@ impl CodeTab {
 
         self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-        (self.scopes, self.scopeJumps, self.linearScopes) =
-            GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+        self.CreateScopeThread();
+        //(self.scopes, self.scopeJumps, self.linearScopes) =
+        //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
     pub async fn RecalcTokens (&mut self,
@@ -979,15 +1092,17 @@ impl CodeTab {
                          luaSyntaxHighlightScripts: &LuaScripts
     ) {
         if lineNumber >= self.lines.len() {  return;  }
+        let lineTokenFlagsRead = self.lineTokenFlags.read();
         let containedComment =
-            self.lineTokenFlags[lineNumber]
-                .get(self.lineTokenFlags[lineNumber].len().saturating_sub(1))
+            lineTokenFlagsRead[lineNumber]
+                .get(lineTokenFlagsRead[lineNumber].len().saturating_sub(1))
                 .unwrap_or(&vec![])
                 .contains(&LineTokenFlags::Comment);
-        let previousEnding = self.lineTokenFlags[lineNumber].get(
-            self.lineTokenFlags[lineNumber].len().saturating_sub(1)
+        let previousEnding = lineTokenFlagsRead[lineNumber].get(
+            lineTokenFlagsRead[lineNumber].len().saturating_sub(1)
         ).unwrap_or(&vec!()).clone();
-        self.lineTokens[lineNumber].clear();
+        drop(lineTokenFlagsRead);
+        self.lineTokens.write()[lineNumber].clear();
 
         let ending = self.fileName.split('.').last().unwrap_or("");
         let newTokens = GenerateTokens(
@@ -997,11 +1112,15 @@ impl CodeTab {
                     &mut self.outlineKeywords,
                     luaSyntaxHighlightScripts
         ).await;
-        self.lineTokens[lineNumber] = newTokens;
+        // not being given up? crashing here
+        self.lineTokens.write()[lineNumber] = newTokens;
 
-        let currentFlags = self.lineTokenFlags[lineNumber][
-            self.lineTokenFlags[lineNumber].len() - 1
+        let lineTokenFlagsRead = self.lineTokenFlags.read();
+        let currentFlags = lineTokenFlagsRead[lineNumber][
+            lineTokenFlagsRead[lineNumber].len() - 1
         ].clone();
+        drop(lineTokenFlagsRead);
+
         let empty = currentFlags.is_empty();
         if (lineNumber < self.lines.len() - 1 && !empty &&
                 previousEnding != currentFlags ||
@@ -1020,7 +1139,7 @@ impl CodeTab {
         // recalculating variables, methods, etc...
     }
 
-    pub fn GenerateColor <'a> (&self, token: &TokenType, text: &'a str, colorMode: &Colors::ColorMode) -> Span <'a> {
+    pub fn GenerateColor <'a> (&self, token: &TokenType, text: String, colorMode: &Colors::ColorMode) -> Span <'a> {
         match token {
             TokenType::Bracket => {
                 text.fg(
@@ -1317,7 +1436,11 @@ impl CodeTab {
             }
             
             let mut currentCharNum = 0;
-            for token in &self.lineTokens[lineNumber] {
+            let lineTokensRead = self.lineTokens.read();
+            for token in &lineTokensRead[lineNumber] {
+                let tokenClone = token.text.clone();
+                let tokenCloneStr = tokenClone.clone();
+                //let tokenCloneStr: &'a str = &tokenClone[..];
                 if lineNumber == self.cursor.0 && currentCharNum + token.text.len() > self.cursor.1 {
                     if currentCharNum >= self.cursor.1 {
                         if currentCharNum == self.cursor.1 && editingCode {
@@ -1331,12 +1454,12 @@ impl CodeTab {
                                     currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                             {
                                 coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
+                                    (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
                                         .on_dark_gray())
                                 );
                             } else if self.highlighting && currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                                let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
-                                let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
+                                let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
+                                let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
                                 coloredRight.push(
                                     (token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
                                         .on_dark_gray())
@@ -1346,19 +1469,19 @@ impl CodeTab {
                                 );
                             } else {
                                 coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
+                                    (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
                                 );
                             }
                         } else {
                             coloredRight.push(
-                                (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
+                                (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
                             );
                         }
                     } else {
                         // (fixed... ugly but works) this can't handle non utf-8 chars... it just crashes because of the char-boundaries
-                        let txt = &token.text.get(0..token.text.len() - (
+                        let txt = tokenClone.get(0..token.text.len() - (
                                 currentCharNum + token.text.len() - self.cursor.1
-                        )).unwrap_or("");
+                        )).unwrap_or("").to_string();
                         let leftSize = txt.len();
                         if self.highlighting && (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) {
                             if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < token.text.len() &&
@@ -1368,7 +1491,7 @@ impl CodeTab {
                                     self.cursorEnd.1 - currentCharNum,  // this is greater than the text length.....
                                     self.GenerateColor(
                                         &token.token,
-                                        &txt[..self.cursorEnd.1 - currentCharNum],
+                                        txt[..self.cursorEnd.1 - currentCharNum].to_string(),
                                         colorMode
                                     )
                                 ));
@@ -1376,7 +1499,7 @@ impl CodeTab {
                                     txt.len() - (self.cursorEnd.1 - currentCharNum),
                                     self.GenerateColor(
                                         &token.token,
-                                        &txt[self.cursorEnd.1 - currentCharNum..],
+                                        txt[self.cursorEnd.1 - currentCharNum..].to_string(),
                                         colorMode
                                     ).on_dark_gray()
                                 ));
@@ -1398,11 +1521,11 @@ impl CodeTab {
                                 .white()
                                 .bold()))
                         };
-                        let txt = &token.text.get(
+                        let txt = tokenClone.get(
                             token.text.len() - (
                                 currentCharNum + token.text.len() - self.cursor.1
                             )..token.text.len()
-                        ).unwrap_or("");
+                        ).unwrap_or("").to_string();
 
                         if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
                             if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + token.text.len() {
@@ -1410,7 +1533,7 @@ impl CodeTab {
                                     self.cursorEnd.1 - (currentCharNum + leftSize),
                                     self.GenerateColor(
                                         &token.token,
-                                        &txt[..self.cursorEnd.1 - (currentCharNum + leftSize)],
+                                        txt[..self.cursorEnd.1 - (currentCharNum + leftSize)].to_string(),
                                         colorMode
                                     ).on_dark_gray()
                                 ));
@@ -1418,7 +1541,7 @@ impl CodeTab {
                                     txt.len() - (self.cursorEnd.1 - (currentCharNum + leftSize)),
                                     self.GenerateColor(
                                         &token.token,
-                                        &txt[self.cursorEnd.1 - (currentCharNum + leftSize)..],
+                                        txt[self.cursorEnd.1 - (currentCharNum + leftSize)..].to_string(),
                                         colorMode
                                     )
                                 ));
@@ -1440,32 +1563,33 @@ impl CodeTab {
                         (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
                             currentCharNum >= self.cursorEnd.1 && currentCharNum + token.text.len() <= self.cursor.1)
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
                             .on_dark_gray()));
                     } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                        let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
-                        let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
+                        let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
+                        let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)));
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)
                             .on_dark_gray()));
                     } else if (lineNumber == self.cursor.0 && currentCharNum + token.text.len() <= self.cursor.1 ||
                         lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
                             .on_dark_gray()));
                     } else {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)));
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)));
                     }
                 } else if self.highlighting {
                     if (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
                         (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
                             currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
+                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
                             .on_dark_gray()));
                     } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                        let txtRight = &token.text[self.cursorEnd.1 - currentCharNum..];
-                        let txtLeft = &token.text[..self.cursorEnd.1 - currentCharNum];
+
+                        let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
+                        let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
                             .on_dark_gray()));
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)));
@@ -1477,21 +1601,27 @@ impl CodeTab {
                         self.cursorEnd.0 != self.cursor.0
                     {
                         coloredLeft.push(
-                            (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)
+                            (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
                                 .on_dark_gray())
                         );
                     } else {
                         coloredLeft.push(
-                            (token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode))
+                            (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
                         );
                     }
                 } else {
-                    coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, token.text.as_str(), colorMode)));
+                    coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)));
                     //coloredLeft.push((1, "|".white()))  // shows the tokens    todo (just to pin this line idk)
                 }
 
                 currentCharNum += token.text.len();
             }
+
+            // !the loop finished so the read is being dropped
+            // it's unfortunately a very long time to have the read
+            // but there aren't really any good ways to do otherwise
+            drop(lineTokensRead);
+
             if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
                 coloredLeft.push((1, "|".to_string().white().bold()));
                 // adding the suggested add-on
@@ -1579,15 +1709,15 @@ impl Default for CodeTab {
          CodeTab{
              cursor: (0, 0),
              lines: vec![],
-             lineTokens: vec![],
-             scopeJumps: vec![],
-             scopes: ScopeNode {
+             lineTokens: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
+             scopeJumps: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
+             scopes: std::sync::Arc::new(parking_lot::RwLock::new(ScopeNode {
                  children: vec![],
                  name: "Root".to_string(),
                  start: 0,
                  end: 0,
-             },
-             linearScopes: vec![],
+             })),
+             linearScopes: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
              scrolled: 0,
              mouseScrolled: 0,
              mouseScrolledFlt: 0.0,
@@ -1602,8 +1732,9 @@ impl Default for CodeTab {
              changeBuffer: vec!(),
              redoneBuffer: vec!(),
              pinedLines: vec!(),
-             outlineKeywords: vec!(),
-             lineTokenFlags: vec!(),
+             outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
+             lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
+             scopeGenerationHandles: vec!(),
         }
     }
 }
@@ -1618,6 +1749,12 @@ pub struct CodeTabs {
 }
 
 impl CodeTabs {
+    pub fn CheckScopeThreads (&mut self) {
+        for tab in self.tabs.iter_mut() {
+            tab.CheckScopeThreads();
+        }
+    }
+
     pub fn GetRelativeTabPosition (&self, positionX: u16, area: Rect, paddingLeft: u16) -> u16 {
         let total = self.panes.len() as u16 + 1;
         let tabSize = (area.width - paddingLeft) / total;
@@ -1784,17 +1921,17 @@ impl Default for CodeTabs {
                 CodeTab {
                     cursor: (0, 0),
                     lines: vec!(),
-                    lineTokens: vec![],
-                    scopeJumps: vec![],
-                    scopes: ScopeNode {
+                    lineTokens: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
+                    scopeJumps: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
+                    scopes: std::sync::Arc::new(parking_lot::RwLock::new(ScopeNode {
                         children: vec![],
                         name: "Root".to_string(),
                         start: 0,
                         end: 2,
-                    },
-                    linearScopes: vec![
+                    })),
+                    linearScopes: std::sync::Arc::new(parking_lot::RwLock::new(vec![
                         vec![0]
-                    ],
+                    ])),
                     scrolled: 0,
                     mouseScrolled: 0,
                     mouseScrolledFlt: 0.0,
@@ -1808,8 +1945,9 @@ impl Default for CodeTabs {
                     changeBuffer: vec!(),
                     redoneBuffer: vec!(),
                     pinedLines: vec!(),
-                    outlineKeywords: vec!(),
-                    lineTokenFlags: vec!(),
+                    outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
+                    lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
+                    scopeGenerationHandles: vec!(),
                 }
 
             ],  // put a tab here or something idk
