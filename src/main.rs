@@ -217,7 +217,7 @@ impl <'a> App <'a> {
             Languages::Lua,
             "assets/luaSyntaxHighlighting.lua"
         );
-
+        
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         

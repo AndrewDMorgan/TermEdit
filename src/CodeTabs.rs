@@ -249,7 +249,14 @@ pub struct CodeTab {
 impl CodeTab {
 
     pub fn CreateScopeThread (&mut self) {
-        // the memory leak is independent of the number of threads or when they're joined
+        // offsetting from existing calculations (staggering the computation (1/4 second per thread)
+        // if there's at least 2, there should be one still queued and not running
+        // so it shouldn't cause outdated information. This value may need adjustment?
+        if self.scopeGenerationHandles.len() >= 2 {  return;  }
+        // the time of 1/4 seconds is completely random. Seems like it might be reasonable though
+        let timeOffset = self.scopeGenerationHandles.len() as u64 * 250;
+
+        // the memory leak is independent of the number of threads or when they're joined (fixed!!!)
         //if !self.scopeGenerationHandles.is_empty() {  return;  }
         let (sender, receiver) = crossbeam::channel::bounded(1);
         let scopeClone = std::sync::Arc::clone(&self.scopes);
@@ -261,6 +268,8 @@ impl CodeTab {
         let outlineClone = std::sync::Arc::clone(&self.outlineKeywords);
         self.scopeGenerationHandles.push((
             std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(timeOffset));
+
                 let (newScopes, newJumps, newLinear) =
                     GenerateScopes(&lineTokensClone, &lineFlagsClone, &outlineClone);
 
@@ -1187,7 +1196,7 @@ impl CodeTab {
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).bold().underlined()
+                )
             },
             TokenType::Function => {
                 text.fg(

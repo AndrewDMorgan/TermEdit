@@ -1,5 +1,5 @@
 // for the old syntax highlighting functions
-#![allow(dead_code)]
+//#![allow(dead_code)]
 
 // for some reason when I set something just to pass it
 // in as a parameter, it thinks it's never read even though
@@ -33,7 +33,7 @@ static LANGS: [(Languages, &str); 5] = [
 
 
 // token / syntax highlighting stuff idk
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub enum TokenType {
     Bracket,
     SquirlyBracket,
@@ -62,7 +62,7 @@ pub enum TokenType {
     Grayed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LuaTuple {
     pub token: TokenType,
     pub text: String,
@@ -298,276 +298,6 @@ fn GenerateTokenStrs (text: &str) -> Arc <Mutex <Vec <String>>> {
     tokenStrs
 }
 
-fn GetLineFlags (tokenStrs: &Vec <String>) -> Vec <TokenFlags> {
-    let mut flags: Vec <TokenFlags> = vec!();
-    let mut currentFlag = TokenFlags::Null;  // the current flag being tracked
-    for (index, token) in tokenStrs.iter().enumerate() {
-        let emptyString = &"".to_string();
-        let nextToken = tokenStrs.get(index + 1).unwrap_or(emptyString).as_str();
-        let prevToken = tokenStrs.get(index.saturating_sub(1)).unwrap_or(emptyString);
-
-        let newFlag =
-            match token.as_str() {
-                "/" if nextToken == "/" => TokenFlags::Comment,
-                //"*" if nextToken == "/" => TokenFlags::Null,
-                "\"" if !matches!(currentFlag, TokenFlags::Comment) && prevToken != "\\" => {  //  | TokenFlags::Char
-                    if matches!(currentFlag, TokenFlags::String) {  TokenFlags::Null}
-                    else {  TokenFlags::String}
-                },
-                "<" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::String) => TokenFlags::Generic,  //  | TokenFlags::Char
-                //">" if matches!(currentFlag, TokenFlags::Generic) => TokenFlags::Null,  (unfortunately the lifetimes are needed... not sure how to fix it properly without tracking more info)
-                /*"'" if !matches!(currentFlag, TokenFlags::Comment | TokenFlags::String | TokenFlags::Generic) => {
-                    if matches!(currentFlag, TokenFlags::Char) {  TokenFlags::Null}
-                    else {  TokenFlags::Char  }
-                },*/
-                _ => currentFlag,
-            };
-
-        currentFlag = newFlag;
-        flags.push(currentFlag.clone());
-    } flags
-}
-
-fn GetPythonToken (
-    strToken: &str,
-    flags: &Vec <TokenFlags>,
-    index: usize,
-    (nextToken, prevToken): (&str, &String)
-) -> TokenType {
-    match strToken {
-        _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
-        _s if matches!(flags[index], TokenFlags::String) => TokenType::String,  //  | TokenFlags::Char
-        "if" | "for" | "while" | "in" | "else" |
-        "break" | "elif" | "return" | "continue" |
-        "import" | "and" | "not" | "or" | "@" |
-        "try" | "except" => TokenType::Keyword,
-        "def" => TokenType::Function,
-        " " => TokenType::Null,
-        "int" | "float" | "string" | "bool" | "list" |
-        "range" | "round" | "min" | "max" | "abs" => TokenType::Primitive,
-        "[" | "]" => TokenType::Bracket,
-        "(" | ")" => TokenType::Parentheses,
-        ":" => TokenType::SquirlyBracket,
-        s if s.chars().next().map_or(false, |c| {
-            c.is_ascii_digit()
-        }) => TokenType::Number,
-        "=" | "-" if nextToken == ">" => TokenType::Keyword,
-        ">" if prevToken == "=" => TokenType::Keyword,
-        ">" if prevToken == "-" => TokenType::Keyword,
-        "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
-        s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
-        s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
-        ">" | "<" | "False" | "True" | "!" => TokenType::Logic,
-        "=" if nextToken == "=" => TokenType::Logic,
-        "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
-        "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
-        "+" | "-" | "*" | "/" => TokenType::Math,
-        "=" => TokenType::Assignment,
-        "\"" | "'" => TokenType::String,
-        "class" | "self" | "super" => TokenType::Object,
-        _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-        _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
-        _s if prevToken == "." => TokenType::Member,
-        _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
-        _ => TokenType::Null,
-    }
-}
-
-fn GetCppToken (
-    strToken: &str,
-    flags: &Vec <TokenFlags>,
-    index: usize,
-    (nextToken, prevToken): (&str, &String)
-) -> TokenType {
-    match strToken {
-        _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
-        _s if matches!(flags[index], TokenFlags::String) => TokenType::String,  //  | TokenFlags::Char
-        "if" | "for" | "while" | "in" | "else" |
-        "break" | "loop" | "goto" | "return" | "std" |
-        "const" | "static" | "template" | "continue" |
-        "include" | "#" | "alloc" | "malloc" |
-        "using" | "namespace" => TokenType::Keyword,
-        " " => TokenType::Null,
-        "int" | "float" | "double" | "string" | "char" | "short" |
-        "long" | "bool" | "unsigned" => TokenType::Primitive,
-        "[" | "]" => TokenType::Bracket,
-        "(" | ")" => TokenType::Parentheses,
-        ":" => TokenType::Member,
-        s if s.chars().next().map_or(false, |c| {
-            c.is_ascii_digit()
-        }) => TokenType::Number,
-        "=" | "-" if nextToken == ">" => TokenType::Keyword,
-        ">" if prevToken == "=" => TokenType::Keyword,
-        ">" if prevToken == "-" => TokenType::Keyword,
-        "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
-        s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
-        s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
-        ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
-        "=" if nextToken == "=" => TokenType::Logic,
-        "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
-        "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
-        "+" | "-" | "*" | "/" => TokenType::Math,
-        "{" | "}" | "|" => TokenType::SquirlyBracket,
-        "=" => TokenType::Assignment,
-        ";" => TokenType::Endl,
-        "&" => TokenType::Barrow,
-        "\"" | "'" => TokenType::String,
-        "public" | "private" | "this" | "class" | "struct" => TokenType::Object,
-        _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-        _s if prevToken == "." && prevToken[..1].to_uppercase() == prevToken[..1] => TokenType::Method,
-        _s if prevToken == "." => TokenType::Member,
-        _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
-        _ => TokenType::Null,
-    }
-}
-
-fn GetRustToken (
-    strToken: &str,
-    flags: &Vec <TokenFlags>,
-    index: usize,
-    tokenStrs: &Vec <String>,
-    (nextToken, prevToken, lastToken): (&str, &String, &TokenType)
-) -> TokenType {
-    match strToken {  // rust
-        _s if matches!(flags[index], TokenFlags::Comment) => TokenType::Comment,
-        _s if matches!(flags[index], TokenFlags::String) => TokenType::String,  //  | TokenFlags::Char
-        "!" if matches!(lastToken, TokenType::Macro) => TokenType::Macro,
-        "unsafe" | "get_unchecked" => TokenType::Unsafe,  // add all unsafe patterns
-        "if" | "for" | "while" | "in" | "else" |
-        "break" | "loop" | "match" | "return" | "std" |
-        "const" | "static" | "dyn" | "type" | "continue" |
-        "use" | "mod" | "None" | "Some" | "Ok" | "Err" |
-        "async" | "await" | "default" | "derive" |
-        "as" | "?" | "ref" => TokenType::Keyword,
-        " " => TokenType::Null,
-        "i32" | "isize" | "i16" | "i8" | "i128" | "i64" |
-        "u32" | "usize" | "u16" | "u8" | "u128" | "u64" |
-        "f16" | "f32" | "f64" | "f128" | "String" |
-        "str" | "Vec" | "bool" | "char" | "Result" |
-        "Option" | "Debug" | "Clone" | "Copy" | "Default" |
-        "new" => TokenType::Primitive,
-        "[" | "]" => TokenType::Bracket,
-        "(" | ")" => TokenType::Parentheses,
-        "#" => TokenType::Macro,
-        _s if nextToken == "!" => TokenType::Macro,
-        ":" => TokenType::Member,
-        s if s.chars()
-                    .next()
-                    .unwrap_or(' ')
-                    .is_ascii_digit()
-        => TokenType::Number,
-        "=" | "-" if nextToken == ">" => TokenType::Keyword,
-        ">" if prevToken == "=" || prevToken == "-" => TokenType::Keyword,
-        "=" if prevToken == ">" || prevToken == "<" || prevToken == "=" => TokenType::Logic,
-        s if (prevToken == "&" && s == "&") || (prevToken == "|" && s == "|") => TokenType::Logic,
-        s if (nextToken == "&" && s == "&") || (nextToken == "|" && s == "|") => TokenType::Logic,
-        ">" | "<" | "false" | "true" | "!" => TokenType::Logic,
-        "=" if nextToken == "=" => TokenType::Logic,
-        "=" if prevToken == "+" || prevToken == "-" || prevToken == "*" || prevToken == "/" => TokenType::Math,
-        "=" if nextToken == "+" || nextToken == "-" || nextToken == "*" || nextToken == "/" => TokenType::Math,
-        "+" | "-" | "*" | "/" => TokenType::Math,
-        "{" | "}" | "|" => TokenType::SquirlyBracket,
-        "let" | "=" | "mut" => TokenType::Assignment,
-        ";" => TokenType::Endl,
-        _ => GetComplexRustTokens(
-            strToken,
-            index,
-            tokenStrs,
-            (
-                nextToken,
-                prevToken
-            )
-        ),
-    }
-}
-
-fn GetComplexRustTokens (
-    strToken: &str,
-    index: usize,
-    tokenStrs: &Vec <String>,
-    (nextToken, prevToken): (&str, &String)
-) -> TokenType {
-    match strToken {
-        "&" => TokenType::Barrow,
-        "'" if index + 2 < tokenStrs.len() &&
-            tokenStrs[index + 2] != "'" &&
-            tokenStrs[index.saturating_sub(2)] != "'"
-            => TokenType::Lifetime,
-        _ if prevToken == "'" && nextToken != "'" => TokenType::Lifetime,
-        "\"" | "'" => TokenType::String,
-        _ if prevToken == "'" => TokenType::String,
-        "enum" | "pub" | "struct" | "impl" | "self" | "Self" => TokenType::Object,
-        _s if strToken.to_uppercase() == *strToken => TokenType::Const,
-        _s if (prevToken == "." || prevToken == ":") &&
-            strToken[..1].to_uppercase() == strToken[..1]
-            => TokenType::Method,
-        _s if prevToken == "." || prevToken == ":" => TokenType::Member,
-        "fn" => TokenType::Function,
-        _s if strToken[..1].to_uppercase() == strToken[..1] => TokenType::Function,
-        _ => TokenType::Null,
-    }
-}
-
-fn GetTokens (
-    tokenStrs: &Vec <String>,
-    flags: Vec <TokenFlags>,
-    fileType: &str
-) -> Vec <(TokenType, String)> {
-    // track strings and track chars and generic inputs (this might allow for detecting lifetimes properly)
-    let mut tokens: Vec <(TokenType, String)> = vec!();
-    for (index, strToken) in tokenStrs.iter().enumerate() {
-        if strToken.is_empty() && index > 0 { continue;  }
-        let emptyString = &"".to_string();
-        let nextToken = tokenStrs.get(index + 1).unwrap_or(emptyString).as_str();
-        let prevToken = {
-            if index > 0 {
-                &tokenStrs[index - 1]
-            } else {  &"".to_string()  }
-        };
-
-        let mut language = Languages::Null;  // the default
-        for (lang, extension) in LANGS.iter() {
-            if *extension == fileType {
-                language = lang.clone();
-                break;
-            }
-        }
-
-        let nullCase = &(TokenType::Null, "".to_string());
-        let lastToken = &tokens.last().unwrap_or(
-            nullCase
-        ).0;
-        tokens.push((
-            match language {
-                Languages::Python => GetPythonToken(
-                    strToken,
-                    &flags,
-                    index,
-                    (nextToken, prevToken)
-                ),
-                Languages::Cpp => GetCppToken(
-                    strToken,
-                    &flags,
-                    index,
-                    (nextToken, prevToken)
-                ),
-                Languages::Rust => GetRustToken(
-                    strToken,
-                    &flags,
-                    index,
-                    &tokenStrs,
-                    (
-                        nextToken,
-                        prevToken,
-                        lastToken
-                    )
-                ),
-                _ => {TokenType::Null}
-            },
-            strToken.clone()));
-    } tokens
-}
-
 fn GenerateLineTokenFlags (
     lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     tokens: &Vec <LuaTuple>,
@@ -783,7 +513,7 @@ fn HandleFunctionDef (
 fn HandleDefinitions(
     tokens: &Vec <LuaTuple>,
     lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
-    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
+    outline: &mut Vec <OutlineKeyword>,
     text: &String,
     lineNumber: usize
 ) {
@@ -809,26 +539,26 @@ fn HandleDefinitions(
         prevTokens.push(&token.token);
     }
     let mut newOutline: Vec <OutlineKeyword> = vec!();
-    let outlineRead = outline.read();
-    for keyWord in outlineRead.iter() {
+    //let outlineRead = outline.read();
+    for keyWord in outline.iter() {
         if keyWord.lineNumber == lineNumber {  continue;  }
         newOutline.push(keyWord.clone());
     }
-    drop(outlineRead);  // dropped the read
+    //drop(outlineRead);  // dropped the read
 
-    let mut outlineWrite = outline.write();
-    outlineWrite.clear();  // clearing so this is fine
+    //let mut outlineWrite = outline.write();
+    outline.clear();  // clearing so this is fine
     for keyWord in newOutline {
-        outlineWrite.push(keyWord);
+        outline.push(keyWord);
     }
-    drop(outlineWrite);  // dropped the .write
+    //drop(outlineWrite);  // dropped the .write
 
     HandleImpl(currentContainer, outline, tokens, text, lineNumber);
 }
 
 fn HandleImpl (
     currentContainer: Option <OutlineKeyword>,
-    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
+    outline: &mut Vec <OutlineKeyword>,
     tokens: &Vec <LuaTuple>,
     text: &String,
     lineNumber: usize
@@ -836,7 +566,7 @@ fn HandleImpl (
     if let Some(container) = currentContainer {
         // writing to outline; drops in the same line as called
         // should be fine sense this is called right after being cleared
-        outline.write().push(container);
+        outline.push(container);
     } else if text.contains("impl") {
         let mut queryName = None;
         for index in (0..tokens.len()).rev() {
@@ -848,20 +578,20 @@ fn HandleImpl (
 }
 
 fn HandleGettingImpl (
-    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
+    outline: &mut Vec <OutlineKeyword>,
     queryName: &Option <String>,
     lineNumber: usize
 ) {
     if let Some(queryName) = queryName {
         // was just cleared so should be fine
-        let mut outlineWrite = outline.write();
+        let mut outlineWrite = outline;
         for container in outlineWrite.iter_mut() {
             if container.keyword != *queryName {  continue;  }
             container.implLines.push(lineNumber);
             break;
         }
         // outlineWrite is dropped here
-        drop(outlineWrite);
+        //drop(outlineWrite);
     }
 }
 
@@ -869,7 +599,7 @@ pub async fn GenerateTokens (
     text: String, fileType: &str,
     lineTokenFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     lineNumber: usize,
-    outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
+    _outline: &Arc <RwLock <Vec <OutlineKeyword>>>,
     luaSyntaxHighlightScripts: &LuaScripts,
 ) -> Vec <LuaTuple> {
     let tokenStrs = GenerateTokenStrs(text.as_str());
@@ -953,11 +683,12 @@ pub async fn GenerateTokens (
     }
     drop(tokenFlagsRead);  // dropped the read
 
-    HandleDefinitions(&tokens,
+    // moved to the generating scopes routine
+    /*HandleDefinitions(&tokens,
                       lineTokenFlags,
                       outline,
                       &text, lineNumber
-    );
+    );*/
     
     tokens
 }
@@ -1400,7 +1131,7 @@ static VALID_NAMES_TAKE: [&str; 6] = [
 
 pub fn GenerateScopes (
     tokenLines: &Arc <RwLock <Vec <Vec <LuaTuple>>>>,
-    _lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
+    lineFlags: &Arc <RwLock <Vec <Vec <Vec <LineTokenFlags>>>>>,
     outlineOriginal: &Arc <RwLock <Vec <OutlineKeyword>>>,
 ) -> (ScopeNode, Vec <Vec <usize>>, Vec <Vec <usize>>) {
     // creating a clone of outline to avoid external influence that may lead to a memory leak
@@ -1411,9 +1142,28 @@ pub fn GenerateScopes (
 
     // opening a reading channel for tokenLines (writing is very rare, so I'm not worried)
     // this pauses until any write channels are closed (there can be multiple read channels)
-    let tokenLinesRead = tokenLines.read();
+    //let lineFlagsRead = lineFlags.read();
+    // temporary read to allow breaks for alternative processes
+    let totalNumLines = tokenLines.read().len();
+    for lineNumber in 0..totalNumLines {
+        // cloning because performance doesn't matter nearly as much here, and the
+        // token lines are fairly short. It should also only keep one line at a time
+        if lineNumber >= tokenLines.read().len() {  continue;  }  // stopping if an error is encountered
+        let tokens = tokenLines.read()[lineNumber].clone();
+        let mut lineText = String::new();
+        for token in &tokens {
+            // this would be referenced, but should be dropped by the line's ending
+            lineText.push_str(&token.text);
+        }
+        HandleDefinitions(&tokens,
+                          &lineFlags,
+                          outline,
+                          &lineText, lineNumber
+        );
+    }
 
     // tracking the scope (functions = new scope; struct/enums = new scope; for/while = new scope)
+    let tokenLinesRead = tokenLines.read();
     let mut rootNode = ScopeNode {
         children: vec![],
         name: "Root".to_string(),
@@ -1442,26 +1192,14 @@ pub fn GenerateScopes (
     // !!!!!!! Make sure there aren't any writes to tokenLines or it'll crash
     drop(tokenLinesRead);
 
+    UpdateKeywordOutline(tokenLines, lineFlags, outline, &jumps, &rootNode);
+
     // updating the original
     let mut outlineWrite = outlineOriginal.write();
     outlineWrite.clear();
     while let Some(keyword) = outline.pop() {
         outlineWrite.push(keyword);
     } drop(outlineWrite);
-
-    // replace all the logic to fit in here, probably. It would make it simpler?
-    // remove any references within the basic syntax highlighting method?
-    // this isn't doing a whole-lot, but it's logic will be necessary at some point
-    // updating the keywords outline
-    // the memory leak is in this function
-    //UpdateKeywordOutline(tokenLines, lineFlags, outline, &jumps, &rootNode);
-
-    // updating the original
-    /*let mut outlineWrite = outlineOriginal.write();
-    outlineWrite.clear();
-    while let Some(keyword) = outline.pop() {
-        outlineWrite.push(keyword);
-    } drop(outlineWrite);*/
 
     (rootNode, jumps, linearized)
 }

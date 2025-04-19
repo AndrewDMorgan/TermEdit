@@ -163,7 +163,7 @@ end end
 -- calculating more complex tokens
 function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, token)
     if token == "'" then
-        if nextNextToken ~= "'" and lastTokenType ~= "String" and lastToken ~= " " then
+        if nextNextToken ~= "'" and lastTokenType ~= "String" then
             return "Lifetime"
         else
             return "String"
@@ -172,10 +172,10 @@ function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, toke
             return "Lifetime"
     elseif lastToken == "'" and nextToken == "'" then
         return "String"
-    elseif string.upper(string.sub(token, 1, 1)) == string.sub(token, 1, 1) then
-        return "Function"
     elseif string.upper(token) == token then
         return "Const"
+    elseif string.upper(string.sub(token, 1, 1)) == string.sub(token, 1, 1) then
+        return "Function"
     end
 
     return "Null"
@@ -185,7 +185,9 @@ end
 function CalculateMember (lastTokenType, lastToken, nextToken, token)
     -- checking for a method
     local startingCharacter = string.sub(token, 1, 1)
-    if string.upper(startingCharacter) == startingCharacter then
+    if string.upper(token) == token then
+        return "Const"
+    elseif string.upper(startingCharacter) == startingCharacter then
         return "Method"
     end
 
