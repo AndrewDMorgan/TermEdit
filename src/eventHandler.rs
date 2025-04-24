@@ -470,7 +470,11 @@ impl Perform for KeyParser {
             0x08 => {
                 self.keyModifiers.push(KeyModifiers::Control);
                 self.keyEvents.insert(KeyCode::Delete, true);
-            }
+            },
+            10 => {
+                self.charEvents.push('a');
+                self.keyModifiers.push(KeyModifiers::Control);
+            },
             _ => {},
         }
         //println!("byte {}: '{}'", byte, byte as char);

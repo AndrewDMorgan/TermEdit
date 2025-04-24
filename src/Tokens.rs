@@ -224,17 +224,20 @@ impl OutlineKeyword {
         drop(outlineRead);
         None
     }
+    pub fn TryFindKeywords (outline: &Arc <parking_lot::RwLock <Vec <OutlineKeyword>>>, queryWord: String) -> Vec <OutlineKeyword> {
+        let mut validKeywords = vec!();
+        let outlineRead = outline.read();
+        for keyword in outlineRead.iter() {
+            if queryWord == keyword.keyword {
+                validKeywords.push(keyword.clone());
+            }
+        }
+        // outlineRead is dropped
+        drop(outlineRead);
+        validKeywords
+    }
 }
 
-
-#[derive(Clone)]
-pub enum TokenFlags {
-    Comment,  // has priority of everything including strings which overrule everything else
-    String,  // has priority over everything (including chars)
-    //Char,  // has 2nd priority (overrules generics)
-    Generic,
-    Null,
-}
 
 lazy_static::lazy_static! {
     static ref LINE_BREAKS: [String; 26] = [
@@ -394,8 +397,8 @@ fn HandleKeyword (
             };
 
             currentContainer.replace(keyword);
-        }
-        "let" if currentContainer.is_none() => {
+        },
+        "let" | "static" | "const" if currentContainer.is_none() => {
             let keyword = OutlineKeyword {
                 keyword: String::new(),
                 kwType: OutlineType::Variable,
@@ -404,7 +407,7 @@ fn HandleKeyword (
                 childKeywords: vec!(),  // figure this out :(    no clue how to track the children
                 scope: vec!(),
                 public: None,
-                mutable: false,
+                mutable: matches!(tokenText.as_str(), "static" | "const"),
                 parameters: None,
                 lineNumber,
                 implLines: vec!(),
@@ -584,7 +587,7 @@ fn HandleGettingImpl (
 ) {
     if let Some(queryName) = queryName {
         // was just cleared so should be fine
-        let mut outlineWrite = outline;
+        let outlineWrite = outline;
         for container in outlineWrite.iter_mut() {
             if container.keyword != *queryName {  continue;  }
             container.implLines.push(lineNumber);

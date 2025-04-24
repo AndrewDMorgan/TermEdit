@@ -196,7 +196,6 @@ pub struct App <'a> {
 }
 
 impl <'a> App <'a> {
-
     /// runs the application's main loop until the user quits
     pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
@@ -217,7 +216,7 @@ impl <'a> App <'a> {
             Languages::Lua,
             "assets/luaSyntaxHighlighting.lua"
         );
-        
+
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
@@ -772,7 +771,9 @@ impl <'a> App <'a> {
 
     async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // making sure command + s or other commands aren't being pressed
-        if !keyEvents.ContainsModifier(&self.preferredCommandKeybind) {
+        if !(keyEvents.ContainsModifier(&KeyModifiers::Command) ||
+            keyEvents.ContainsModifier(&KeyModifiers::Control)
+        ) {
             for chr in &keyEvents.charEvents {
                 if *chr == '(' {
                     self.codeTabs.tabs[self.lastTab]
@@ -1093,6 +1094,18 @@ impl <'a> App <'a> {
             self.HandleCodeTabPress(keyEvents, clipBoard).await;
         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
             self.codeTabs.tabs[self.lastTab].LineBreakIn(false, &self.luaSyntaxHighlightScripts).await;  // can't be highlighting if breaking?
+        } else if
+            keyEvents.charEvents.contains(&'a') &&
+            keyEvents.ContainsModifier(&KeyModifiers::Control)
+        {
+            let tab = &mut self.codeTabs.tabs[self.lastTab];
+            let newCursor = (tab.lines.len() - 1, tab.lines[tab.lines.len() - 1].len());
+            let difference = newCursor.0 - tab.cursor.0;
+            tab.mouseScrolledFlt -= difference as f64;
+            tab.mouseScrolled -= difference as isize;
+            tab.cursorEnd = (0, 0);
+            tab.cursor = newCursor;
+            tab.highlighting = true;
         } else {
             self.HandleCodeCommands(keyEvents, clipBoard).await;
         }
@@ -1521,9 +1534,64 @@ impl <'a> App <'a> {
             }, buf);
     }
 
+    // this method is a mess..... but it works so whatever
+    fn HandleKeywordSelf (&mut self, currentScope: &mut Vec <usize>) {
+        let mut scope = currentScope.clone();
+        scope.reverse();
+        // this drops after this scope; this is the main thread so I don't really care
+        let node = self.codeTabs.tabs[self.lastTab].scopes.read();
+        if scope.len() < 2 || node.children.len() >= scope[1] {  return;  }
+        let baseNode = node.GetNode(&mut vec![scope[1]]);
+        let implLine = baseNode.start;
+        // searching for the container which has this as an impl line
+        for keyword in self.codeTabs.tabs[self.lastTab].outlineKeywords.read().iter() {
+            if keyword.implLines.contains(&implLine) {
+                currentScope.clear();
+                for scope in &self.codeTabs.tabs[self.lastTab].scopeJumps.read()[keyword.lineNumber] {
+                    currentScope.push(*scope);
+                }
+                break;
+            }
+        }
+    }
+
+    // error, not working todo; fix
+    fn HandleKeywordScopes (&mut self, baseToken: String, currentScope: &mut Vec <usize>) {
+        if &baseToken == "self" {
+            self.HandleKeywordSelf (currentScope);
+            return;
+        }
+        let baseKeywords = OutlineKeyword::TryFindKeywords(
+            &std::sync::Arc::new(parking_lot::RwLock::new(OutlineKeyword::GetValidScoped(
+                &self.codeTabs.tabs[self.lastTab].outlineKeywords,
+                currentScope
+            ))),
+            baseToken
+        );
+        //let size = baseKeywords.len();
+        //self.debugInfo = String::new();
+        for keyword in baseKeywords {
+            // getting the base type
+            if keyword.typedType.is_none() {  continue;  }
+            let newKeywordBase = OutlineKeyword::TryFindKeywords(
+                &self.codeTabs.tabs[self.lastTab].outlineKeywords,
+                keyword.typedType.clone().unwrap()
+            );
+            for newKeyword in newKeywordBase {
+                //self.debugInfo.push_str(&format!("{:?}; {:?}", keyword.typedType, newKeyword.childKeywords));
+                // figure out how to add the children to suggestions
+                *currentScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
+                    newKeyword.lineNumber
+                ].clone();
+                break;
+            }
+        }
+    }
+
     fn CalculateInnerScope (&mut self, currentScope: &mut Vec <usize>, tokenSet: &mut Vec <String>) {
         if tokenSet.is_empty() {  return;  }
 
+        let baseToken = tokenSet[tokenSet.len() - 1].clone();
         let mut currentElement = OutlineKeyword::TryFindKeyword(
             &self.codeTabs.tabs[self.lastTab].outlineKeywords,
             tokenSet.pop().unwrap(),
@@ -1532,8 +1600,14 @@ impl <'a> App <'a> {
             let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                 set.lineNumber
                 ].clone();
-            //self.debugInfo.push_str(&format!("{:?} ", newScope.clone()));
             *currentScope = newScope;
+
+            if set.childKeywords.is_empty() {
+                self.HandleKeywordScopes(baseToken, currentScope);
+                return;
+            }
+        } else if baseToken == "self" {
+            self.HandleKeywordScopes(baseToken, currentScope);
         }
 
         while !tokenSet.is_empty() && currentElement.is_some() {
@@ -1556,7 +1630,7 @@ impl <'a> App <'a> {
     fn ParseKeywordSuggestions (&mut self, validKeywords: Vec <OutlineKeyword>, token: String) {
         if matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
                     "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
-                    ".") {  return;  }
+                    "." | ";") {  return;  }
 
         let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
         for (i, var) in validKeywords.iter().enumerate() {
@@ -1585,7 +1659,7 @@ impl <'a> App <'a> {
         }
 
         if closest.0 < 15 {  // finalBest.1 != token.as_str()
-            if token == finalBest.1 {
+            if token == finalBest.1 && false {
             } else {
                 self.suggested = finalBest.1;
             }
@@ -1630,7 +1704,7 @@ impl <'a> App <'a> {
         self.debugInfo.clear();
         if self.codeTabs.tabs.len() > 0 {
             // tracking the memory leak in the scope generation threads (within scope generation)
-            self.debugInfo = format!("Total handles: {} Scope: {} Jumps: {} Outline: {}", self.codeTabs.tabs[0].scopeGenerationHandles.len(), self.codeTabs.tabs[0].linearScopes.read().len(), self.codeTabs.tabs[0].scopeJumps.read().len(), self.codeTabs.tabs[0].outlineKeywords.read().len());
+            //self.debugInfo = format!("Total handles: {} Scope: {} Jumps: {} Outline: {}", self.codeTabs.tabs[0].scopeGenerationHandles.len(), self.codeTabs.tabs[0].linearScopes.read().len(), self.codeTabs.tabs[0].scopeJumps.read().len(), self.codeTabs.tabs[0].outlineKeywords.read().len());
         }
         /*
         for var in &self.codeTabs.tabs[self.lastTab].outlineKeywords {
