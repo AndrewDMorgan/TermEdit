@@ -1,16 +1,11 @@
 
-keywords = {"if", "for", "while", "in", "else", "break", "loop", "match",
-            "return", "std", "const", "static", "dyn", "type", "continue",
-            "use", "mod", "None", "Some", "Ok", "Err", "async", "await",
-            "default", "derive", "as", "?", "ref", "allow", "where", "trait"}
-primitives = {"i32", "isize", "i16", "i8", "i128", "i64", "u32", "usize",
-              "u16", "u8", "u128", "u64", "f16", "f32", "f64", "f128",
-              "String", "str", "Vec", "bool", "char", "Result", "Option",
-              "Debug", "Clone", "Copy", "Default", "new", "true", "false"}
-objects = {"enum", "pub", "struct", "impl", "self", "Self"}
-mathLogicTokens = {"=", "<", ">", "!", "-", "+", "/", "*"}
+keywords = {"if", "for", "while", "in", "else", "break", "elif", "as", "from",
+            "return", "continue", "import", "None", "async", "await", "is", "with"}
+primitives = {"int", "float", "double", "String", "tuple", "list", "True", "False"}
+objects = {"class", "self"}
+mathLogicTokens = {"=", "<", ">", "!", "-", "+", "/", "*", "and", "or"}
 logicTokens = {"=", "<", ">", "!"}
-mathTokens = {"-", "+", "/", "*"}
+mathTokens = {"-", "+", "/", "*", "and", "or"}
 
 -- checks if a value is in an array
 function Contains (array, query)
@@ -39,7 +34,7 @@ function GetTokens (stringTokens)
         if token == "\"" then
             inString = not inString
             tokenType = "String"
-        elseif token == "/" and (lastToken == "/" or nextToken == "/") then
+        elseif token == "#" then
             inComment = true
             tokenType = "Comment"
         -- finding the token type
@@ -49,8 +44,6 @@ function GetTokens (stringTokens)
             tokenType = "Comment"
         elseif token == " " then
             tokenType = "Null"
-        elseif string.sub(token, 1, 1) == "_" then
-            tokenType = "Grayed"
         else
             tokenType = ParseTokenType(lastTokenType, lastToken, nextToken, stringTokens[i + 2], token)
         end
@@ -109,18 +102,11 @@ function ParseBasic (lastTokenType, lastToken, nextToken, token)
         return "Parentheses"
     elseif token == "[" or token == "]" then
         return "Bracket"
-    elseif token == "{" or token == "}" or (
-            token == "|" and nextToken ~= "|" and lastToken ~= "|"
-    ) then
+    elseif token == "{" or token == "}" then
         return "SquirlyBracket"
-    elseif token == ";" then
-        return "Endl"
-    elseif token == "let" or (
-            token == "=" and not Contains(mathLogicTokens, lastToken) and
-            nextToken ~= "="
-    ) or token == "mut" then
+    elseif token == "=" and not Contains(mathLogicTokens, lastToken) and nextToken ~= "=" then
         return "Assignment"
-    elseif token == "fn" then
+    elseif token == "def" then
         return "Function"
     end
 
@@ -133,11 +119,6 @@ function ParseTokenType (lastTokenType, lastToken, nextToken, nextNextToken, tok
     local tokenType = ParseBasic(lastTokenType, lastToken, nextToken, token)
     if tokenType ~= "Null" then
         return tokenType
-    end
-
-    -- checking for macros   parentheses and other basic characters should have already been weeded out
-    if (token == "#") or (token == "!" and lastTokenType == "Macro") or (nextToken == "!") then
-        return "Macro"
     end
 
     -- this needs the macros to be calculated but not the members, methods and objects
@@ -153,8 +134,8 @@ function ParseTokenType (lastTokenType, lastToken, nextToken, nextNextToken, tok
     elseif Contains(objects, token) then
         return "Object"
     elseif token == ":" then
-        return "Member"
-    elseif lastToken == ":" or lastToken == "." then
+        return "Endl"
+    elseif lastToken == "." then
         return CalculateMember(lastTokenType, lastToken, nextToken, token)
     else
         return ComplexTokens(lastTokenType, lastToken, nextToken, nextNextToken, token)
@@ -163,13 +144,7 @@ end end
 -- calculating more complex tokens
 function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, token)
     if token == "'" then
-        if nextNextToken ~= "'" and lastTokenType ~= "String" then
-            return "Lifetime"
-        else
-            return "String"
-        end
-    elseif lastToken == "'" and lastTokenType == "Lifetime" then
-            return "Lifetime"
+        return "String"
     elseif lastToken == "'" and nextToken == "'" then
         return "String"
     elseif string.upper(token) == token then

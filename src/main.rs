@@ -13,6 +13,7 @@ use proc_macros::load_lua_script;
 
 mod StringPatternMatching;
 mod eventHandler;
+mod TermRender;
 mod CodeTabs;
 mod Tokens;
 mod Colors;
@@ -33,6 +34,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Widget},
     DefaultTerminal, Frame,
 };
+
 use ratatui::prelude::Alignment;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 
@@ -168,7 +170,7 @@ type LuaScripts = std::sync::Arc<std::sync::Mutex<std::collections::HashMap <Lan
 
 #[derive(Debug, Default)]
 pub struct App <'a> {
-    exit: bool,
+    exit: std::sync::Arc <parking_lot::RwLock <bool>>,
     appState: AppState,
     tabState: TabState,
     codeTabs: CodeTabs::CodeTabs,
@@ -193,6 +195,8 @@ pub struct App <'a> {
     lastTab: usize,
 
     luaSyntaxHighlightScripts: LuaScripts,
+
+    mainThreadHandles: Vec <std::thread::JoinHandle<()>>,
 }
 
 impl <'a> App <'a> {
@@ -216,69 +220,122 @@ impl <'a> App <'a> {
             Languages::Lua,
             "assets/luaSyntaxHighlighting.lua"
         );
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
+            Languages::Cpp,
+            "assets/cppSyntaxHighlighting.lua"
+        );
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
+            Languages::Python,
+            "assets/pythonSyntaxHighlighting.lua"
+        );
 
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
         let mut clipboard = Clipboard::new().unwrap();
 
-        let mut parser = Parser::new();
-        let mut keyParser = KeyParser::new();
-        let mut buffer = [0; 128];  // [0; 10]; not sure how much the larger buffer is actually helping
-        let mut stdin = tokio::io::stdin();
-        
-        while !self.exit {
-            if self.exit {
+        let parser = std::sync::Arc::new(parking_lot::RwLock::new(Parser::new()));
+        let keyParser = std::sync::Arc::new(parking_lot::RwLock::new(KeyParser::new()));
+        let buffer = std::sync::Arc::new(parking_lot::RwLock::new([0; 128]));  // [0; 10]; not sure how much the larger buffer is actually helping
+        let stdin = std::sync::Arc::new(parking_lot::RwLock::new(tokio::io::stdin()));
+
+        let _ = self.HandleMainLoop(
+            buffer.clone(),
+            keyParser.clone(),
+            stdin.clone(),
+            parser.clone(),
+        ).await?;
+
+        let exit = self.exit.clone();
+
+        loop {
+            if *exit.read() {
                 break;
             }
 
-            buffer.fill(0);
+            buffer.write().fill(0);
 
-            tokio::select! {
-                result = stdin.read(&mut buffer) => {
-                    if let Ok(n) = result {
-                        keyParser.bytes = n;
+            // updating the thread handles for core functionality
+            self.UpdateMainHandles();
 
-                        if n == 1 && buffer[0] == 0x1B {
-                            keyParser.keyEvents.insert(KeyCode::Escape, true);
-                        } else {
-                            parser.advance(&mut keyParser, &buffer[..n]);
-                        }
-                    }
-                    if self.exit {
-                        break;
-                    }
-                },
-                _ = tokio::time::sleep(std::time::Duration::from_millis({
-                    let currentTime = std::time::SystemTime::now()
-                            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                            .expect("Time went backwards...")
-                            .as_millis();
-                    if currentTime - self.lastScrolled < 200 {10}
-                    else if currentTime - keyParser.lastPress > 750 {50}  // hopefully this will help with cpu usage
-                    else {5}  // this bit of code is a mess...
-                })) => {
-                    terminal.draw(|frame| self.draw(frame))?;
-
-                    // updating any scope threads (very important)
-                    self.codeTabs.CheckScopeThreads();
-
-                    if self.exit {
-                        break;
-                    }
-                },
-            }
+            // rendering (will be more performant once the new framework is added)
+            terminal.draw(|frame| self.draw(frame))?;
 
             self.area = terminal.get_frame().area();  // ig this is a thing
-            self.HandleKeyEvents(&keyParser, &mut clipboard).await;
-            self.HandleMouseEvents(&keyParser).await;  // not sure if this will be delayed, but I think it should work? idk
-            keyParser.ClearEvents();
+
+            // the .read is ugly, but whatever. It's probably fine if polling stops while
+            // processing the events
+            self.HandleKeyEvents(&keyParser.read(), &mut clipboard).await;
+            self.HandleMouseEvents(&keyParser.read()).await;  // not sure if this will be delayed, but I think it should work? idk
+            keyParser.write().ClearEvents();
         }
 
         Ok(())
     }
 
-    fn draw(&mut self, frame: &mut Frame) {
+    fn UpdateMainHandles (&mut self) {
+        for _handle in &self.mainThreadHandles {
+            // do anything here...
+        }
+    }
+
+    fn GetEventHandlerHandle (&mut self,
+                              buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
+                              keyParser: std::sync::Arc <parking_lot::RwLock <KeyParser>>,
+                              stdin: std::sync::Arc <parking_lot::RwLock <io::Stdin>>,
+                              parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
+                              exit: std::sync::Arc <parking_lot::RwLock<bool >>,
+    ) -> std::thread::JoinHandle <()> {
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            loop {
+                if *exit.read() {
+                    break;
+                }
+                let buffer = buffer.clone();
+                let keyParser = keyParser.clone();
+                let parser = parser.clone();
+                let stdin = stdin.clone();
+                rt.block_on(async move {
+                    let mut localBuffer = [0; 128];
+                    let result = stdin.write().read(&mut localBuffer).await;
+                    if let Ok(n) = result {
+                        *buffer.write() = localBuffer;
+                        keyParser.write().bytes = n;
+
+                        if n == 1 && buffer.read()[0] == 0x1B {
+                            keyParser.write().keyEvents.insert(KeyCode::Escape, true);
+                        } else {
+                            parser.write().advance(&mut *keyParser.write(), &buffer.read()[..n]);
+                        }
+                    }
+                })
+            }
+        })
+    }
+
+    async fn HandleMainLoop (&mut self,
+                             buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
+                             keyParser: std::sync::Arc <parking_lot::RwLock <KeyParser>>,
+                             stdin: std::sync::Arc <parking_lot::RwLock <io::Stdin>>,
+                             parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
+    ) -> Result <(), io::Error> {
+        let exit = self.exit.clone();
+        let eventThreadHandler = self.GetEventHandlerHandle(
+            buffer,
+            keyParser,
+            stdin,
+            parser,
+            exit,
+        );
+        self.mainThreadHandles.push(eventThreadHandler);
+
+        Ok(())
+    }
+
+    pub fn draw (&mut self, frame: &mut Frame) {
         frame.render_widget(self, frame.area());
     }
 
@@ -296,11 +353,17 @@ impl <'a> App <'a> {
                 .expect("Time went backwards...")
                 .as_millis();
             //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-            let acceleration = {
-                let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
-                if v1 > 1.0/4.0 {  v1  }
-                else {  1.0/4.0  }
-            };
+            let acceleration;
+            let timeSinceScroll = currentTime.saturating_sub(self.lastScrolled);
+            if timeSinceScroll < 17 {
+                acceleration = 2.5;
+            } else if timeSinceScroll < 25 {
+                acceleration = 1.75;
+            } else if timeSinceScroll < 50 {
+                acceleration = 1.25;
+            } else {
+                acceleration = 1.;
+            }
 
             self.codeTabs.tabs[tabIndex].mouseScrolledFlt = {
                 let v1 = self.codeTabs.tabs[tabIndex].mouseScrolledFlt - acceleration;
@@ -329,11 +392,22 @@ impl <'a> App <'a> {
                 .expect("Time went backwards...")
                 .as_millis();
             //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-            let acceleration = {
-                let v1 = (currentTime - self.lastScrolled) as f64 * -9.0 + 1.5;
-                if v1 > 1.0/4.0 {  v1  }
-                else {  1.0/4.0  }
-            };
+            /*let acceleration = {
+                let v1 = currentTime.saturating_sub(self.lastScrolled) as f64 * -9.0 + 1.5;
+                if v1 > 1.0/10000000000.0 {  1./3.  }
+                else {  1.0  }
+            };*/
+            let acceleration;
+            let timeSinceScroll = currentTime.saturating_sub(self.lastScrolled);
+            if timeSinceScroll < 17 {
+                acceleration = 2.5;
+            } else if timeSinceScroll < 25 {
+                acceleration = 1.75;
+            } else if timeSinceScroll < 50 {
+                acceleration = 1.25;
+            } else {
+                acceleration = 1.;
+            }
 
             self.codeTabs.tabs[tabIndex].mouseScrolledFlt += acceleration;  // change based on the speed of scrolling to allow fast scrolling
             self.codeTabs.tabs[tabIndex].mouseScrolled =
@@ -611,9 +685,21 @@ impl <'a> App <'a> {
 
             match event.eventType {
                 MouseEventType::Down if self.codeTabs.tabs.len() > 0 => {
+                    let currentTime = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .expect("Time went backwards...")
+                        .as_millis();
+                    if currentTime.saturating_sub(self.lastScrolled) < 12
+                        {  return;  }
                     self.HandleDownScroll(event);
                 },
                 MouseEventType::Up if self.codeTabs.tabs.len() > 0 => {
+                    let currentTime = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .expect("Time went backwards...")
+                        .as_millis();
+                    if currentTime.saturating_sub(self.lastScrolled) < 12
+                        {  return;  }
                     self.HandleUpScroll(event);
                 },
                 MouseEventType::Left => {
@@ -1298,7 +1384,7 @@ impl <'a> App <'a> {
     }
 
     fn Exit(&mut self) {
-        self.exit = true;
+        *self.exit.write() = true;
     }
 
     // ============================================= file block here =============================================
@@ -1701,7 +1787,7 @@ impl <'a> App <'a> {
             .border_set(border::THICK);
 
         // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
-        self.debugInfo.clear();
+        //self.debugInfo.clear();
         if self.codeTabs.tabs.len() > 0 {
             // tracking the memory leak in the scope generation threads (within scope generation)
             //self.debugInfo = format!("Total handles: {} Scope: {} Jumps: {} Outline: {}", self.codeTabs.tabs[0].scopeGenerationHandles.len(), self.codeTabs.tabs[0].linearScopes.read().len(), self.codeTabs.tabs[0].scopeJumps.read().len(), self.codeTabs.tabs[0].outlineKeywords.read().len());
@@ -2074,7 +2160,6 @@ Warnings underlined in yellow
 Suggestions appear on the very bottom as to not obstruct the code being written
 
 
-
 maybe show the outline moving while scrolling?
 Add scrolling to the outline
 make it so when indenting/unindenting it does it for the entire selection if highlighting
@@ -2108,14 +2193,10 @@ Fix the bug with highlighting; when highlighting left and pressing right arrow, 
     Highlighting right works fine though, idk why
 
 Allow language highlighting to determine unique characters for comments and multi line comments
+    More customization through settings, json bindings, or dynamically executed async lua scripts
 
 make a better system that can store keybindings; the user can make a custom one, or there are two defaults: mac custom, standard
     Kind of did this... kinda not
-
-(complete) make any edits cascade down the file (such as multi line comments) and update those lines until terminated
-    (kinda incomplete..... me no want do) determine if the set is incomplete so it doesn't  update the whole file
-    !!!Todo! Error! Fix the variable checker/saver to handle when variables are removed from the code, idk how; have fun :( is this working????
-    Todo! Fix all the countless errors...... A bunch of junk variables are added and parameters aren't; tuples also aren't handled... :(
 
 Todo! Add the undo-redo change thingy for the replacing chars stuff when auto-filling
 
@@ -2130,12 +2211,9 @@ multi-line comments aren't updated properly when just pressing return (on empty 
 
 todo!! make it so when too many tabs are open it doesn't just crash and die...
 
-Todo!!! Make it so that when typing, it only recalculates the current token selected rather than the whole line
-Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage
+Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage?
 
 maybe look at using jit for the lua interfacing.
-
-it seems the farthest right panes tend to run slower? honestly I'm not sure actually
 
 */
 

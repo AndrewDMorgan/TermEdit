@@ -23,9 +23,11 @@ pub enum Languages {
     Lua,
 }
 
-static LANGS: [(Languages, &str); 5] = [
+static LANGS: [(Languages, &str); 7] = [
     (Languages::Cpp , "cpp"),
     (Languages::Cpp , "hpp"),
+    (Languages::Cpp , "c"),
+    (Languages::Cpp , "h"),
     (Languages::Rust, "rs" ),
     (Languages::Python, "py"),
     (Languages::Lua, "lua"),
