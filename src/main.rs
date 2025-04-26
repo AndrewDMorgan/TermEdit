@@ -2220,12 +2220,45 @@ maybe look at using jit for the lua interfacing.
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let mut terminal = ratatui::init();
-    enableMouseCapture().await;
-    let app_result = App::default().run(&mut terminal).await;
-    disableMouseCapture().await;
-    ratatui::restore();
-    app_result
+    let testRendering = false;
+
+    if testRendering {
+        let mut app = TermRender::App::new();
+
+        let mut window = TermRender::Window::new((20, 15), (60, 20));
+        window.Bordered();
+        window.Titled(String::from("Test Window"));
+        app.AddWindow(window, String::from("Test Window"));
+
+        let mut window = TermRender::Window::new((115, 10), (25, 35));  // app.GetTerminalSize()?
+        window.Bordered();
+        window.Titled(String::from("Test"));
+        //window.AddLines(TermRender::Span {
+            // add method to Span that generates a Span from a vector of strings
+        //})
+        app.AddWindow(window, String::from("Test"));
+
+        /*let mut window = TermRender::Window::new((0, 0), app.GetTerminalSize()?);
+        window.Bordered();
+        window.Titled(String::from("Test Window"));
+        app.AddWindow(window, String::from("Test Window"));
+
+        let mut window = TermRender::Window::new((0, 0), app.GetTerminalSize()?);
+        window.Bordered();
+        window.Titled(String::from("Test Window"));
+        app.AddWindow(window, String::from("Test Window"));*/
+
+        app.Render()?;
+
+        Ok(())
+    } else {
+        let mut terminal = ratatui::init();
+        enableMouseCapture().await;
+        let app_result = App::default().run(&mut terminal).await;
+        disableMouseCapture().await;
+        ratatui::restore();
+        app_result
+    }
 }
 
 
