@@ -37,6 +37,7 @@ use ratatui::{
 
 use ratatui::prelude::Alignment;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
+use crate::TermRender::Colorize;
 
 #[derive(Debug, Default)]
 pub enum FileTabs {
@@ -2226,13 +2227,30 @@ async fn main() -> io::Result<()> {
         let mut app = TermRender::App::new();
 
         let mut window = TermRender::Window::new((20, 15), (60, 20));
+        window.Colorize(TermRender::ColorType::Blue);
+        window.Colorize(TermRender::ColorType::Blink);
         window.Bordered();
-        window.Titled(String::from("Test Window"));
+        window.Titled("Test Window");
+        window.FromLines(
+            vec![
+                TermRender::Span::FromTokens(vec![
+                    "Testing...     ".Colorizes(vec![TermRender::ColorType::Blue, TermRender::ColorType::OnRGB(10, 25, 75)]),
+                    "Te st".Colorizes(vec![TermRender::ColorType::Green, TermRender::ColorType::OnRGB(80, 25, 75)]),
+                    "H ello Worlddd dd".Colorizes(vec![TermRender::ColorType::Green, TermRender::ColorType::Bold]),
+                    "H ello erg nrtiub ghrtiu ghriubvhrwebvnerwiubeiu rtnbiub dd".Colorizes(vec![TermRender::ColorType::Red, TermRender::ColorType::Italic]),
+                ]),
+            ]
+        );
         app.AddWindow(window, String::from("Test Window"));
 
-        let mut window = TermRender::Window::new((115, 10), (25, 35));  // app.GetTerminalSize()?
+        let mut window = TermRender::Window::new((40, 10), (25, 35));  // app.GetTerminalSize()?
         window.Bordered();
-        window.Titled(String::from("Test"));
+        window.Titled("Test");
+        for _ in 0..5 {
+            window.AddLine(TermRender::Span::FromTokens(vec![
+                "Hello World!!!".Colorize(TermRender::ColorType::OnBrightCyan),
+            ]));
+        }
         //window.AddLines(TermRender::Span {
             // add method to Span that generates a Span from a vector of strings
         //})

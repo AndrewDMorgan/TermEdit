@@ -2,17 +2,22 @@
 #![allow(non_snake_case)]
 #![allow(dead_code)]
 
+//* Add a check for updated in the GetRender method for windows
+//* Support overlapping borders in the App Render method
+
+
+
 // static color/mod pairs for default ascii/ansi codes
 // colorCode (if any), mods, background (bool)   when called if background then add that color as background col
 //      if no background found, provide no such parameter
 // /033[ is the base with the ending post-fix being
-// start;color;mod;mod;mod...suffix   how do i do different colored mods? Do i add another attachment? <- correct
+// start;color;mod;mod;mod...suffix   how do I do different colored mods? Do I add another attachment? <- correct
 // https://notes.burke.libbey.me/ansi-escape-codes/
 // https://stackoverflow.com/questions/4842424/list-of-ansi-color-escape-sequences
 // /033[... doesn't work; use /x1b[...
 pub static CLEAR: &'static str = "\x1b[0m";
 
-// *! color, modifiers, is background
+// * color, modifiers, is background
 pub static EMPTY_MODIFIER_REFERENCE: &[&str] = &[];
 
 pub static BLACK:      (Option <&str>, &[&str], bool) = (Some("30"), &[], false);
@@ -63,7 +68,7 @@ pub static BLINK:     (Option <&str>, &[&str], bool) = (None    , &["5"], false)
 pub static REVERSE:   (Option <&str>, &[&str], bool) = (None    , &["7"], false);
 pub static HIDE:      (Option <&str>, &[&str], bool) = (None    , &["8"], false);
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
 // Different base ascii text modifiers (static constants)
 pub enum ColorType {
     Black,
@@ -74,7 +79,7 @@ pub enum ColorType {
     Magenta,
     Cyan,
     White,
-    Default,
+    #[default] Default,
 
     BrightBlack,
     BrightRed,
@@ -125,6 +130,7 @@ pub enum ColorType {
 // or a partially dynamic type.
 // This allows for a passing of different types,
 // circumventing lifetime issues while preserving statics.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum UniqueColor {
     Static  ((Option <&'static str>, &'static [&'static str], bool)),
     Dynamic ((Option <   String   >, &'static [&'static str], bool)),
@@ -204,17 +210,17 @@ impl ColorType {
 
             // 24-bit? I think so but make sure it works
             ColorType::RGB (r, g, b) => {
-                UniqueColor::Dynamic((Some(format!("38;2;{};{};{}m", r, g, b)), EMPTY_MODIFIER_REFERENCE, false))
+                UniqueColor::Dynamic((Some(format!("38;2;{};{};{}", r, g, b)), EMPTY_MODIFIER_REFERENCE, false))
             },
             // background 24-bit? Make sure that's right
             ColorType::OnRGB (r, g, b) => {
-                UniqueColor::Dynamic((Some(format!("48;2;{};{};{}m", r, g, b)), EMPTY_MODIFIER_REFERENCE, false))
+                UniqueColor::Dynamic((Some(format!("48;2;{};{};{}", r, g, b)), EMPTY_MODIFIER_REFERENCE, true))
             },
             ColorType::ANSI (index) => {
                 UniqueColor::Dynamic((Some(format!("38;5;{}", index)), EMPTY_MODIFIER_REFERENCE, false))
             },
             ColorType::OnANSI (index) => {
-                UniqueColor::Dynamic((Some(format!("48;5;{}", index)), EMPTY_MODIFIER_REFERENCE, false))
+                UniqueColor::Dynamic((Some(format!("48;5;{}", index)), EMPTY_MODIFIER_REFERENCE, true))
             },
 
             ColorType::Bold => { UniqueColor::Static(BOLD) },
@@ -296,6 +302,10 @@ impl <'a> Colored <'a> {
         }
     }
 
+    pub fn ChangeText (&mut self, text: &'a str) {
+        self.text = text;
+    }
+
     // Adds a color type
     pub fn AddColor (&mut self, color: ColorType) {
         self.AddUnique(color.GetColor());
@@ -314,7 +324,7 @@ impl <'a> Colored <'a> {
             self.mods.push(modifier);
         }
     }
-    
+
     // Takes a set of color types and returns a filled out Colored instance
     pub fn GetFromColorTypes (text: &str, colors: Vec <ColorType>) -> Colored {
         let mut colored = Colored::new(text);
@@ -330,23 +340,23 @@ impl <'a> Colored <'a> {
             colored.AddUnique(color);
         } colored
     }
-    
-    pub fn GetText (&self) -> String {
+
+    pub fn GetText (&self) -> (String, usize) {
         let mut text = String::new();
         if let Some(color) = &self.color {
             text.push_str(&format!(
                 //
-                "/x1b[{};{}m", color, self.mods.join(";")
+                //":{}:{}:", color, self.mods.join(";")
+                "\x1b[0;{};{}m", color, self.mods.join(";")
             ));
         }
         if let Some(color) = &self.bgColor {
             text.push_str(&format!(
-                //
-                "/x1b[{}m", color  //, self.mods.join(";")  can't have modifiers on backgrounds?
+                "\x1b[{}m", color  //, self.mods.join(";")  can't have modifiers on backgrounds?
             ));
         }
         text.push_str(self.text);
-        text
+        (text, self.text.len())
     }
 }
 
@@ -357,16 +367,27 @@ pub struct Span <'a> {
 }
 
 impl <'a> Span <'a> {
-    fn Join (&self) -> String {
-        let mut lastColored = vec![];
+    pub fn FromTokens (tokens: Vec <Colored <'a>>) -> Self {
+        Span {
+            line: tokens,
+        }
+    }
+
+    fn Join (&self) -> (String, usize) {
+        //let mut lastColored = vec![];
         let mut total = String::new();
+        let mut totalSize = 0;
         for colored in &self.line {
-            if lastColored != colored.mods {
+            /*if lastColored != colored.mods {
                 lastColored = colored.mods.clone();
                 total.push_str(CLEAR);
                 total.push_str(&colored.mods.concat());
-            } total.push_str(&colored.GetText());
-        } total
+            }*/
+            let (text, size) = colored.GetText();
+            total.push_str(&text);
+            totalSize += size;
+        }
+        (total, totalSize)
     }
 }
 
@@ -384,11 +405,11 @@ pub struct Window <'a> {
     updated: Vec <bool>,
 
     // (Span, cached render)
-    lines: Vec <(Span <'a>, String)>,
+    lines: Vec <(Span <'a>, String, usize)>,
 
     bordered: bool,
     title: String,
-    color: String,
+    color: Colored <'a>,
 }
 
 impl <'a> Window <'a> {
@@ -400,8 +421,18 @@ impl <'a> Window <'a> {
             lines: vec![],
             bordered: false,
             title: String::new(),
-            color: String::new(),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
+            color: Colored::new(""),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
         }
+    }
+
+    pub fn Colorizes (&mut self, colors: Vec <ColorType>) {
+        for color in colors {
+            self.color.AddColor(color);
+        }
+    }
+
+    pub fn Colorize <'b> (&mut self, color: ColorType) {
+        self.color.AddColor(color);
     }
 
     // Adds a border around the window/block
@@ -410,8 +441,9 @@ impl <'a> Window <'a> {
     }
 
     // Sets/updates the title of the window/block
-    pub fn Titled (&mut self, title: String) {
-        self.title = title;
+    pub fn Titled (&mut self, title: &'a str) {
+        self.title = title.to_string();
+        //self.color.ChangeText(title);
     }
 
     // Changes the size of the window
@@ -428,20 +460,48 @@ impl <'a> Window <'a> {
         for index in 0..self.updated.len() {
             if !self.updated[index] {  continue;  }
             self.updated[index] = false;
-            self.lines[index].1 = self.lines[index].0.Join();
+
+            let (text, size) = self.lines[index].0.Join();
+            self.lines[index].1 = text;
+            self.lines[index].2 = size;
         }
     }
-    
+
+    // Clamps a string to a maximum length of visible UTF-8 characters while preserving escape codes
+    fn ClampStringVisibleUTF_8 (&self, text: &String, maxLength: usize) -> String {
+        let mut accumulative: String = String::new();
+
+        let mut visible = 0;
+        let mut inEscape = false;
+        let mut chars = text.chars();
+        while let Some(chr) = chars.next() {
+            if chr == '\x1b' {
+                inEscape = true;
+            } else if inEscape {
+                if chr == 'm' {
+                    inEscape = false;
+                }
+            } else {
+                visible += 1;
+                if visible > maxLength {  break;  }
+            }
+            accumulative.push_str(&chr.to_string());
+        }
+
+        accumulative
+    }
+
     // Gets the rendered text for the individual window
     // This shouldn't crash when rendering out of bounds unlike certain other libraries...
     pub fn GetRender (&self) -> Vec <String> {
         let mut text = vec![String::new()];
-        
+        let color = self.color.GetText();
+
         // handling the top border
         let borderSize;
         if self.bordered {
             let mut lineSize = 1;
-            text[0].push_str(&self.color);
+            text[0].push_str(&color.0);
             text[0].push('┌');
             let splitSize = (self.size.0 - 2) / 2 - self.title.len() as u16 / 2;
             lineSize += splitSize;
@@ -462,25 +522,41 @@ impl <'a> Window <'a> {
         let bordered = borderSize / 2;
         for index in bordered..self.size.1 as usize - bordered {
             let lineText;
-            if index < self.lines.len() {
-                let line = &self.lines[0..self.size.1 as usize - borderSize][0];
-                lineText = &line.1[0..self.size.0 as usize - borderSize];
+            let lineSize;
+            if index <= self.lines.len() {
+                let line = &self.lines[index - 1];//self.lines[0..self.size.1 as usize - borderSize][0];
+                /*lineText = &line.1[0..std::cmp::min(
+                    self.size.0 as usize - borderSize,
+                    line.1.len()
+                )];*/
+                /*lineText = line.1.get(0..std::cmp::min(
+                    self.size.0 as usize - borderSize,
+                    line.1.len()
+                )).unwrap_or("");*/  // the clamping won't work with how it's being done rn bc/ of multi-byte chars
+                lineText = self.ClampStringVisibleUTF_8(
+                    &line.1, self.size.0 as usize - borderSize
+                );
+                lineSize = std::cmp::min(self.lines[index - 1].2, self.size.0 as usize - borderSize);
             } else {
-                lineText = "";
+                lineText = String::new();
+                lineSize = 0;
             }
 
             // handling the side borders
             if self.bordered {
-                text[index].push_str(&self.color);
+                text[index].push_str(&color.0);
                 text[index].push('│');
-                text[index].push_str(lineText);
-                let padding = (self.size.0 as usize - 2) - lineText.len();
+                text[index].push_str(CLEAR);
+                text[index].push_str(&lineText);
+                text[index].push_str(CLEAR);
+                let padding = (self.size.0 as usize - 2) - lineSize;
                 text[index].push_str(&" ".repeat(padding));
+                text[index].push_str(&color.0);
                 text[index].push('│');
                 text[index].push_str(CLEAR);
             } else {
-                text[index].push_str(lineText);
-                let padding = (self.size.0 as usize) - lineText.len();
+                text[index].push_str(&lineText);
+                let padding = (self.size.0 as usize) - lineSize;
                 text[index].push_str(&" ".repeat(padding));
             }
             text.push(String::new());
@@ -489,7 +565,7 @@ impl <'a> Window <'a> {
         // handling the bottom border
         let lastIndex = text.len() - 1;
         if self.bordered {
-            text[lastIndex].push_str(&self.color);
+            text[lastIndex].push_str(&color.0);
             text[lastIndex].push('└');
             text[lastIndex].push_str(&"─".repeat(self.size.0 as usize - 2));
             text[lastIndex].push('┘');
@@ -504,13 +580,13 @@ impl <'a> Window <'a> {
     // Replaces a single line with an updated version
     pub fn UpdateLine (&mut self, index: usize, span: Span <'a>) {
         if index >= self.lines.len() {  return;  }
-        self.lines[index] = (span, String::new());
+        self.lines[index] = (span, String::new(), 0);
         self.updated[index] = true;
     }
 
     // Appends a single line to the window
-    pub fn AddLines (&mut self, span: Span <'a>) {
-        self.lines.push((span, String::new()));
+    pub fn AddLine (&mut self, span: Span <'a>) {
+        self.lines.push((span, String::new(), 0));
         self.updated.push(true);
     }
 
@@ -519,7 +595,7 @@ impl <'a> Window <'a> {
     pub fn FromLines (&mut self, lines: Vec <Span <'a>>) {
         self.lines.clear(); self.updated.clear();
         for span in lines {
-            self.lines.push((span, String::new()));
+            self.lines.push((span, String::new(), 0));
             self.updated.push(true);
         }
     }
@@ -529,7 +605,7 @@ impl <'a> Window <'a> {
         while let Some(span) = lines.pop() {
             let index = lines.len();  // the pop already subtracted one
             if span != self.lines[index].0 {
-                self.lines[index] = (span, String::new());
+                self.lines[index] = (span, String::new(), 0);
                 self.updated[index] = true;
             }
         }
@@ -567,6 +643,14 @@ impl <'a> App <'a> {
             updated: true,
         };
         app
+    }
+
+    pub fn GetWindowReference (&self, name: String) -> &Window {
+        &self.activeWindows[self.windowReferences[&name]]
+    }
+
+    pub fn GetWindowReferenceMut (&mut self, name: String) -> &'a mut Window {
+        &mut self.activeWindows[self.windowReferences[&name]]
     }
 
     pub fn GetTerminalSize (&self) -> Result <(u16, u16), std::io::Error> {
@@ -614,6 +698,40 @@ impl <'a> App <'a> {
         Ok(self.activeWindows.remove(index))
     }
 
+    // Gets a range of visible UTF-8 characters while preserving escape codes
+    pub fn GetSliceUTF_8 (text: &String, range: std::ops::Range <usize>) -> String
+    where
+        std::ops::Range<usize>: Iterator<Item = usize>
+    {
+        let mut visible = 0;
+        let mut inEscape = false;
+        let mut slice = String::new();
+        let mut textChars = text.chars();
+        while let Some(chr) = textChars.next() {
+            if chr == '\x1b' {
+                inEscape = true;
+
+                // making sure to keep the initial escape codes
+                slice.push_str(&chr.to_string());
+            } else if inEscape {
+                inEscape = chr != 'm';
+
+                // making sure to keep the initial escape codes
+                slice.push_str(&chr.to_string());
+            } else {
+                visible += 1;
+                if visible >= range.start {
+                    if visible < range.end {
+                        // adding the element to the slice
+                        slice.push_str(&chr.to_string());
+                        continue;
+                    }
+                    return slice;  // no need to continue
+                }
+            }
+        } slice
+    }
+
     // Renders all the active windows to the consol
     // It also clears the screen from previous writing
     pub fn Render (&mut self) -> Result <(), std::io::Error> {
@@ -628,7 +746,7 @@ impl <'a> App <'a> {
             width: size.0,
             height: size.1,
         };
-
+        
         let mut finalLines = vec![String::new(); self.area.height as usize + 1];
         let mut lineSizes = vec![0; self.area.height as usize + 1];
 
@@ -646,11 +764,25 @@ impl <'a> App <'a> {
             for (index, line) in output.iter().enumerate() {
                 let lineIndex = window.position.1 as usize + index;
                 // finding the necessary padding
+                // figure out intersections...
                 let padding = window.position.0.saturating_sub(lineSizes[lineIndex]) as usize;
                 finalLines[lineIndex].push_str(&" ".repeat(padding));
 
                 // rendering the line of the window
-                finalLines[lineIndex].push_str(&line);
+                if window.position.0 + window.size.0 > lineSizes[lineIndex] {
+                    finalLines[lineIndex].push_str(
+                        // adjust this to count for non-visible characters...
+                        // once this is adjusted, I think it should work for any type of intersection
+                        // future elements are always at a deeper depth (first rendered is always on top; too lazy to change)
+                        &App::GetSliceUTF_8(&line,
+                                            lineSizes[lineIndex]
+                                                .saturating_sub(window.position.0
+                                                    .saturating_sub(1)
+                                                ) as usize
+                                                ..line.len()
+                        )
+                    );
+                }
                 lineSizes[lineIndex] += window.size.0 + padding as u16;
             }
         }

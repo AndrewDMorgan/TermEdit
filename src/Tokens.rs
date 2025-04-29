@@ -724,6 +724,7 @@ impl ScopeNode {
             return self;
         }
 
+        // this crashed, figure it out at some point......
         self.children[index.unwrap()].GetNode(scope)
     }
 
