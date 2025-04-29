@@ -23,6 +23,7 @@ A bad terminal based code editor created in rust for rust
  - ^[[3;12~  (⌘ ⇧ <-)
  - ^[[3;5~   (⌘ ->)
  - ^[[3;12~  (⌘ ⇧ ->)
+ - (->, <-, v, ^ represent directional arrow keys)
 
 Without these codes/bindings, the program will still work, although special actions (option/command/shift + certain keys) will be limited due to the terminal not sending anything for the events/actions.
  * Switch to Control as the default modifier key to get a wider support for default escape codes (control + key is much more widely supported in terminals).
