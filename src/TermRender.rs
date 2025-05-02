@@ -1,10 +1,10 @@
 // snake case is just bad
-#![allow(non_snake_case)]
 #![allow(dead_code)]
 
 //* Add a check for updated in the GetRender method for windows
-//* Support overlapping borders in the App Render method
-
+//* Make a proc macro for easier colorizing (Color![White, Dim, ...])
+//      -- expands to something like .Colorizes(vec![ColorType::White, ...])
+//      -- right now it's just very wordy (a bit annoying to type bc/ of that)
 
 
 // static color/mod pairs for default ascii/ansi codes
@@ -17,8 +17,8 @@
 // /033[... doesn't work; use /x1b[...
 pub static CLEAR: &'static str = "\x1b[0m";
 
-// * color, modifiers, is background
-pub static EMPTY_MODIFIER_REFERENCE: &[&str] = &[];
+// * color, modifiers, is_background
+pub static EMPTY_MODIFIER_REFERENCE: &[&str] = &[];  // making a default static type is annoying
 
 pub static BLACK:      (Option <&str>, &[&str], bool) = (Some("30"), &[], false);
 pub static RED:        (Option <&str>, &[&str], bool) = (Some("31"), &[], false);
@@ -68,7 +68,7 @@ pub static BLINK:     (Option <&str>, &[&str], bool) = (None    , &["5"], false)
 pub static REVERSE:   (Option <&str>, &[&str], bool) = (None    , &["7"], false);
 pub static HIDE:      (Option <&str>, &[&str], bool) = (None    , &["8"], false);
 
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 // Different base ascii text modifiers (static constants)
 pub enum ColorType {
     Black,
@@ -130,7 +130,7 @@ pub enum ColorType {
 // or a partially dynamic type.
 // This allows for a passing of different types,
 // circumventing lifetime issues while preserving statics.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum UniqueColor {
     Static  ((Option <&'static str>, &'static [&'static str], bool)),
     Dynamic ((Option <   String   >, &'static [&'static str], bool)),
@@ -236,8 +236,8 @@ impl ColorType {
 
 // Color setters for standard primitives
 
-// Converts the given instance into the type Colored based on a provided
-// set of modifiers.
+/// Converts the given instance into the type Colored based on a provided
+/// set of modifiers (in the form of ColorType).
 pub trait Colorize {
     // adds a set of modifiers/colors
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored;
@@ -248,21 +248,21 @@ pub trait Colorize {
 
 impl Colorize for &str {
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored {
-        Colored::GetFromColorTypes(self, colors)
+        Colored::GetFromColorTypes(&self.to_string(), colors)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(self, vec![color])
+        Colored::GetFromColorTypes(&self.to_string(), vec![color])
     }
 }
 
 impl Colorize for String {
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored {
-        Colored::GetFromColorTypes(self, colors)
+        Colored::GetFromColorTypes(&self.clone(), colors)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(self, vec![color])
+        Colored::GetFromColorTypes(&self.clone(), vec![color])
     }
 }
 
@@ -270,30 +270,30 @@ impl Colorize for String {
 // A colored string
 // It stores all of its modifiers like colors/underlying/other
 //#[derive(Clone)]
-#[derive(Clone, Eq, PartialEq, Debug, Default)]
-pub struct Colored <'a> {
-    text: &'a str,
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
+pub struct Colored {
+    text: String,
     mods: Vec <String>,
     color: Option <String>,
     bgColor: Option <String>,
 }
 
-impl <'a> Colorize for Colored <'a> {
+impl Colorize for Colored {
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored {
         let mut mods = vec![];
         for modifier in colors {
             mods.push(modifier);
         }
-        Colored::GetFromColorTypes(self.text, mods)
+        Colored::GetFromColorTypes(&self.text, mods)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(self.text, vec![color])
+        Colored::GetFromColorTypes(&self.text, vec![color])
     }
 }
 
-impl <'a> Colored <'a> {
-    pub fn new (text: &'a str) -> Colored <'a> {
+impl Colored {
+    pub fn new (text: String) -> Colored {
         Colored {
             text,
             mods: vec![],
@@ -302,7 +302,7 @@ impl <'a> Colored <'a> {
         }
     }
 
-    pub fn ChangeText (&mut self, text: &'a str) {
+    pub fn ChangeText (&mut self, text: String) {
         self.text = text;
     }
 
@@ -326,15 +326,15 @@ impl <'a> Colored <'a> {
     }
 
     // Takes a set of color types and returns a filled out Colored instance
-    pub fn GetFromColorTypes (text: &str, colors: Vec <ColorType>) -> Colored {
-        let mut colored = Colored::new(text);
+    pub fn GetFromColorTypes (text: &String, colors: Vec <ColorType>) -> Colored {
+        let mut colored = Colored::new(text.clone());
         for color in colors {
             colored.AddColor(color);
         } colored
     }
 
     // Takes a set of unique colors and generates a filled out instance
-    pub fn GetFromUniqueColors (text: &str, uniqueColors: Vec <UniqueColor>) -> Colored {
+    pub fn GetFromUniqueColors (text: String, uniqueColors: Vec <UniqueColor>) -> Colored {
         let mut colored = Colored::new(text);
         for color in uniqueColors {
             colored.AddUnique(color);
@@ -355,19 +355,19 @@ impl <'a> Colored <'a> {
                 "\x1b[{}m", color  //, self.mods.join(";")  can't have modifiers on backgrounds?
             ));
         }
-        text.push_str(self.text);
+        text.push_str(&self.text);
         (text, self.text.len())
     }
 }
 
 // A colored span of text (fancy string)
-#[derive(Clone, Eq, PartialEq, Debug, Default)]
-pub struct Span <'a> {
-    line: Vec <Colored <'a>>,
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
+pub struct Span {
+    line: Vec <Colored>,
 }
 
-impl <'a> Span <'a> {
-    pub fn FromTokens (tokens: Vec <Colored <'a>>) -> Self {
+impl Span {
+    pub fn FromTokens (tokens: Vec <Colored>) -> Self {
         Span {
             line: tokens,
         }
@@ -398,21 +398,21 @@ impl <'a> Span <'a> {
 // Each window can contain its own text or logic
 // This allows a separation/abstraction for individual sections
 // This also allows for a cached window to be reused if temporarily closed
-#[derive(Clone)]
-pub struct Window <'a> {
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
+pub struct Window {
     pub position: (u16, u16),
     pub size: (u16, u16),
     updated: Vec <bool>,
 
-    // (Span, cached render)
-    lines: Vec <(Span <'a>, String, usize)>,
+    // (Span, cached render, num visible chars)
+    lines: Vec <(Span, String, usize)>,
 
     bordered: bool,
     title: String,
-    color: Colored <'a>,
+    color: Colored,
 }
 
-impl <'a> Window <'a> {
+impl Window {
     pub fn new (position: (u16, u16), size: (u16, u16)) -> Self {
         Window {
             position,
@@ -421,8 +421,12 @@ impl <'a> Window <'a> {
             lines: vec![],
             bordered: false,
             title: String::new(),
-            color: Colored::new(""),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
+            color: Colored::new(String::new()),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
         }
+    }
+
+    pub fn Move (&mut self, newPosition: (u16, u16)) {
+        self.position = newPosition;
     }
 
     pub fn Colorizes (&mut self, colors: Vec <ColorType>) {
@@ -441,16 +445,16 @@ impl <'a> Window <'a> {
     }
 
     // Sets/updates the title of the window/block
-    pub fn Titled (&mut self, title: &'a str) {
-        self.title = title.to_string();
+    pub fn Titled (&mut self, title: String) {
+        self.title = title;
         //self.color.ChangeText(title);
     }
 
     // Changes the size of the window
-    pub fn Resize (&mut self, change: (isize, isize)) {
+    pub fn Resize (&mut self, change: (u16, u16)) {
         self.size = (
-            std::cmp::max(self.size.0 as isize + change.0, 0) as u16,
-            std::cmp::max(self.size.1 as isize + change.1, 0) as u16
+            std::cmp::max(self.size.0 + change.0, 0),
+            std::cmp::max(self.size.1 + change.1, 0)
         );
     }
 
@@ -578,21 +582,21 @@ impl <'a> Window <'a> {
     }
 
     // Replaces a single line with an updated version
-    pub fn UpdateLine (&mut self, index: usize, span: Span <'a>) {
+    pub fn UpdateLine (&mut self, index: usize, span: Span) {
         if index >= self.lines.len() {  return;  }
         self.lines[index] = (span, String::new(), 0);
         self.updated[index] = true;
     }
 
     // Appends a single line to the window
-    pub fn AddLine (&mut self, span: Span <'a>) {
+    pub fn AddLine (&mut self, span: Span) {
         self.lines.push((span, String::new(), 0));
         self.updated.push(true);
     }
 
     // Takes a vector of type Span
     // That Span replaces the current set of lines for the window
-    pub fn FromLines (&mut self, lines: Vec <Span <'a>>) {
+    pub fn FromLines (&mut self, lines: Vec <Span>) {
         self.lines.clear(); self.updated.clear();
         for span in lines {
             self.lines.push((span, String::new(), 0));
@@ -601,7 +605,13 @@ impl <'a> Window <'a> {
     }
 
     // checks to see if any lines need to be updated
-    pub fn TryUpdateLines (&mut self, mut lines: Vec <Span <'a>>) {
+    pub fn TryUpdateLines (&mut self, mut lines: Vec <Span>) {
+        if lines.len() != self.lines.len() {
+            while let Some(span) = lines.pop() {
+                self.lines.push((span, String::new(), 0));
+            }
+            return;
+        }
         while let Some(span) = lines.pop() {
             let index = lines.len();  // the pop already subtracted one
             if span != self.lines[index].0 {
@@ -610,11 +620,15 @@ impl <'a> Window <'a> {
             }
         }
     }
+
+    pub fn IsEmpty (&self) -> bool {
+        self.lines.is_empty()
+    }
 }
 
 
 // the main window/application that handles all the windows
-#[derive(Default, Clone)]
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Rect {
     x: u16,
     y: u16,
@@ -624,33 +638,42 @@ pub struct Rect {
 
 // the main application. It stores and handles the active windows
 // It also handles rendering the cumulative sum of the windows
-#[derive(Default, Clone)]
-pub struct App <'a> {
+#[derive(Clone, Debug, Eq, PartialEq, Default)]
+pub struct App {
     area: Rect,
-    activeWindows: Vec <Window <'a>>,
+    activeWindows: Vec <Window>,
     windowReferences: std::collections::HashMap <String, usize>,
     changeWindowLayout: bool,
     updated: bool,
 }
 
-impl <'a> App <'a> {
+impl App {
     pub fn new () -> Self {
-        let app = App {
-            area: Rect {x: 0, y: 0, width: 5, height: 5},  // temp
+        App {
+            area: Rect::default(),
             activeWindows: vec![],
             windowReferences: std::collections::HashMap::new(),
-            changeWindowLayout: false,
+            changeWindowLayout: true,
             updated: true,
-        };
-        app
+        }
+    }
+
+    pub fn ContainsWindow (&self, name: String) -> bool {
+        self.windowReferences.contains_key(&name)
     }
 
     pub fn GetWindowReference (&self, name: String) -> &Window {
         &self.activeWindows[self.windowReferences[&name]]
     }
 
-    pub fn GetWindowReferenceMut (&mut self, name: String) -> &'a mut Window {
+    pub fn GetWindowReferenceMut (&mut self, name: String) -> &mut Window {
+        self.updated = true;  // assuming something is being changed
         &mut self.activeWindows[self.windowReferences[&name]]
+    }
+
+    pub fn UpdateWindowLayoutOrder (&mut self) {
+        self.changeWindowLayout = true;
+        self.updated = true;
     }
 
     pub fn GetTerminalSize (&self) -> Result <(u16, u16), std::io::Error> {
@@ -664,14 +687,19 @@ impl <'a> App <'a> {
     }
 
     // Adds a new active window
-    pub fn AddWindow (&mut self, window: Window <'a>, name: String) {
+    pub fn AddWindow (&mut self, window: Window, name: String) {
+        self.changeWindowLayout = true;
         self.windowReferences.insert(name, self.windowReferences.len());
         self.activeWindows.push(window);
+        self.updated = true;
     }
 
     // Pops an active window.
     // Returns Ok(window) if the index is valid, or Err if out of bounds
-    pub fn RemoveWindow (&mut self, name: String) -> Result <Window<'a>, String> {
+    pub fn RemoveWindow (&mut self, name: String) -> Result <Window, String> {
+        self.changeWindowLayout = true;
+        self.updated = true;
+
         if !self.windowReferences.contains_key(&name) {
             return Err(format!("No window named '{}' found", name));
         }
@@ -746,17 +774,24 @@ impl <'a> App <'a> {
             width: size.0,
             height: size.1,
         };
-        
+
         let mut finalLines = vec![String::new(); self.area.height as usize + 1];
         let mut lineSizes = vec![0; self.area.height as usize + 1];
 
         // sorting the windows based on the horizontal position
+        let mut referenceArray = vec![];
+        for keyPair in &self.windowReferences {
+            referenceArray.push(keyPair.1);
+        }
+
         if self.changeWindowLayout {
-            self.activeWindows.sort_by_key(|window| window.position.0);
+            referenceArray.sort_by_key( |index| self.activeWindows[**index].position.0 );
+            self.changeWindowLayout = false;
         }
 
         // going through the sorted windows
-        for window in &mut self.activeWindows {
+        for index in referenceArray {
+            let window = &mut self.activeWindows[*index];
             // if un-updated, this should only check for true in a vec a few times
             window.UpdateRender();
 
@@ -779,7 +814,7 @@ impl <'a> App <'a> {
                                                 .saturating_sub(window.position.0
                                                     .saturating_sub(1)
                                                 ) as usize
-                                                ..line.len()
+                                            ..line.len()
                         )
                     );
                 }
