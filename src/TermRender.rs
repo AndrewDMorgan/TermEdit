@@ -1,6 +1,8 @@
 // snake case is just bad
 #![allow(dead_code)]
 
+use std::io::Write;
+
 //* Add a check for updated in the GetRender method for windows
 //* Make a proc macro for easier colorizing (Color![White, Dim, ...])
 //      -- expands to something like .Colorizes(vec![ColorType::White, ...])
@@ -309,7 +311,6 @@ impl Colored {
     // Adds a color type
     pub fn AddColor (&mut self, color: ColorType) {
         self.AddUnique(color.GetColor());
-
     }
 
     // Adds a unique color
@@ -341,22 +342,31 @@ impl Colored {
         } colored
     }
 
-    pub fn GetText (&self) -> (String, usize) {
+    pub fn GetText (&self, lastColor: &mut (String, String)) -> (String, usize) {
         let mut text = String::new();
         if let Some(color) = &self.color {
-            text.push_str(&format!(
-                //
-                //":{}:{}:", color, self.mods.join(";")
-                "\x1b[0;{};{}m", color, self.mods.join(";")
-            ));
+            let color = format!("\x1b[0;{};{}m", color, self.mods.join(";"));
+            if color != lastColor.0 {
+                text.push_str(&color);
+                text.push_str(CLEAR);
+            }
+            lastColor.0 = color;
         }
         if let Some(color) = &self.bgColor {
-            text.push_str(&format!(
+            let color = format!(
                 "\x1b[{}m", color  //, self.mods.join(";")  can't have modifiers on backgrounds?
-            ));
+            );
+            if color != lastColor.1 {
+                text.push_str(&color);
+            }
+            lastColor.1 = color;
         }
         text.push_str(&self.text);
         (text, self.text.len())
+    }
+
+    pub fn GetSize (&self) -> usize {
+        self.text.len()
     }
 }
 
@@ -373,8 +383,17 @@ impl Span {
         }
     }
 
-    fn Join (&self) -> (String, usize) {
+    pub fn Size (&self) -> usize {
+        let mut size = 0;
+        for colored in &self.line {
+            size += colored.GetSize();
+        }
+        size
+    }
+
+    pub fn Join (&self) -> (String, usize) {
         //let mut lastColored = vec![];
+        let mut lastColored = (String::new(), String::new());
         let mut total = String::new();
         let mut totalSize = 0;
         for colored in &self.line {
@@ -383,7 +402,7 @@ impl Span {
                 total.push_str(CLEAR);
                 total.push_str(&colored.mods.concat());
             }*/
-            let (text, size) = colored.GetText();
+            let (text, size) = colored.GetText(&mut lastColored);
             total.push_str(&text);
             totalSize += size;
         }
@@ -408,7 +427,7 @@ pub struct Window {
     lines: Vec <(Span, String, usize)>,
 
     bordered: bool,
-    title: String,
+    title: (Span, usize),
     color: Colored,
 }
 
@@ -417,15 +436,16 @@ impl Window {
         Window {
             position,
             size,
-            updated: vec![],
+            updated: vec![false; size.1 as usize],
             lines: vec![],
             bordered: false,
-            title: String::new(),
+            title: (Span::default(), 0),
             color: Colored::new(String::new()),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
         }
     }
 
     pub fn Move (&mut self, newPosition: (u16, u16)) {
+        if newPosition == self.position {  return;  }
         self.position = newPosition;
     }
 
@@ -435,7 +455,7 @@ impl Window {
         }
     }
 
-    pub fn Colorize <'b> (&mut self, color: ColorType) {
+    pub fn Colorize (&mut self, color: ColorType) {
         self.color.AddColor(color);
     }
 
@@ -446,21 +466,36 @@ impl Window {
 
     // Sets/updates the title of the window/block
     pub fn Titled (&mut self, title: String) {
-        self.title = title;
+        self.title = (
+            Span::FromTokens(
+            vec![title.Colorizes(vec![])]),
+            title.len()
+        );
         //self.color.ChangeText(title);
     }
 
+    pub fn HasTitle (&self) -> bool {
+        self.title.1 != 0
+    }
+
+    pub fn TitledColored (&mut self, title: Span) {
+        let size = title.Size();
+        self.title = (title, size);
+    }
+
     // Changes the size of the window
-    pub fn Resize (&mut self, change: (u16, u16)) {
+    pub fn Resize (&mut self, changed: (u16, u16)) {
+        if self.size == changed {  return;  }
         self.size = (
-            std::cmp::max(self.size.0 + change.0, 0),
-            std::cmp::max(self.size.1 + change.1, 0)
+            std::cmp::max(changed.0, 0),
+            std::cmp::max(changed.1, 0)
         );
+        self.updated = vec![false; self.size.1 as usize];
     }
 
     // Updates the colorized rendering of the Spans for all lines
     // Each line is only re-computed if a change was indicated
-    pub fn UpdateRender (&mut self) {
+    /*pub fn UpdateRender (&mut self) {
         for index in 0..self.updated.len() {
             if !self.updated[index] {  continue;  }
             self.updated[index] = false;
@@ -469,10 +504,10 @@ impl Window {
             self.lines[index].1 = text;
             self.lines[index].2 = size;
         }
-    }
+    }*/
 
     // Clamps a string to a maximum length of visible UTF-8 characters while preserving escape codes
-    fn ClampStringVisibleUTF_8 (&self, text: &String, maxLength: usize) -> String {
+    fn ClampStringVisibleUTF_8 (text: &String, maxLength: usize) -> String {
         let mut accumulative: String = String::new();
 
         let mut visible = 0;
@@ -495,11 +530,121 @@ impl Window {
         accumulative
     }
 
+    pub fn RenderWindowSlice (color: (String, usize),
+                              bordered: bool,
+                              renderText: (String, usize),
+                              size: (u16, u16)
+    ) -> String {
+        let mut text = String::new();
+        let lineSize;
+
+        //let line = &self.lines[index - 1];//self.lines[0..self.size.1 as usize - borderSize][0];
+        let borderSize = match bordered {
+            true => 2, false => 0
+        };
+        let lineText = Window::ClampStringVisibleUTF_8(
+            &renderText.0, size.0 as usize - borderSize
+        );
+        lineSize = std::cmp::min(renderText.1, size.0 as usize - borderSize);
+
+        // handling the side borders
+        if bordered {
+            text.push_str(&color.0);
+            text.push('│');
+            text.push_str(CLEAR);
+            text.push_str(&lineText);
+            text.push_str(CLEAR);
+            let padding = (size.0 as usize - 2) - lineSize;
+            text.push_str(&" ".repeat(padding));
+            text.push_str(&color.0);
+            text.push('│');
+            text.push_str(CLEAR);
+        } else {
+            text.push_str(&lineText);
+            let padding = (size.0 as usize) - lineSize;
+            text.push_str(&" ".repeat(padding));
+        }
+        text
+    }
+
+    pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> {
+        // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
+        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
+        let borderColor = self.color.GetText(&mut (String::new(), String::new()));
+
+        // make sure to not call UpdateRender when using closures
+        let borderedSize = {
+            if self.bordered {  1  }
+            else {  0  }
+        };
+        let mut updated = false;
+        for index in borderedSize..self.size.1 as usize - borderedSize {
+            if self.updated[index] {  continue;  }
+            updated = true;
+            self.updated[index] = true;
+
+            let (text, size);
+            if index - borderedSize < self.lines.len() {
+                (text, size) = self.lines[index - borderedSize].0.Join();
+                self.lines[index - borderedSize].1 = text.clone();
+                self.lines[index - borderedSize].2 = size.clone();
+            } else {
+                (text, size) = (String::new(), 0);
+            }
+
+            // creating the closure
+            let color = borderColor.clone();
+            let windowSize = self.size;  // idk a better way to do this other than cloning
+            let bordered = self.bordered;
+
+            let closure = move || {
+                let slice = Window::RenderWindowSlice(color, bordered, (text, size), windowSize);
+                slice
+            };
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16));
+        }
+
+        if updated && self.bordered {
+            self.updated[0] = true;
+            self.updated[self.size.1 as usize - 1] = true;
+
+            // adding the top and bottom lines to the closures
+            let color = borderColor.clone();
+            let windowSize = self.size.0;  // idk a better way to do this other than cloning
+            let closure = move || {  // top
+                let mut text = String::new();
+                text.push_str(&color.0);
+                text.push('└');
+                text.push_str(&"─".repeat(windowSize as usize - 2));
+                text.push('┘');
+                text.push_str(CLEAR);
+                text
+            };
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + self.size.1 - 1));
+
+            // bottom
+            let color = borderColor;  // consuming border color here
+            let windowSize = self.size.0;  // idk a better way to do this other than cloning
+            let closure = move || {
+                let mut text = String::new();
+                text.push_str(&color.0);
+                text.push('┌');
+                text.push_str(&"─".repeat(windowSize as usize - 2));
+                text.push('┐');
+                text.push_str(CLEAR);
+                text
+            };
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1));
+        }
+
+        renderClosures
+    }
+
     // Gets the rendered text for the individual window
     // This shouldn't crash when rendering out of bounds unlike certain other libraries...
     pub fn GetRender (&self) -> Vec <String> {
         let mut text = vec![String::new()];
-        let color = self.color.GetText();
+        let color = self.color.GetText(&mut (String::new(), String::new()));
 
         // handling the top border
         let borderSize;
@@ -507,11 +652,11 @@ impl Window {
             let mut lineSize = 1;
             text[0].push_str(&color.0);
             text[0].push('┌');
-            let splitSize = (self.size.0 - 2) / 2 - self.title.len() as u16 / 2;
+            let splitSize = (self.size.0 - 2) / 2 - self.title.1 as u16 / 2;
             lineSize += splitSize;
             text[0].push_str(&"─".repeat(splitSize as usize));
-            lineSize += self.title.len() as u16;
-            text[0].push_str(&self.title);
+            lineSize += self.title.1 as u16;
+            text[0].push_str(&self.title.0.Join().0);
             //let lineSize = text[0].len();
             text[0].push_str(&"─".repeat(
                 (self.size.0 as usize).saturating_sub(1 + lineSize as usize)
@@ -529,15 +674,7 @@ impl Window {
             let lineSize;
             if index <= self.lines.len() {
                 let line = &self.lines[index - 1];//self.lines[0..self.size.1 as usize - borderSize][0];
-                /*lineText = &line.1[0..std::cmp::min(
-                    self.size.0 as usize - borderSize,
-                    line.1.len()
-                )];*/
-                /*lineText = line.1.get(0..std::cmp::min(
-                    self.size.0 as usize - borderSize,
-                    line.1.len()
-                )).unwrap_or("");*/  // the clamping won't work with how it's being done rn bc/ of multi-byte chars
-                lineText = self.ClampStringVisibleUTF_8(
+                lineText = Window::ClampStringVisibleUTF_8(
                     &line.1, self.size.0 as usize - borderSize
                 );
                 lineSize = std::cmp::min(self.lines[index - 1].2, self.size.0 as usize - borderSize);
@@ -585,38 +722,47 @@ impl Window {
     pub fn UpdateLine (&mut self, index: usize, span: Span) {
         if index >= self.lines.len() {  return;  }
         self.lines[index] = (span, String::new(), 0);
-        self.updated[index] = true;
+        self.updated[index] = false;
     }
 
     // Appends a single line to the window
     pub fn AddLine (&mut self, span: Span) {
         self.lines.push((span, String::new(), 0));
-        self.updated.push(true);
+        self.updated.push(false);
     }
 
     // Takes a vector of type Span
     // That Span replaces the current set of lines for the window
     pub fn FromLines (&mut self, lines: Vec <Span>) {
-        self.lines.clear(); self.updated.clear();
+        self.lines.clear();// self.updated.clear();
+        let mut index = {
+            if self.bordered {  1  }
+            else {  0  }
+        };
         for span in lines {
             self.lines.push((span, String::new(), 0));
-            self.updated.push(true);
+            self.updated[index] = false;
+            index += 1;
         }
     }
 
     // checks to see if any lines need to be updated
     pub fn TryUpdateLines (&mut self, mut lines: Vec <Span>) {
         if lines.len() != self.lines.len() {
-            while let Some(span) = lines.pop() {
+            let mut index = 0;
+            for span in lines {
                 self.lines.push((span, String::new(), 0));
+                self.updated[index] = false;
+                index += 1;
             }
             return;
         }
+        let mut index = lines.len();
         while let Some(span) = lines.pop() {
-            let index = lines.len();  // the pop already subtracted one
+            index -= 1;  // the pop already subtracted one
             if span != self.lines[index].0 {
                 self.lines[index] = (span, String::new(), 0);
-                self.updated[index] = true;
+                self.updated[index] = false;
             }
         }
     }
@@ -630,31 +776,36 @@ impl Window {
 // the main window/application that handles all the windows
 #[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Rect {
-    x: u16,
-    y: u16,
-    width: u16,
-    height: u16,
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
 }
 
 // the main application. It stores and handles the active windows
 // It also handles rendering the cumulative sum of the windows
-#[derive(Clone, Debug, Eq, PartialEq, Default)]
+#[derive(Debug, Default)]
 pub struct App {
     area: Rect,
     activeWindows: Vec <Window>,
     windowReferences: std::collections::HashMap <String, usize>,
     changeWindowLayout: bool,
     updated: bool,
+    renderHandle: Option <std::thread::JoinHandle <()>>,
+    buffer: std::sync::Arc <parking_lot::RwLock <String>>,
 }
 
 impl App {
     pub fn new () -> Self {
+        print!("\x1B[2J\x1B[H");  // clearing the screen
         App {
             area: Rect::default(),
             activeWindows: vec![],
             windowReferences: std::collections::HashMap::new(),
             changeWindowLayout: true,
             updated: true,
+            renderHandle: None,
+            buffer: std::sync::Arc::new(parking_lot::RwLock::new(String::new())),
         }
     }
 
@@ -667,13 +818,13 @@ impl App {
     }
 
     pub fn GetWindowReferenceMut (&mut self, name: String) -> &mut Window {
-        self.updated = true;  // assuming something is being changed
+        //self.updated = true;  // assuming something is being changed
         &mut self.activeWindows[self.windowReferences[&name]]
     }
 
     pub fn UpdateWindowLayoutOrder (&mut self) {
         self.changeWindowLayout = true;
-        self.updated = true;
+        //self.updated = true;
     }
 
     pub fn GetTerminalSize (&self) -> Result <(u16, u16), std::io::Error> {
@@ -691,14 +842,14 @@ impl App {
         self.changeWindowLayout = true;
         self.windowReferences.insert(name, self.windowReferences.len());
         self.activeWindows.push(window);
-        self.updated = true;
+        //self.updated = true;
     }
 
     // Pops an active window.
     // Returns Ok(window) if the index is valid, or Err if out of bounds
     pub fn RemoveWindow (&mut self, name: String) -> Result <Window, String> {
         self.changeWindowLayout = true;
-        self.updated = true;
+        //self.updated = true;
 
         if !self.windowReferences.contains_key(&name) {
             return Err(format!("No window named '{}' found", name));
@@ -762,21 +913,49 @@ impl App {
 
     // Renders all the active windows to the consol
     // It also clears the screen from previous writing
-    pub fn Render (&mut self) -> Result <(), std::io::Error> {
-        // only re-rendering on updates (otherwise the current results are perfectly fine)
-        // this should reduce CPU usage by a fair bit and allow a fast refresh rate if needed
-        if !self.updated {  return Ok(());  }
+    pub fn Render (&mut self) {
+        if self.renderHandle.is_some() {
+            let handle = self.renderHandle.take().unwrap();
+            let _ = handle.join();
+        }
 
-        let size = self.GetTerminalSize()?;
+        let size = self.GetTerminalSize().unwrap();
+
+        self.buffer.write().clear();
+        //*
+        if size.0 != self.area.width || size.1 != self.area.height {
+            *self.buffer.write() = String::with_capacity((size.0 * size.1 * 3) as usize);
+
+            // making sure the windows get updated
+            //self.updated = true;
+            for window in &mut self.activeWindows {
+                for line in window.updated.iter_mut() {
+                    *line = false;
+                }
+            }
+            print!("\x1B[2J\x1B[H");  // re-clearing the screen (everything will need to update....)
+        } //*/
+
         self.area = Rect {
             x: 0,
             y: 0,
             width: size.0,
             height: size.1,
         };
+        
+        // only re-rendering on updates (otherwise the current results are perfectly fine)
+        // this should reduce CPU usage by a fair bit and allow a fast refresh rate if needed
+        let mut updated = false;
+        for window in &self.activeWindows {
+            if window.updated.contains(&false) {
+                updated = true;
+                break;
+            }
+        }
+        if !updated {  return;  }  // Ok(());  }
 
-        let mut finalLines = vec![String::new(); self.area.height as usize + 1];
-        let mut lineSizes = vec![0; self.area.height as usize + 1];
+        //let mut finalLines = vec![String::new(); self.area.height as usize + 1];
+        //let mut lineSizes = vec![0; self.area.height as usize + 1];
 
         // sorting the windows based on the horizontal position
         let mut referenceArray = vec![];
@@ -789,44 +968,95 @@ impl App {
             self.changeWindowLayout = false;
         }
 
+        // stores the draw calls
+        let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
+        // put this into the closure and use write! to improve performance (fewer allocations)
+        // let mut buffer = String::with_capacity((size.0 * size.1) as usize);
+        // call flush or something after to update the terminal
+        // let mut stdout = std::io::stdout().lock();
+        // write!(stdout, "\x1b[10;1H{}", your_text)?; // move + print
+        // stdout.flush()?; // manually flush if needed
+
         // going through the sorted windows
         for index in referenceArray {
             let window = &mut self.activeWindows[*index];
+            drawCalls.append(&mut window.GetRenderClosure());
             // if un-updated, this should only check for true in a vec a few times
-            window.UpdateRender();
-
-            let output = window.GetRender();
-            for (index, line) in output.iter().enumerate() {
-                let lineIndex = window.position.1 as usize + index;
-                // finding the necessary padding
-                // figure out intersections...
-                let padding = window.position.0.saturating_sub(lineSizes[lineIndex]) as usize;
-                finalLines[lineIndex].push_str(&" ".repeat(padding));
-
-                // rendering the line of the window
-                if window.position.0 + window.size.0 > lineSizes[lineIndex] {
-                    finalLines[lineIndex].push_str(
-                        // adjust this to count for non-visible characters...
-                        // once this is adjusted, I think it should work for any type of intersection
-                        // future elements are always at a deeper depth (first rendered is always on top; too lazy to change)
-                        &App::GetSliceUTF_8(&line,
-                                            lineSizes[lineIndex]
-                                                .saturating_sub(window.position.0
-                                                    .saturating_sub(1)
-                                                ) as usize
-                                            ..line.len()
-                        )
-                    );
-                }
-                lineSizes[lineIndex] += window.size.0 + padding as u16;
-            }
         }
 
-        // printing the cumulative sum
-        print!("{}", finalLines.join("\n"));
-        self.updated = false;
+        let size = (self.area.width, self.area.height);
+        let buffer = self.buffer.clone();
+        //println!("Num calls: {}", drawCalls.len());
+        self.renderHandle = Some(std::thread::spawn(move || {
+            //let start = std::time::Instant::now();
+            // the buffer for the render string
 
-        Ok(())
+            // sorting the calls by action row (and left to right for same row calls)
+            drawCalls.sort_by_key(|drawCall| drawCall.2 * size.0 + drawCall.1);
+            //std::thread::sleep(std::time::Duration::from_secs(1));
+
+            // iterating through the calls (consuming drawCalls)
+            let writeBuffer = &mut *buffer.write();
+            for call in drawCalls {
+                // moving the cursor into position
+                // ESC[{line};{column}H
+                writeBuffer.push_str("\x1b[");
+                App::PushU16(writeBuffer, call.2);
+                writeBuffer.push_str(";");
+                App::PushU16(writeBuffer, call.1);
+                writeBuffer.push_str("H");
+
+                //print!("2{}3", writeBuffer);
+                //print!("({})", writeBuffer);
+                //writeBuffer.clear();
+                //std::thread::sleep(std::time::Duration::from_secs(1));
+
+                let output = call.0();
+                writeBuffer.push_str(&output);
+
+                //print!("0{}1", writeBuffer);
+                //writeBuffer.clear();
+                //std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+
+            // moving the cursor to the bottom right
+            writeBuffer.push_str("\x1b[");
+            App::PushU16(writeBuffer, size.1);
+            writeBuffer.push_str(";");
+            App::PushU16(writeBuffer, size.0);
+            writeBuffer.push_str("H ");
+
+            // rendering the buffer
+            let mut out = std::io::stdout().lock();
+            out.write_all(writeBuffer.as_bytes()).unwrap();
+            out.flush().unwrap();
+
+            //let elapsed = start.elapsed();
+            //print!("Render thread completed in {:?}", elapsed);
+        }));
+
+        // printing the cumulative sum
+        //print!("{}", finalLines.join("\n"));
+        //self.updated = false;
+
+        //Ok(())
+    }
+
+    pub fn PushU16 (buffer: &mut String, mut value: u16) {
+        let mut reserved = [0u32; 5];
+        let mut i = 0;
+        //println!(": {}", value);
+        loop {
+            reserved[i] = (value % 10) as u32;
+            if value < 10 {  break;  }
+            value /= 10;
+            i += 1;
+        }
+        //println!("[{}, {}; {:?}]", value, i, reserved);
+        for index in (0..=i).rev() {
+            //println!("({:?}, {})", char::from_digit(reserved[index], 10), reserved[index]);
+            buffer.push(char::from_digit(reserved[index], 10).unwrap());
+        }
     }
 }
 
