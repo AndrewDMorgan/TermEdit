@@ -770,6 +770,12 @@ impl Window {
     pub fn IsEmpty (&self) -> bool {
         self.lines.is_empty()
     }
+
+    pub fn UpdateAll (&mut self) {
+        for line in self.updated.iter_mut() {
+            *line = false;
+        }
+    }
 }
 
 
@@ -787,12 +793,13 @@ pub struct Rect {
 #[derive(Debug, Default)]
 pub struct App {
     area: Rect,
-    activeWindows: Vec <Window>,
+    activeWindows: Vec <(Window, Vec <String>)>,  // window, mods
     windowReferences: std::collections::HashMap <String, usize>,
     changeWindowLayout: bool,
     updated: bool,
     renderHandle: Option <std::thread::JoinHandle <()>>,
     buffer: std::sync::Arc <parking_lot::RwLock <String>>,
+    resetWindows: bool,
 }
 
 impl App {
@@ -806,6 +813,7 @@ impl App {
             updated: true,
             renderHandle: None,
             buffer: std::sync::Arc::new(parking_lot::RwLock::new(String::new())),
+            resetWindows: false,
         }
     }
 
@@ -814,12 +822,12 @@ impl App {
     }
 
     pub fn GetWindowReference (&self, name: String) -> &Window {
-        &self.activeWindows[self.windowReferences[&name]]
+        &self.activeWindows[self.windowReferences[&name]].0
     }
 
     pub fn GetWindowReferenceMut (&mut self, name: String) -> &mut Window {
         //self.updated = true;  // assuming something is being changed
-        &mut self.activeWindows[self.windowReferences[&name]]
+        &mut self.activeWindows[self.windowReferences[&name]].0
     }
 
     pub fn UpdateWindowLayoutOrder (&mut self) {
@@ -838,10 +846,10 @@ impl App {
     }
 
     // Adds a new active window
-    pub fn AddWindow (&mut self, window: Window, name: String) {
+    pub fn AddWindow (&mut self, window: Window, name: String, keywords: Vec <String>) {
         self.changeWindowLayout = true;
         self.windowReferences.insert(name, self.windowReferences.len());
-        self.activeWindows.push(window);
+        self.activeWindows.push((window, keywords));
         //self.updated = true;
     }
 
@@ -849,6 +857,7 @@ impl App {
     // Returns Ok(window) if the index is valid, or Err if out of bounds
     pub fn RemoveWindow (&mut self, name: String) -> Result <Window, String> {
         self.changeWindowLayout = true;
+        self.resetWindows = true;
         //self.updated = true;
 
         if !self.windowReferences.contains_key(&name) {
@@ -874,7 +883,7 @@ impl App {
             *self.windowReferences.get_mut(&key).unwrap() -= 1;
         }
 
-        Ok(self.activeWindows.remove(index))
+        Ok(self.activeWindows.remove(index).0)
     }
 
     // Gets a range of visible UTF-8 characters while preserving escape codes
@@ -914,6 +923,7 @@ impl App {
     // Renders all the active windows to the consol
     // It also clears the screen from previous writing
     pub fn Render (&mut self) {
+        //let start = std::time::Instant::now();
         if self.renderHandle.is_some() {
             let handle = self.renderHandle.take().unwrap();
             let _ = handle.join();
@@ -922,19 +932,17 @@ impl App {
         let size = self.GetTerminalSize().unwrap();
 
         self.buffer.write().clear();
-        //*
-        if size.0 != self.area.width || size.1 != self.area.height {
+        if size.0 != self.area.width || size.1 != self.area.height || self.resetWindows {
+            self.resetWindows = false;
             *self.buffer.write() = String::with_capacity((size.0 * size.1 * 3) as usize);
 
             // making sure the windows get updated
             //self.updated = true;
             for window in &mut self.activeWindows {
-                for line in window.updated.iter_mut() {
-                    *line = false;
-                }
+                window.0.UpdateAll();
             }
             print!("\x1B[2J\x1B[H");  // re-clearing the screen (everything will need to update....)
-        } //*/
+        }
 
         self.area = Rect {
             x: 0,
@@ -942,20 +950,16 @@ impl App {
             width: size.0,
             height: size.1,
         };
-        
+
         // only re-rendering on updates (otherwise the current results are perfectly fine)
         // this should reduce CPU usage by a fair bit and allow a fast refresh rate if needed
         let mut updated = false;
         for window in &self.activeWindows {
-            if window.updated.contains(&false) {
-                updated = true;
-                break;
-            }
+            if !window.0.updated.contains(&false) {  continue;  }
+            updated = true;
+            break;
         }
         if !updated {  return;  }  // Ok(());  }
-
-        //let mut finalLines = vec![String::new(); self.area.height as usize + 1];
-        //let mut lineSizes = vec![0; self.area.height as usize + 1];
 
         // sorting the windows based on the horizontal position
         let mut referenceArray = vec![];
@@ -964,36 +968,27 @@ impl App {
         }
 
         if self.changeWindowLayout {
-            referenceArray.sort_by_key( |index| self.activeWindows[**index].position.0 );
+            referenceArray.sort_by_key( |index| self.activeWindows[**index].0.position.0 );
             self.changeWindowLayout = false;
         }
 
         // stores the draw calls
         let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
-        // put this into the closure and use write! to improve performance (fewer allocations)
-        // let mut buffer = String::with_capacity((size.0 * size.1) as usize);
-        // call flush or something after to update the terminal
-        // let mut stdout = std::io::stdout().lock();
-        // write!(stdout, "\x1b[10;1H{}", your_text)?; // move + print
-        // stdout.flush()?; // manually flush if needed
 
         // going through the sorted windows
         for index in referenceArray {
             let window = &mut self.activeWindows[*index];
-            drawCalls.append(&mut window.GetRenderClosure());
-            // if un-updated, this should only check for true in a vec a few times
+            drawCalls.append(&mut window.0.GetRenderClosure());
         }
 
         let size = (self.area.width, self.area.height);
         let buffer = self.buffer.clone();
         //println!("Num calls: {}", drawCalls.len());
         self.renderHandle = Some(std::thread::spawn(move || {
-            //let start = std::time::Instant::now();
             // the buffer for the render string
 
             // sorting the calls by action row (and left to right for same row calls)
             drawCalls.sort_by_key(|drawCall| drawCall.2 * size.0 + drawCall.1);
-            //std::thread::sleep(std::time::Duration::from_secs(1));
 
             // iterating through the calls (consuming drawCalls)
             let writeBuffer = &mut *buffer.write();
@@ -1006,17 +1001,8 @@ impl App {
                 App::PushU16(writeBuffer, call.1);
                 writeBuffer.push_str("H");
 
-                //print!("2{}3", writeBuffer);
-                //print!("({})", writeBuffer);
-                //writeBuffer.clear();
-                //std::thread::sleep(std::time::Duration::from_secs(1));
-
                 let output = call.0();
                 writeBuffer.push_str(&output);
-
-                //print!("0{}1", writeBuffer);
-                //writeBuffer.clear();
-                //std::thread::sleep(std::time::Duration::from_secs(1));
             }
 
             // moving the cursor to the bottom right
@@ -1030,16 +1016,10 @@ impl App {
             let mut out = std::io::stdout().lock();
             out.write_all(writeBuffer.as_bytes()).unwrap();
             out.flush().unwrap();
-
-            //let elapsed = start.elapsed();
-            //print!("Render thread completed in {:?}", elapsed);
         }));
 
-        // printing the cumulative sum
-        //print!("{}", finalLines.join("\n"));
-        //self.updated = false;
-
-        //Ok(())
+        //let elapsed = start.elapsed();
+        //panic!("Render thread completed in {:?}", elapsed);
     }
 
     pub fn PushU16 (buffer: &mut String, mut value: u16) {
@@ -1057,6 +1037,117 @@ impl App {
             //println!("({:?}, {})", char::from_digit(reserved[index], 10), reserved[index]);
             buffer.push(char::from_digit(reserved[index], 10).unwrap());
         }
+    }
+
+    pub fn GetWindowNames (&self) -> Vec<&String> {
+        let mut names = vec![];
+        for name in  self.windowReferences.keys() {
+            names.push(name);
+        } names
+    }
+
+    /// Prunes all windows which contain one of the specified keywords
+    /// Returns the number of windows pruned
+    pub fn PruneByKeywords (&mut self, keywords: Vec <String>) -> usize {
+        let mut pruned = vec![];
+        for (index, window) in self.activeWindows.iter().enumerate() {
+            for word in &window.1 {
+                if keywords.contains(word) {
+                    //println!("\n:{:?}::", (index, word));
+                    pruned.push(index);
+                    break;
+                }
+            }
+        }
+        if pruned.is_empty() {  return 0;  }
+        self.changeWindowLayout = true;
+        self.resetWindows = true;
+        self.updated = true;
+
+        let mut numPruned = 0;
+        let mut iter = pruned.iter();
+        // pruned should be in ascending order
+        while let Some(index) = iter.next() {
+            self.PruneUpdate(*index, &mut numPruned);
+        } numPruned
+    }
+
+    fn PruneUpdate (&mut self, index: usize, numPruned: &mut usize) {
+        // shifting all the indexes
+        let mut toRemove = vec![];
+        for pair in self.windowReferences.iter_mut() {
+            if *pair.1 == index-*numPruned {
+                toRemove.push(pair.0.clone());
+                continue;
+            }
+            if *pair.1 >= index-*numPruned {  *pair.1 -= 1  }
+        }
+        for key in toRemove {
+            self.windowReferences.remove(&key);
+        }
+        let _ = self.activeWindows.remove(index-*numPruned);
+        *numPruned += 1;
+    }
+
+    /// Prunes all windows based on a given key (closure).
+    /// Returns the number of windows pruned.
+    /// If the closure returns true, the element is pruned. If it returns false it's kept.
+    pub fn PruneByKey (&mut self, key: Box <dyn Fn (&Vec <String>) -> bool>) -> usize {
+        let mut pruned = vec![];
+        for (index, window) in self.activeWindows.iter().enumerate() {
+            if key(&window.1) {
+                pruned.push(index);
+            }
+        }
+        if pruned.is_empty() {  return 0;  }
+        self.changeWindowLayout = true;
+        self.resetWindows = true;
+        self.updated = true;
+
+        let mut numPruned = 0;
+        let mut iter = pruned.iter();
+        // pruned should be in ascending order
+        while let Some(index) = iter.next() {
+            self.PruneUpdate(*index, &mut numPruned);
+        } numPruned
+    }
+
+    /// Gets the names to all windows which contain at least one of the
+    /// specified keywords.
+    pub fn GetWindowsByKeywords (&self, keywords: Vec <String>) -> Vec <&String> {
+        let mut names = vec![];
+        for name in &self.windowReferences {
+            for keyword in &self.activeWindows[*name.1].1 {
+                if keywords.contains(keyword) {
+                    names.push(name.0);
+                    break;
+                }
+            }
+        }
+        names
+    }
+
+    /// Gets the names to all windows which satisfy the given key (closure).
+    /// If the closure returns true, the name is provided. Otherwise, it's
+    /// considered unrelated.
+    pub fn GetWindowsByKey (&self, key: Box <dyn Fn (&Vec <String>) -> bool>) -> Vec <&String> {
+        let mut names = vec![];
+        for name in &self.windowReferences {
+            if key(&self.activeWindows[*name.1].1) {
+                names.push(name.0);
+            }
+        }
+        names
+    }
+
+    /// Checks if a given window contains a specific keyword.
+    pub fn WindowContainsKeyword (&self, windowName: &String, keyword: &String) -> bool {
+        let windowIndex = self.windowReferences[windowName];
+        self.activeWindows[windowIndex].1.contains(keyword)
+    }
+
+    pub fn ChangedWindowLayout (&self) -> bool {
+        self.changeWindowLayout
     }
 }
 
