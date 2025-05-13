@@ -250,21 +250,21 @@ pub trait Colorize {
 
 impl Colorize for &str {
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored {
-        Colored::GetFromColorTypes(&self.to_string(), colors)
+        Colored::GetFromColorTypesStr(&self.to_string(), colors)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(&self.to_string(), vec![color])
+        Colored::GetFromColorTypesStr(&self.to_string(), vec![color])
     }
 }
 
 impl Colorize for String {
     fn Colorizes (&self, colors: Vec <ColorType>) -> Colored {
-        Colored::GetFromColorTypes(&self.clone(), colors)
+        Colored::GetFromColorTypesStr(&self.clone(), colors)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(&self.clone(), vec![color])
+        Colored::GetFromColorTypesStr(&self.clone(), vec![color])
     }
 }
 
@@ -286,11 +286,11 @@ impl Colorize for Colored {
         for modifier in colors {
             mods.push(modifier);
         }
-        Colored::GetFromColorTypes(&self.text, mods)
+        Colored::GetFromColorTypes(&self, mods)
     }
 
     fn Colorize (&self, color: ColorType) -> Colored {
-        Colored::GetFromColorTypes(&self.text, vec![color])
+        Colored::GetFromColorTypes(&self, vec![color])
     }
 }
 
@@ -327,7 +327,20 @@ impl Colored {
     }
 
     // Takes a set of color types and returns a filled out Colored instance
-    pub fn GetFromColorTypes (text: &String, colors: Vec <ColorType>) -> Colored {
+    pub fn GetFromColorTypes (colored: &Colored, colors: Vec <ColorType>) -> Colored {
+        let mut colored = Colored {
+            text: colored.text.clone(),
+            mods: colored.mods.clone(),
+            color: colored.color.clone(),
+            bgColor: colored.bgColor.clone(),
+        };
+        for color in colors {
+            colored.AddColor(color);
+        } colored
+    }
+
+    // Takes a set of color types and returns a filled out Colored instance
+    pub fn GetFromColorTypesStr (text: &String, colors: Vec <ColorType>) -> Colored {
         let mut colored = Colored::new(text.clone());
         for color in colors {
             colored.AddColor(color);
@@ -342,27 +355,52 @@ impl Colored {
         } colored
     }
 
-    pub fn GetText (&self, lastColor: &mut (String, String)) -> (String, usize) {
+    pub fn GetText (&self, lastColor: &mut String) -> (String, usize) {
         let mut text = String::new();
-        if let Some(color) = &self.color {
-            let color = format!("\x1b[0;{};{}m", color, self.mods.join(";"));
-            if color != lastColor.0 {
-                text.push_str(&color);
-                text.push_str(CLEAR);
-            }
-            lastColor.0 = color;
+
+        let col = match &self.color {
+            Some(colr) => colr,
+            _ => &String::new()
+        };
+
+        let bgCol = match &self.bgColor {
+            Some(colr) => colr,
+            _ => &String::new()
+        };
+
+        let color = match
+            (self.bgColor.is_some(), self.color.is_some(), self.mods.is_empty())
+        {
+            (true, true, true) => format!("\x1b[0;{};{};{}m", col, bgCol, self.mods.join(";")),
+            (true, true, false) => format!("\x1b[0;{};{}m", col, bgCol),
+            (false, true, true) => format!("\x1b[0;{};{}m", col, self.mods.join(";")),
+            (false, true, false) => format!("\x1b[0;{}m", col),
+            (true, false, true) => format!("\x1b[0;{};{}m", bgCol, self.mods.join(";")),
+            (true, false, false) => format!("\x1b[0;{}m", bgCol),
+            (false, false, _) => String::from("\x1b[0m"),
+        };
+
+        if color != *lastColor {
+            //text.push_str(CLEAR);
+            text.push_str(&color);
+            *lastColor = color;
         }
-        if let Some(color) = &self.bgColor {
-            let color = format!(
-                "\x1b[{}m", color  //, self.mods.join(";")  can't have modifiers on backgrounds?
-            );
-            if color != lastColor.1 {
-                text.push_str(&color);
-            }
-            lastColor.1 = color;
-        }
+
         text.push_str(&self.text);
         (text, self.text.len())
+
+        /*let mut color = String::new();
+        if self.mods.is_empty() && self.color.is_some() {
+            color = format!("\x1b[{}m", *col);
+        } else if self.color.is_some() {
+            color = format!("\x1b[{};{}m", *col, self.mods.join(";"));
+        }
+
+        if let Some(bgCol) = &self.bgColor {
+            color.push_str(&format!(
+                "\x1b[{}m", bgCol  //, self.mods.join(";")  can't have modifiers on backgrounds?
+            ));
+        }*/
     }
 
     pub fn GetSize (&self) -> usize {
@@ -393,7 +431,7 @@ impl Span {
 
     pub fn Join (&self) -> (String, usize) {
         //let mut lastColored = vec![];
-        let mut lastColored = (String::new(), String::new());
+        let mut lastColored = String::new();
         let mut total = String::new();
         let mut totalSize = 0;
         for colored in &self.line {
@@ -570,7 +608,7 @@ impl Window {
     pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> {
         // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
         let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
-        let borderColor = self.color.GetText(&mut (String::new(), String::new()));
+        let borderColor = self.color.GetText(&mut String::new());
 
         // make sure to not call UpdateRender when using closures
         let borderedSize = {
@@ -644,7 +682,7 @@ impl Window {
     // This shouldn't crash when rendering out of bounds unlike certain other libraries...
     pub fn GetRender (&self) -> Vec <String> {
         let mut text = vec![String::new()];
-        let color = self.color.GetText(&mut (String::new(), String::new()));
+        let color = self.color.GetText(&mut String::new());
 
         // handling the top border
         let borderSize;
@@ -751,6 +789,7 @@ impl Window {
         if lines.len() != self.lines.len() {
             let mut index = 0;
             for span in lines {
+                if index >= self.updated.len() {  break;  }
                 self.lines.push((span, String::new(), 0));
                 self.updated[index] = false;
                 index += 1;
@@ -1120,6 +1159,19 @@ impl App {
             for keyword in &self.activeWindows[*name.1].1 {
                 if keywords.contains(keyword) {
                     names.push(name.0);
+                    break;
+                }
+            }
+        }
+        names
+    }
+
+    pub fn GetWindowsByKeywordsNonRef (&self, keywords: Vec <String>) -> Vec <String> {
+        let mut names = vec![];
+        for name in &self.windowReferences {
+            for keyword in &self.activeWindows[*name.1].1 {
+                if keywords.contains(keyword) {
+                    names.push(name.0.clone());
                     break;
                 }
             }
