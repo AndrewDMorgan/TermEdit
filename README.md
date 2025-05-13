@@ -10,6 +10,8 @@ The editor's architecture utalizes two different lexers to enable instant respon
  
 The rendering framework uses a caching system that handles windows as unique structs, which are stored for a duration of time rather than recreated each frame, like in Ratattui (a great Rust terminal UI library, although heavier weight). Those windows are set only to update each line when necessary, allowing lazy and deferred rendering, ensuring low idle times. Escape codes are also combined when possible, and other escape-code-oriented optimizations are in place. The windows (widgets) send out ECS-style closures for any segments needing rerendering, allowing for the rendering and stylization calculation to be calculated entirely on a background thread while avoiding the overhead of atomic containers like Arc and read-write blocks like parking_lot::RwLock (there's also a std::sync::RwLock).
 
+> *The rendering framework is still being developed. The rewrite of the frontend in the new framework has been progressing well and will hopefully pushed soon. The most recently pushed version of the application uses the Ratatui crate.*
+
 ## Custom Escape Codes (using iTerm2 for custom key-bindings):
  - ^[[3;22~  (⌥ Tab)
  - ^[[3;21~  (⌘ ⇧ 'z')
