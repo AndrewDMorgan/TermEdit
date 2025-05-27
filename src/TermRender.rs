@@ -1,12 +1,14 @@
 // snake case is just bad
 #![allow(dead_code)]
 
+use proc_macros::color;
 use std::io::Write;
 
 //* Add a check for updated in the GetRender method for windows
 //* Make a proc macro for easier colorizing (Color![White, Dim, ...])
 //      -- expands to something like .Colorizes(vec![ColorType::White, ...])
 //      -- right now it's just very wordy (a bit annoying to type bc/ of that)
+//               ** done!!!!! **
 
 
 // static color/mod pairs for default ascii/ansi codes
@@ -18,6 +20,8 @@ use std::io::Write;
 // https://stackoverflow.com/questions/4842424/list-of-ansi-color-escape-sequences
 // /033[... doesn't work; use /x1b[...
 pub static CLEAR: &'static str = "\x1b[0m";
+pub static SHOW_CURSOR: &'static str = "\x1b[?25h";
+pub static HIDE_CURSOR: &'static str = "\x1b[?25l";
 
 // * color, modifiers, is_background
 pub static EMPTY_MODIFIER_REFERENCE: &[&str] = &[];  // making a default static type is annoying
@@ -32,35 +36,35 @@ pub static CYAN:       (Option <&str>, &[&str], bool) = (Some("36"), &[], false)
 pub static WHITE:      (Option <&str>, &[&str], bool) = (Some("37"), &[], false);
 pub static DEFAULT:    (Option <&str>, &[&str], bool) = (Some("39"), &[], false);
 
-pub static BRIGHT_BLACK:   (Option <&str>, &[&str], bool) = (Some("90"), &[], true );
-pub static BRIGHT_RED:     (Option <&str>, &[&str], bool) = (Some("91"), &[], true );
-pub static BRIGHT_GREEN:   (Option <&str>, &[&str], bool) = (Some("92"), &[], true );
-pub static BRIGHT_YELLOW:  (Option <&str>, &[&str], bool) = (Some("93"), &[], true );
-pub static BRIGHT_BLUE:    (Option <&str>, &[&str], bool) = (Some("94"), &[], true );
-pub static BRIGHT_MAGENTA: (Option <&str>, &[&str], bool) = (Some("95"), &[], true );
-pub static BRIGHT_CYAN:    (Option <&str>, &[&str], bool) = (Some("96"), &[], true );
-pub static BRIGHT_WHITE:   (Option <&str>, &[&str], bool) = (Some("97"), &[], true );
-pub static BRIGHT_DEFAULT: (Option <&str>, &[&str], bool) = (Some("99"), &[], true );
+pub static BRIGHT_BLACK:   (Option <&str>, &[&str], bool) = (Some("90"), &[], false );
+pub static BRIGHT_RED:     (Option <&str>, &[&str], bool) = (Some("91"), &[], false );
+pub static BRIGHT_GREEN:   (Option <&str>, &[&str], bool) = (Some("92"), &[], false );
+pub static BRIGHT_YELLOW:  (Option <&str>, &[&str], bool) = (Some("93"), &[], false );
+pub static BRIGHT_BLUE:    (Option <&str>, &[&str], bool) = (Some("94"), &[], false );
+pub static BRIGHT_MAGENTA: (Option <&str>, &[&str], bool) = (Some("95"), &[], false );
+pub static BRIGHT_CYAN:    (Option <&str>, &[&str], bool) = (Some("96"), &[], false );
+pub static BRIGHT_WHITE:   (Option <&str>, &[&str], bool) = (Some("97"), &[], false );
+pub static BRIGHT_DEFAULT: (Option <&str>, &[&str], bool) = (Some("99"), &[], false );
 
-pub static ON_BLACK:   (Option <&str>, &[&str], bool) = (Some("40"), &[], true );
-pub static ON_RED:     (Option <&str>, &[&str], bool) = (Some("41"), &[], true );
-pub static ON_GREEN:   (Option <&str>, &[&str], bool) = (Some("42"), &[], true );
-pub static ON_YELLOW:  (Option <&str>, &[&str], bool) = (Some("43"), &[], true );
-pub static ON_BLUE:    (Option <&str>, &[&str], bool) = (Some("44"), &[], true );
-pub static ON_MAGENTA: (Option <&str>, &[&str], bool) = (Some("45"), &[], true );
-pub static ON_CYAN:    (Option <&str>, &[&str], bool) = (Some("46"), &[], true );
-pub static ON_WHITE:   (Option <&str>, &[&str], bool) = (Some("47"), &[], true );
-pub static ON_DEFAULT: (Option <&str>, &[&str], bool) = (Some("49"), &[], true );
+pub static ON_BLACK:   (Option <&str>, &[&str], bool) = (Some("100"), &[], true );
+pub static ON_RED:     (Option <&str>, &[&str], bool) = (Some("101"), &[], true );
+pub static ON_GREEN:   (Option <&str>, &[&str], bool) = (Some("102"), &[], true );
+pub static ON_YELLOW:  (Option <&str>, &[&str], bool) = (Some("103"), &[], true );
+pub static ON_BLUE:    (Option <&str>, &[&str], bool) = (Some("104"), &[], true );
+pub static ON_MAGENTA: (Option <&str>, &[&str], bool) = (Some("105"), &[], true );
+pub static ON_CYAN:    (Option <&str>, &[&str], bool) = (Some("106"), &[], true );
+pub static ON_WHITE:   (Option <&str>, &[&str], bool) = (Some("107"), &[], true );
+pub static ON_DEFAULT: (Option <&str>, &[&str], bool) = (Some("109"), &[], true );
 
-pub static ON_BRIGHT_BLACK:   (Option <&str>, &[&str], bool) = (Some("100"), &[], true );
-pub static ON_BRIGHT_RED:     (Option <&str>, &[&str], bool) = (Some("101"), &[], true );
-pub static ON_BRIGHT_GREEN:   (Option <&str>, &[&str], bool) = (Some("102"), &[], true );
-pub static ON_BRIGHT_YELLOW:  (Option <&str>, &[&str], bool) = (Some("103"), &[], true );
-pub static ON_BRIGHT_BLUE:    (Option <&str>, &[&str], bool) = (Some("104"), &[], true );
-pub static ON_BRIGHT_MAGENTA: (Option <&str>, &[&str], bool) = (Some("105"), &[], true );
-pub static ON_BRIGHT_CYAN:    (Option <&str>, &[&str], bool) = (Some("106"), &[], true );
-pub static ON_BRIGHT_WHITE:   (Option <&str>, &[&str], bool) = (Some("107"), &[], true );
-pub static ON_BRIGHT_DEFAULT: (Option <&str>, &[&str], bool) = (Some("109"), &[], true );
+pub static ON_BRIGHT_BLACK:   (Option <&str>, &[&str], bool) = (Some("40"), &[], true );
+pub static ON_BRIGHT_RED:     (Option <&str>, &[&str], bool) = (Some("41"), &[], true );
+pub static ON_BRIGHT_GREEN:   (Option <&str>, &[&str], bool) = (Some("42"), &[], true );
+pub static ON_BRIGHT_YELLOW:  (Option <&str>, &[&str], bool) = (Some("43"), &[], true );
+pub static ON_BRIGHT_BLUE:    (Option <&str>, &[&str], bool) = (Some("44"), &[], true );
+pub static ON_BRIGHT_MAGENTA: (Option <&str>, &[&str], bool) = (Some("45"), &[], true );
+pub static ON_BRIGHT_CYAN:    (Option <&str>, &[&str], bool) = (Some("46"), &[], true );
+pub static ON_BRIGHT_WHITE:   (Option <&str>, &[&str], bool) = (Some("47"), &[], true );
+pub static ON_BRIGHT_DEFAULT: (Option <&str>, &[&str], bool) = (Some("49"), &[], true );
 
 pub static BOLD:      (Option <&str>, &[&str], bool) = (None    , &["1"], false);
 pub static DIM:       (Option <&str>, &[&str], bool) = (None    , &["2"], false);
@@ -409,7 +413,7 @@ impl Colored {
 }
 
 // A colored span of text (fancy string)
-#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
+#[derive(Clone, Debug, Default, Hash, Eq, PartialEq)]
 pub struct Span {
     line: Vec <Colored>,
 }
@@ -458,8 +462,10 @@ impl Span {
 #[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Window {
     pub position: (u16, u16),
+    pub depth: u16,
     pub size: (u16, u16),
     updated: Vec <bool>,
+    wasUpdated: bool,
 
     // (Span, cached render, num visible chars)
     lines: Vec <(Span, String, usize)>,
@@ -470,11 +476,13 @@ pub struct Window {
 }
 
 impl Window {
-    pub fn new (position: (u16, u16), size: (u16, u16)) -> Self {
+    pub fn new (position: (u16, u16), depth: u16, size: (u16, u16)) -> Self {
         Window {
             position,
+            depth,
             size,
             updated: vec![false; size.1 as usize],
+            wasUpdated: false,
             lines: vec![],
             bordered: false,
             title: (Span::default(), 0),
@@ -529,6 +537,7 @@ impl Window {
             std::cmp::max(changed.1, 0)
         );
         self.updated = vec![false; self.size.1 as usize];
+        self.wasUpdated = false;
     }
 
     // Updates the colorized rendering of the Spans for all lines
@@ -605,10 +614,12 @@ impl Window {
         text
     }
 
-    pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> {
+    pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> {
         // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
-        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
+        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
         let borderColor = self.color.GetText(&mut String::new());
+
+        self.wasUpdated = true;
 
         // make sure to not call UpdateRender when using closures
         let borderedSize = {
@@ -618,8 +629,8 @@ impl Window {
         let mut updated = false;
         for index in borderedSize..self.size.1 as usize - borderedSize {
             if self.updated[index] {  continue;  }
-            updated = true;
             self.updated[index] = true;
+            updated = true;
 
             let (text, size);
             if index - borderedSize < self.lines.len() {
@@ -639,12 +650,12 @@ impl Window {
                 let slice = Window::RenderWindowSlice(color, bordered, (text, size), windowSize);
                 slice
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16, self.depth));
         }
 
         if updated && self.bordered {
-            self.updated[0] = true;
             self.updated[self.size.1 as usize - 1] = true;
+            self.updated[0] = true;
 
             // adding the top and bottom lines to the closures
             let color = borderColor.clone();
@@ -658,7 +669,7 @@ impl Window {
                 text.push_str(CLEAR);
                 text
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + self.size.1 - 1));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + self.size.1 - 1, self.depth));
 
             // bottom
             let color = borderColor;  // consuming border color here
@@ -672,7 +683,7 @@ impl Window {
                 text.push_str(CLEAR);
                 text
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1, self.depth));
         }
 
         renderClosures
@@ -761,12 +772,14 @@ impl Window {
         if index >= self.lines.len() {  return;  }
         self.lines[index] = (span, String::new(), 0);
         self.updated[index] = false;
+        self.wasUpdated = false;
     }
 
     // Appends a single line to the window
     pub fn AddLine (&mut self, span: Span) {
         self.lines.push((span, String::new(), 0));
         self.updated.push(false);
+        self.wasUpdated = false;
     }
 
     // Takes a vector of type Span
@@ -780,6 +793,7 @@ impl Window {
         for span in lines {
             self.lines.push((span, String::new(), 0));
             self.updated[index] = false;
+            self.wasUpdated = false;
             index += 1;
         }
     }
@@ -787,21 +801,29 @@ impl Window {
     // checks to see if any lines need to be updated
     pub fn TryUpdateLines (&mut self, mut lines: Vec <Span>) {
         if lines.len() != self.lines.len() {
+            self.wasUpdated = false;
+            self.lines.clear();
             let mut index = 0;
             for span in lines {
                 if index >= self.updated.len() {  break;  }
                 self.lines.push((span, String::new(), 0));
                 self.updated[index] = false;
+                self.wasUpdated = false;
                 index += 1;
             }
             return;
         }
         let mut index = lines.len();
+        let bordered = {
+            if self.bordered {  1  }
+            else {  0  }
+        };
         while let Some(span) = lines.pop() {
             index -= 1;  // the pop already subtracted one
-            if span != self.lines[index].0 {
+            if self.lines[index].0 != span {
                 self.lines[index] = (span, String::new(), 0);
-                self.updated[index] = false;
+                self.updated[index + bordered] = false;  // it was as easy as adding a plus 1....... me sad
+                self.wasUpdated = false;
             }
         }
     }
@@ -814,11 +836,13 @@ impl Window {
         for line in self.updated.iter_mut() {
             *line = false;
         }
+        self.wasUpdated = false;
     }
 }
 
 
 // the main window/application that handles all the windows
+// honestly this could be removed.... the x and y fields are never used
 #[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Rect {
     pub x: u16,
@@ -841,9 +865,22 @@ pub struct App {
     resetWindows: bool,
 }
 
+impl Drop for App {
+    fn drop (&mut self) {
+        print!("{SHOW_CURSOR}");  // showing the cursor
+
+        // clearing the screen
+        //print!("\x1B[2J\x1B[H\x1b");
+        print!("\x1B[0m");
+        print!("\x1B[?1049l");
+    }
+}
+
 impl App {
-    pub fn new () -> Self {
-        print!("\x1B[2J\x1B[H");  // clearing the screen
+    pub fn new () -> Self {  // 1049h
+        print!("\x1B[?1049h");
+        print!("\x1b[?25l");
+        //print!("\x1B[2J\x1B[H");  // clearing the screen and hiding the cursor
         App {
             area: Rect::default(),
             activeWindows: vec![],
@@ -925,7 +962,9 @@ impl App {
         Ok(self.activeWindows.remove(index).0)
     }
 
-    // Gets a range of visible UTF-8 characters while preserving escape codes
+    /// Gathers the specified range of the string while accounting for non-visible
+    /// UTF-8 character escape codes. Instead of each byte being a character, the characters
+    /// are determined based on character boundaries and escape code sequences.
     pub fn GetSliceUTF_8 (text: &String, range: std::ops::Range <usize>) -> String
     where
         std::ops::Range<usize>: Iterator<Item = usize>
@@ -980,7 +1019,9 @@ impl App {
             for window in &mut self.activeWindows {
                 window.0.UpdateAll();
             }
-            print!("\x1B[2J\x1B[H");  // re-clearing the screen (everything will need to update....)
+
+            // replace with an actual clear..... this doesn't work (it just shifts the screen)
+            print!("\x1b[2J\x1b[H");  // re-clearing the screen (everything will need to update....)
         }
 
         self.area = Rect {
@@ -994,7 +1035,7 @@ impl App {
         // this should reduce CPU usage by a fair bit and allow a fast refresh rate if needed
         let mut updated = false;
         for window in &self.activeWindows {
-            if !window.0.updated.contains(&false) {  continue;  }
+            if window.0.wasUpdated {  continue;  }  //. !window.0.updated.contains(&false)
             updated = true;
             break;
         }
@@ -1012,7 +1053,7 @@ impl App {
         }
 
         // stores the draw calls
-        let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16)> = vec![];
+        let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
 
         // going through the sorted windows
         for index in referenceArray {
@@ -1027,7 +1068,8 @@ impl App {
             // the buffer for the render string
 
             // sorting the calls by action row (and left to right for same row calls)
-            drawCalls.sort_by_key(|drawCall| drawCall.2 * size.0 + drawCall.1);
+            // drawCall.3 is the depth; higher numbers will be rendered last thus being on top (each depth is a unique layer)
+            drawCalls.sort_by_key(|drawCall| drawCall.2 * size.0 + drawCall.1 + drawCall.3 * size.0 * size.1);
 
             // iterating through the calls (consuming drawCalls)
             let writeBuffer = &mut *buffer.write();
@@ -1061,6 +1103,7 @@ impl App {
         //panic!("Render thread completed in {:?}", elapsed);
     }
 
+    /// Takes a u16 value and pushes the text form of it in an efficient manner.
     pub fn PushU16 (buffer: &mut String, mut value: u16) {
         let mut reserved = [0u32; 5];
         let mut i = 0;
@@ -1078,6 +1121,8 @@ impl App {
         }
     }
 
+    /// Returns a vector of references to the window names.
+    /// References are being used to prevent unnecessary clones.
     pub fn GetWindowNames (&self) -> Vec<&String> {
         let mut names = vec![];
         for name in  self.windowReferences.keys() {
@@ -1085,8 +1130,8 @@ impl App {
         } names
     }
 
-    /// Prunes all windows which contain one of the specified keywords
-    /// Returns the number of windows pruned
+    /// Prunes all windows which contain one of the specified keywords.
+    /// Returns the number of windows pruned.
     pub fn PruneByKeywords (&mut self, keywords: Vec <String>) -> usize {
         let mut pruned = vec![];
         for (index, window) in self.activeWindows.iter().enumerate() {
