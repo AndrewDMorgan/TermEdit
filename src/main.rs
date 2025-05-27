@@ -9,7 +9,7 @@ use crossterm::terminal::enable_raw_mode;
 use arboard::Clipboard;  // for copy + paste + cut
 use dirs::home_dir;  // auto gets the starting file path
 
-use proc_macros::load_lua_script;
+use proc_macros::{load_lua_script, color};
 
 mod StringPatternMatching;
 mod eventHandler;
@@ -19,6 +19,7 @@ mod Tokens;
 mod Colors;
 
 use StringPatternMatching::*;
+use TermRender::ColorType;
 use Colors::Colors::*;
 use eventHandler::*;
 use Tokens::*;
@@ -26,18 +27,18 @@ use Tokens::*;
 use CodeTabs::CodeTab;
 
 use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
+    //buffer::Buffer,
+    //layout::Rect,
     style::Stylize,
     symbols::border,
-    text::{Line, Text},
-    widgets::{Block, Paragraph, Widget},
-    DefaultTerminal, Frame,
+    //text::{Line, Text},
+    widgets::Block,
+    //DefaultTerminal,
 };
 
-use ratatui::prelude::Alignment;
+//use ratatui::prelude::Alignment;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
-use crate::TermRender::Colorize;
+use crate::TermRender::{Colorize, Span};
 
 #[derive(Debug, Default)]
 pub enum FileTabs {
@@ -177,7 +178,7 @@ pub struct App <'a> {
     codeTabs: CodeTabs::CodeTabs,
     currentCommand: String,
     fileBrowser: FileBrowser,
-    area: Rect,
+    area: TermRender::Rect,
     lastScrolled: u128,
 
     debugInfo: String,
@@ -202,7 +203,7 @@ pub struct App <'a> {
 
 impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
-    pub async fn run(&mut self, terminal: &mut DefaultTerminal) -> io::Result<()> {
+    pub async fn run (&mut self, app: &mut TermRender::App) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         // loading the lua syntax highlighting scripts (using proc_macros)
@@ -262,9 +263,16 @@ impl <'a> App <'a> {
             self.UpdateMainHandles();
 
             // rendering (will be more performant once the new framework is added)
-            terminal.draw(|frame| self.draw(frame))?;
+            //terminal.draw(|frame| self.draw(frame))?;
+            self.RenderFrame(app);
+            std::thread::sleep(std::time::Duration::from_millis(10));  // rendering is too quick...
 
-            self.area = terminal.get_frame().area();  // ig this is a thing
+            let termSize = app.GetTerminalSize().unwrap();
+            self.area = TermRender::Rect {
+                x: 0, y: 0,
+                width: termSize.0,
+                height: termSize.1,
+            };  // ig this is a thing
 
             // the .read is ugly, but whatever. It's probably fine if polling stops while
             // processing the events
@@ -336,9 +344,9 @@ impl <'a> App <'a> {
         Ok(())
     }
 
-    pub fn draw (&mut self, frame: &mut Frame) {
-        frame.render_widget(self, frame.area());
-    }
+    /*pub fn draw (&mut self, frame: &mut Frame) {
+        //frame.render_widget(self, frame.area());
+    }*/
 
     fn HandleUpScroll (&mut self, event: &MouseEvent) {
         if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
@@ -443,7 +451,7 @@ impl <'a> App <'a> {
 
         // adjusting the position for panes
         let position = (
-            self.codeTabs.GetRelativeTabPosition(event.position.0, self.area, 33),
+            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, 33),
             event.position.1
         );
 
@@ -617,7 +625,7 @@ impl <'a> App <'a> {
         );
         // adjusting the position
         let position = (
-            self.codeTabs.GetRelativeTabPosition(event.position.0, self.area, 33),
+            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, 33),
             event.position.1
         );
 
@@ -1389,68 +1397,66 @@ impl <'a> App <'a> {
     }
 
     // ============================================= file block here =============================================
-    fn RenderFileBlock (&mut self, area: Rect, buf: &mut Buffer){
-        let mut tabBlock = Block::bordered()
+    fn RenderFileBlock (&mut self, app: &mut TermRender::App){
+        /*let mut tabBlock = Block::bordered()
             .border_set(border::THICK);
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) {
             tabBlock = tabBlock.light_blue();
-        }
+        }*/
 
         let coloredTabText = self.codeTabs.GetColoredNames(
             matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs)
         );
-        let tabText = Text::from(vec![
-            Line::from(coloredTabText)
-        ]);
+        let tabText = vec![
+            TermRender::Span::FromTokens(coloredTabText)
+        ];
 
-        Paragraph::new(tabText)
-            .block(tabBlock)
-            .render(Rect {
-                x: area.x + 29,
-                y: area.y,
-                width: area.width - 20,
-                height: 3,
-            }, buf);
+        {
+            let window = app.GetWindowReferenceMut(String::from("Tabs"));
+
+            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) {
+                window.TryColorize(ColorType::BrightBlue);
+            } else {
+                window.ClearColors();
+            }
+
+            window.TryUpdateLines(tabText);
+        }
     }
 
     // ============================================= code block here =============================================
-    fn RenderCodeBlock (&mut self, area: Rect, buf: &mut Buffer) {
+    fn RenderCodeBlock (&mut self, app: &mut TermRender::App) {
         if self.codeTabs.tabs.len() > 0 {
-            let tabSize = self.codeTabs.GetTabSize(&area, 29);
+            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), 29);
 
             for tabIndex in 0..=self.codeTabs.panes.len() {
-                self.RenderCodeTab(Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: 29 + tabSize as u16,
-                    height: area.height
-                }, buf, tabIndex, tabSize);
+                //let area = app.GetWindowArea();
+                self.RenderCodeTab(app, tabIndex, tabSize);
             }
         }
     }
 
-    fn RenderCodeTab(&mut self, area: Rect, buf: &mut Buffer, tabIndex: usize, tabSize: usize) {
-        let codeBlockTitle = Line::from(vec![
-            " ".to_string().white(),
-            self.codeTabs.tabs[
-                {
-                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
-                }
-                ].name
-                .clone()
-                .bold(),
-            " ".to_string().white(),
+    fn RenderCodeTab(&mut self, app: &mut TermRender::App, tabIndex: usize, tabSize: usize) {
+        let name = self.codeTabs.tabs[
+            {
+                if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
+            }
+        ].name.clone();
+        let codeBlockTitle = TermRender::Span::FromTokens(vec![
+            color![" ", BrightWhite],
+            color![name, Bold],
+            color![" ", BrightWhite],
         ]);
-        let mut codeBlock = Block::bordered()
-            .title_top(codeBlockTitle.centered())
+        /*let mut codeBlock = Block::bordered()
+            //.title_top(codeBlockTitle.centered())
             .border_set(border::THICK);
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
             codeBlock = codeBlock.light_blue();
-        }
+        }*/
 
-        let codeText = Text::from(
+        let codeText =
             self.codeTabs.GetScrolledText(
-                area,
+                app.GetWindowArea(),
                 matches!(self.appState, AppState::Tabs) &&
                     matches!(self.tabState, TabState::Code),
                 &self.colorMode,
@@ -1458,10 +1464,36 @@ impl <'a> App <'a> {
                 {
                     if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
                 },
-            )
         );
 
-        Paragraph::new(codeText)
+        {
+            let height = app.GetTerminalSize().unwrap().1;
+            let window = app.GetWindowReferenceMut(format!("CodeBlock{name}"));
+
+            // updating the sizing (incase it was changed to a pane)
+            window.Move((
+                (tabIndex * tabSize) as u16 + 29, 3
+            ));
+            window.Resize((
+                tabSize as u16,
+                height - 11
+            ));
+
+            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
+                window.TryColorize(ColorType::BrightBlue);
+            } else {
+                window.ClearColors();
+            }
+
+            if !window.HasTitle() {
+                window.TitledColored(codeBlockTitle);
+            }
+
+            window.TryUpdateLines(codeText);
+            //window.FromLines(codeText);
+        }
+        // todo!!!! deal with this :(    storing the name is really annoying
+        /*Paragraph::new(codeText)
             .block(codeBlock)
             .render(Rect {
                 x: area.x + 29 + (tabIndex * tabSize) as u16,
@@ -1469,7 +1501,7 @@ impl <'a> App <'a> {
                 width: tabSize as u16,
                 //width: area.width - 29,
                 height: area.height - 10,
-        }, buf);
+            }, buf);*/
     }
 
     fn RenderOutlinePartOne (&self, scopeIndex: &Vec <usize>) -> String {
@@ -1493,22 +1525,22 @@ impl <'a> App <'a> {
         offset
     }
 
-    fn GetColoredScope <'span> (&self, scopeName: String, scopeLength: usize) -> ratatui::text::Span <'span> {
+    fn GetColoredScope (&self, scopeName: String, scopeLength: usize) -> TermRender::Colored {
         match scopeLength {
-            1 => scopeName.light_blue(),
-            2 => scopeName.light_magenta(),
-            3 => scopeName.light_red(),
-            4 => scopeName.light_yellow(),
-            5 => scopeName.light_green(),
-            _ => scopeName.white(),
+            1 => color![scopeName, BrightBlue],
+            2 => color![scopeName, BrightMagenta],
+            3 => color![scopeName, BrightRed],
+            4 => color![scopeName, BrightYellow],
+            5 => color![scopeName, BrightGreen],
+            _ => color![scopeName, BrightWhite],
         }
     }
 
-    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Line>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
+    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <TermRender::Span>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
         fileStringText.push(
-            Line::from(vec![
+            TermRender::Span::FromTokens(vec![
                 {
-                    self.RenderOutlinePartOne (scopeIndex).white()
+                    color![self.RenderOutlinePartOne(scopeIndex), BrightWhite]
                 },
                 {
                     // this is a mess...
@@ -1518,7 +1550,7 @@ impl <'a> App <'a> {
                         matches!(self.appState, AppState::CommandPrompt) &&
                         matches!(self.tabState, TabState::Code)
                     {
-                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()).underlined()
+                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()), Underline]
                     } else if
                         matches!(self.appState, AppState::CommandPrompt) &&
                         matches!(self.tabState, TabState::Files) &&
@@ -1526,9 +1558,9 @@ impl <'a> App <'a> {
                             self.fileBrowser.outlineCursor
                             ] == *scopeIndex
                     {
-                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()).underlined()
+                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()), Underline]
                     } else {
-                        self.GetColoredScope(scope.read().name.clone(), scopeIndex.len())
+                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len())]
                     }
                 },
                 //format!(" ({}, {})", scope.start + 1, scope.end + 1).white(),  // (not enough space for it to fit...)
@@ -1545,7 +1577,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn RenderFilebrowserOutline (&mut self, area: Rect) -> Text {
+    fn RenderFilebrowserOutline (&mut self, area: &TermRender::Rect) -> Vec <TermRender::Span> {
         let mut fileStringText = vec!();
         let mut scopes: Vec<usize> = vec![];
 
@@ -1580,45 +1612,48 @@ impl <'a> App <'a> {
             self.GetFilebrowserOutline(&mut fileStringText, &scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
         }
         self.fileBrowser.outlineCursor = newScroll;
-        Text::from(fileStringText)
+        fileStringText  //Text::from(fileStringText)
     }
 
     // ============================================= files =============================================
-    fn RenderFiles (&mut self, area: Rect, buf: &mut Buffer) {
-        let mut fileBlock = Block::bordered()
+    fn RenderFiles (&mut self, app: &mut TermRender::App) {
+        /*let mut fileBlock = Block::bordered()
             .border_set(border::THICK);
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
             fileBlock = fileBlock.light_blue();
-        }
+        }*/
 
-        let fileText: Text;
+        let mut fileText = vec![];
 
         if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
-            fileText = self.RenderFilebrowserOutline(area);
+            fileText = self.RenderFilebrowserOutline(app.GetWindowArea());
         } else {
-            let mut allFiles = vec!();
+            //let mut allFiles = vec!();
             for (index, file) in self.fileBrowser.files.iter().enumerate() {
-                allFiles.push(Line::from(vec![
+                fileText.push(TermRender::Span::FromTokens(vec![
                     {
                         if index == self.fileBrowser.fileCursor {
-                            file.clone().white().underlined()
+                            color![file, BrightWhite, Underline]
                         } else {
-                            file.clone().white()
+                            color![file, BrightWhite]
                         }
                     }
                 ]));
             }
-            fileText = Text::from(allFiles);
+            //fileText = Text::from(allFiles);
         }
 
-        Paragraph::new(fileText)
-            .block(fileBlock)
-            .render(Rect {
-                x: area.x,
-                y: area.y,
-                width: 30,
-                height: area.height - 8,
-            }, buf);
+        {
+            let window = app.GetWindowReferenceMut(String::from("Files"));
+
+            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
+                window.TryColorize(ColorType::BrightBlue);
+            } else {
+                window.ClearColors();
+            }
+
+            window.TryUpdateLines(fileText);
+        }
     }
 
     // this method is a mess..... but it works so whatever
@@ -1717,7 +1752,8 @@ impl <'a> App <'a> {
     fn ParseKeywordSuggestions (&mut self, validKeywords: Vec <OutlineKeyword>, token: String) {
         if matches!(token.as_str(), " " | "," | "|" | "}" | "{" | "[" | "]" | "(" | ")" |
                     "+" | "=" | "-" | "_" | "!" | "?" | "/" | "<" | ">" | "*" | "&" |
-                    "." | ";") {  return;  }
+                    "." | ";")
+            {  return;  }
 
         let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
         for (i, var) in validKeywords.iter().enumerate() {
@@ -1753,7 +1789,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn UpdateRenderErrorBar (&mut self, _area: Rect, _buf: &mut Buffer) {
+    fn UpdateRenderErrorBar (&mut self) {
         if self.codeTabs.tabs.is_empty() {  return;  }
 
         self.suggested.clear();
@@ -1783,9 +1819,9 @@ impl <'a> App <'a> {
     }
 
     // ============================================= Error Bar =============================================
-    fn RenderErrorBar (&mut self, area: Rect, buf: &mut Buffer) {
-        let errorBlock = Block::bordered()
-            .border_set(border::THICK);
+    fn RenderErrorBar (&mut self, app: &mut TermRender::App) {//, area: Rect, buf: &mut Buffer) {
+        //let errorBlock = Block::bordered()
+        //    .border_set(border::THICK);
 
         // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
         //self.debugInfo.clear();
@@ -1804,141 +1840,134 @@ impl <'a> App <'a> {
             }
         }*/
 
-        self.UpdateRenderErrorBar(area, buf);
+        self.UpdateRenderErrorBar();
 
-        let errorText = Text::from(vec![
-            Line::from(vec![
-                format!(": {}", self.suggested).fg(
-                    self.colorMode.colorBindings.suggestion
-                ).italic(),
+        let errorText = vec![
+            TermRender::Span::FromTokens(vec![
+                color![format!(": {}", self.suggested), Italic]
+                    .Colorize(self.colorMode.colorBindings.suggestion.clone()),
             ]),
-            Line::from(vec![
-                format!("Debug: {}", self.debugInfo).fg(
-                    self.colorMode.colorBindings.errorCol
-                ).bold(),
+            TermRender::Span::FromTokens(vec![
+                color![format!("Debug: {}", self.debugInfo), Bold]
+                    .Colorize(self.colorMode.colorBindings.errorCol.clone()),
                 //format!(" ; {:?}", scope).white()
             ]),
-        ]);
+        ];
 
-        Paragraph::new(errorText)
-            .block(errorBlock)
-            .render(Rect {
-                x: area.x,
-                y: area.y + area.height - 9,
-                width: area.width,
-                height: 8,
-            }, buf);
+        {
+            let window = app.GetWindowReferenceMut(String::from("ErrorBar"));
+            window.TryUpdateLines(errorText);
+        }
     }
 
-    fn RenderProject (&mut self, area: Rect, buf: &mut Buffer) {
-        self.RenderFileBlock(area, buf);
-        self.RenderCodeBlock(area, buf);
-        self.RenderFiles(area, buf);
-        self.RenderErrorBar(area, buf);
+    fn RenderProject (&mut self, app: &mut TermRender::App) {//(&mut self, area: Rect, buf: &mut Buffer) {
+        self.RenderFileBlock(app);
+        self.RenderCodeBlock(app);
+        self.RenderFiles(app);
+        self.RenderErrorBar(app);
     }
 
-    fn RenderSettings (&mut self, area: Rect, buf: &mut Buffer) {
+    fn RenderSettings (&mut self, app: &mut TermRender::App) {//, area: Rect, buf: &mut Buffer) {
         // ============================================= Color Settings =============================================
         // the color mode setting
-        let settingsText = Text::from(
-            vec![
-                Line::from(vec![
-                    "Color Mode: [".white(),
-                    {
-                        if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
-                            "Basic".yellow().bold().underlined()
-                        } else {
-                            "Basic".white()
-                        }
-                    },
-                    "]".white(),
-                    " [".white(),
-                    {
-                        if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
-                            "8-bit".yellow().bold().underlined()
-                        } else {
-                            "8-bit".white()
-                        }
-                    },
-                    "]".white(),
-                    " [".white(),
-                    {
-                        if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
-                            "24-bit".yellow().bold().underlined()
-                        } else {
-                            "24-bit".white()
-                        }
-                    },
-                    "]".white(),
-                ]),
-                Line::from(vec![
-                    " * Not all terminals accept all color modes. If the colors are messed up, try lowering this".white().dim().italic()
-                ]),
-            ]
-        );
+        let settingsText = vec![
+            TermRender::Span::FromTokens(vec![
+                color!["Color Mode: [", BrightWhite],
+                {
+                    if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
+                        color!["Basic", Yellow, Bold, Underline]
+                    } else {
+                        color!["Basic", BrightWhite]
+                    }
+                },
+                color!["]", BrightWhite],
+                color![" [", BrightWhite],
+                {
+                    if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
+                        color!["8-bit", Yellow, Bold, Underline]
+                    } else {
+                        color!["8-bit", BrightWhite]
+                    }
+                },
+                color!["]", BrightWhite],
+                color![" [", BrightWhite],
+                {
+                    if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
+                        color!["24-bit", Yellow, Bold, Underline]
+                    } else {
+                        color!["24-bit", BrightWhite]
+                    }
+                },
+                color!["]", BrightWhite],
+            ]),
+            TermRender::Span::FromTokens(vec![
+                color![" * Not all terminals accept all color modes. If the colors are messed up, try lowering this",
+                    White, Dim, Italic]
+            ]),
+        ];
 
-        let mut colorSettingsBlock = Block::bordered()
+        /*let mut colorSettingsBlock = Block::bordered()
             .border_set(border::THICK);
         if self.currentMenuSettingBox == 0 {
             colorSettingsBlock = colorSettingsBlock.light_blue();
-        }
+        }*/
 
-        Paragraph::new(settingsText)
-            .block(colorSettingsBlock)
-            .render(Rect {
-                x: 10,//area.x + area.width / 2 - 71 / 2,
-                y: 2,//area.y + area.height / 2 - 10,
-                width: area.width - 20,
-                height: 4
-        }, buf);
+        {
+            let window = app.GetWindowReferenceMut(String::from("ColorSetting"));
+            if self.currentMenuSettingBox == 0 {
+                window.TryColorize(ColorType::BrightBlue);
+            } else {
+                window.ClearColors();
+            }
+            window.TryUpdateLines(settingsText);
+        }
 
         // ============================================= Key Settings =============================================
         // the color mode setting
-        let settingsText = Text::from(
-            vec![
-                Line::from(vec![
-                    "Preferred Modifier Key: [".white(),
-                    {
-                        if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
-                            "Command".yellow().bold().underlined()
-                        } else {
-                            "Command".white()
-                        }
-                    },
-                    "]".white(),
-                    " [".white(),
-                    {
-                        if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
-                            "Control".yellow().bold().underlined()
-                        } else {
-                            "Control".white()
-                        }
-                    },
-                    "]".white(),
-                ]),
-                Line::from(vec![
-                    " * The preferred modifier key for things like ctrl/cmd 'c'".white().dim().italic()
-                ]),
-            ]
-        );
+        let settingsText = vec![
+            TermRender::Span::FromTokens(vec![
+                color!["Preferred Modifier Key: [", BrightWhite],
+                {
+                    if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                        color!["Command", Yellow, Bold, Underline]
+                    } else {
+                        color!["Command", BrightWhite]
+                    }
+                },
+                color!["]", BrightWhite],
+                color![" [", BrightWhite],
+                {
+                    if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                        color!["Control", Yellow, Bold, Underline]
+                    } else {
+                        color!["Control", BrightWhite]
+                    }
+                },
+                color!["]", BrightWhite],
+            ]),
+            TermRender::Span::FromTokens(vec![
+                color![" * The preferred modifier key for things like ctrl/cmd 'c'", BrightWhite, Dim, Italic]
+            ]),
+        ];
 
-        let mut colorSettingsBlock = Block::bordered()
+        /*let mut colorSettingsBlock = Block::bordered()
             .border_set(border::THICK);
         if self.currentMenuSettingBox == 1 {
             colorSettingsBlock = colorSettingsBlock.light_blue();
-        }
+        }*/
 
-        Paragraph::new(settingsText)
-            .block(colorSettingsBlock)
-            .render(Rect {
-                x: 10,//area.x + area.width / 2 - 71 / 2,
-                y: 6,//area.y + area.height / 2 - 10,
-                width: area.width - 20,
-                height: 4
-        }, buf);
+        {
+            let window = app.GetWindowReferenceMut(String::from("KeybindSetting"));
+            if self.currentMenuSettingBox == 1 {
+                window.TryColorize(ColorType::BrightBlue);
+            } else {
+                window.ClearColors();
+            }
+            window.TryUpdateLines(settingsText);
+        }
     }
 
-    fn RenderMenu (&mut self, area: Rect, buf: &mut Buffer) {
+    fn RenderMenu (&mut self, app: &mut TermRender::App) {
         // ============================================= Welcome Text =============================================
         /*
 
@@ -1952,90 +1981,350 @@ impl <'a> App <'a> {
 
         match self.menuState {
             MenuState::Settings => {
-                self.RenderSettings(area, buf);
+                self.RenderSettings(app);
             },
             MenuState::Welcome => {
-                let welcomeText = Text::from(vec![
-                    Line::from(vec![
-                        "\\\\            //   .==  ||      _===_    _===_   ||\\    /||   .==  ||"
-                            .red().bold(),
-                    ]),
-                    Line::from(vec![
-                        " \\\\          //   ||    ||     //   \\\\  //   \\\\  ||\\\\  //||  //    ||"
-                            .red().bold(),
-                    ]),
-                    Line::from(vec![
-                        "  \\\\  //\\\\  //    ||--  ||     ||       ||   ||  || \\\\// ||  ||--    "
-                            .red().bold(),
-                    ]),
-                    Line::from(vec![
-                        "   \\\\//  \\\\//     \\\\==  ||===  \\\\__=//  \\\\___//  ||      ||  \\\\==  []"
-                            .red().bold(),
-                    ]),
-                    Line::from(vec![]),
-                    Line::from(vec![]),
-                    Line::from(vec![
-                        "The command prompt is bellow (Bottom Left):".white().bold()
-                    ]),
-                    Line::from(vec![]),
-                    Line::from(vec![
-                        "Press: <".white().bold().dim(),
-                        "q".white().bold().dim().italic().underlined(),
-                        "> followed by <".white().bold().dim(),
-                        "return".white().bold().dim().italic().underlined(),
-                        "> to quit".white().bold().dim(),
-                    ]),
-                    Line::from(vec![
-                        "Type ".white().bold().dim(),
-                        "\"open\"".white().bold().dim().italic().underlined(),
-                        " followed by the path to the directory".white().bold().dim(),
-                    ]),
-                    Line::from(vec![]),
-                    Line::from(vec![
-                        "Type ".white().bold().dim(),
-                        "\"settings\"".white().bold().dim().underlined().italic(),
-                        " to open settings ( <".white().bold().dim(),
-                        "esc".white().bold().dim().italic().underlined(),
-                        "> to leave )".white().bold().dim(),
-                    ]),
-                    //Line::from(vec![
-                    //    self.dirFiles.concat().white().bold().dim(),
-                    //]),
-                ]);
+                // only updating if the text hasn't been set
+                if app.GetWindowReference(String::from("Welcome")).IsEmpty() {
+                    let window = app.GetWindowReferenceMut(String::from("Welcome"));
 
-                let welcomeBlock = Block::bordered();
+                    let welcomeText = vec![
+                        TermRender::Span::FromTokens(vec![
+                            color!["\\\\            //   .==  ||      _===_    _===_   ||\\    /||   .==  ||",
+                            Red, Bold],//.red().bold(),
+                        ]),
+                        TermRender::Span::FromTokens(vec![
+                            color![" \\\\          //   ||    ||     //   \\\\  //   \\\\  ||\\\\  //||  //    ||",
+                            Red, Bold],//.red().bold(),
+                        ]),
+                        TermRender::Span::FromTokens(vec![
+                            color!["  \\\\  //\\\\  //    ||--  ||     ||       ||   ||  || \\\\// ||  ||--    ",
+                            Red, Bold],//.red().bold(),
+                        ]),
+                        TermRender::Span::FromTokens(vec![
+                            color!["   \\\\//  \\\\//     \\\\==  ||===  \\\\__=//  \\\\___//  ||      ||  \\\\==  []",
+                            Red, Bold],//.red().bold(),
+                        ]),  // 71, 15   35.5
+                        TermRender::Span::FromTokens(vec![]),
+                        TermRender::Span::FromTokens(vec![]),
+                        TermRender::Span::FromTokens(vec![  // 43/2 = 35.5 - 21.5 = 14
+                            color!["              The command prompt is bellow (Bottom Left):",
+                            White, Bold],//.white().bold()
+                        ]),
+                        TermRender::Span::FromTokens(vec![]),
+                        TermRender::Span::FromTokens(vec![
+                            color!["                Press: <", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                            color!["q", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
+                            color!["> followed by <", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                            color!["return", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
+                            color!["> to quit"],//.white().bold().dim(),    39/2 = 35.5 - 19.5 = 16
+                        ]),
+                        TermRender::Span::FromTokens(vec![
+                            color!["           Type ", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                            color!["\"open\"", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
+                            color![" followed by the path to the directory", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                        ]),  // 49 / 2= 35.5 - 24.5 = 11
+                        TermRender::Span::FromTokens(vec![]),
+                        TermRender::Span::FromTokens(vec![
+                            color!["          Type ", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                            color!["\"settings\"", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().underlined().italic(),
+                            color![" to open settings ( <", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                            color!["esc", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
+                            color!["> to leave )", BrightWhite, Bold, Dim],//.white().bold().dim(),
+                        ]),  // 51 / 2 = 35.5 - 25.5 = 10
+                        //Line::from(vec![
+                        //    self.dirFiles.concat().white().bold().dim(),
+                        //]),
+                    ];
 
-                Paragraph::new(welcomeText)
-                    .alignment(Alignment::Center)
-                    .block(welcomeBlock)
-                    .render(Rect {
-                        x: area.x + area.width / 2 - 71 / 2,
-                        y: area.y + area.height / 2 - 10,
-                        width: 71,
-                        height: 15
-                }, buf);
+                    window.TryUpdateLines(welcomeText);
+                }
             }
         }
     }
-}
 
-impl <'a> Widget for &mut App <'a> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
+    fn CheckWindowsProject (&mut self, app: &mut TermRender::App) {
+        let terminalSize = app.GetTerminalSize().unwrap();
+
+        /*Paragraph::new(tabText)
+            .block(tabBlock)
+            .render(Rect {
+                x: area.x + 29,
+                y: area.y,
+                width: area.width - 20,
+                height: 3,
+            }, buf);*/
+        if app.ContainsWindow(String::from("Tabs")) {
+            let window = app.GetWindowReferenceMut(String::from("Tabs"));
+            window.Move((30, 1));
+            window.Resize((terminalSize.0 - 29, 3));
+        } else {
+            let mut window = TermRender::Window::new(
+                (30, 1), 0,
+                (terminalSize.0 - 29, 3),
+            );
+            window.Bordered();
+            app.AddWindow(window, String::from("Tabs"), vec![String::from("Project")]);
+        }
+
+        // file, tabs, error thingy, code
+        /*
+        Paragraph::new(errorText)
+            .block(errorBlock)
+            .render(Rect {
+                x: area.x,
+                y: area.y + area.height - 9,
+                width: area.width,
+                height: 8,
+            }, buf);
+         */
+        if app.ContainsWindow(String::from("ErrorBar")) {
+            let window = app.GetWindowReferenceMut(String::from("ErrorBar"));
+            window.Move((
+                0, terminalSize.1  - 9,
+            ));
+            window.Resize((terminalSize.0, 8));
+        } else {
+            let mut window = TermRender::Window::new(
+                (0, terminalSize.1 - 9), 0,
+                (terminalSize.0, 8)
+            );
+            window.Bordered();
+            app.AddWindow(window, String::from("ErrorBar"), vec![String::from("Project")]);
+            //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
+        }
+
+        /*
+        Paragraph::new("Files")
+                .block(fileBlock)
+                .render(Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: 30,
+                    height: area.height - 8,
+                }, buf);
+         */
+        if app.ContainsWindow(String::from("Files")) {
+            let window = app.GetWindowReferenceMut(String::from("Files"));
+            window.Move((
+                0, 1,
+            ));
+            window.Resize((30, terminalSize.1 - 9));
+        } else {
+            let mut window = TermRender::Window::new(
+                (0, 1), 0,
+                (30, terminalSize.1 - 9)
+            );
+            window.Bordered();
+            app.AddWindow(window, String::from("Files"), vec![String::from("Project")]);
+            //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
+        }
+
+        // dealing with the annoying code tabs
+        self.CheckCodeTabs(app, terminalSize);
+
+        if app.ChangedWindowLayout() {
+            app.PruneByKeywords(
+                vec![String::from("Menu")]
+            );
+        }
+    }
+
+    fn CheckCodeTabs (&mut self, app: &mut TermRender::App, terminalSize: (u16, u16)) {
+        let names = app.GetWindowsByKeywordsNonRef(vec![
+            String::from("CodeTab")
+        ]);  // current active tabs
+
+        // going through all windows and making sure that window exists
+        // deleting windows that are no longer open
+        let mut safe = vec![];
+        for tab in &self.codeTabs.tabs {
+            if names.contains(&tab.name) {
+                for name in &names {
+                    if name == &tab.name {
+                        safe.push(name);
+                        break;
+                    }
+                }
+                continue;
+            }
+            // creating a new window
+            let mut window = TermRender::Window::new(
+                (30, 3), 0,
+                (terminalSize.0 - 29, terminalSize.1 - 11),
+            );
+            window.Bordered();
+            app.AddWindow(window,
+                          format!("CodeBlock{}", tab.name),
+                          vec![String::from("CodeTab"),
+                                        tab.name.clone()]
+            );
+        }
+
+        // going through all the windows
+        /*let mut windows = vec![];
+        // !!! iterating like this won't work
+        for (tabIndex, name) in names.iter().enumerate() {
+            let tabName = self.codeTabs.tabs[
+                {
+                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
+                }
+                ].name.clone();
+
+            // pruning closed windows
+            if !app.WindowContainsKeyword(*name, &tabName) {
+                windows.push(((*name).clone(), true));
+                continue;
+            }
+            windows.push(((*name).clone(), false));
+        }
+
+        for name in windows {
+            if name.1 {
+                let _ = app.RemoveWindow(name.0);
+                continue;
+            }
+
+            let window = app.GetWindowReferenceMut(name.0);
+            //
+        }*/
+
+        // todo!    check if new code tabs need to be opened/rendered
+        // todo!    finish updating the window based on its position (
+        // and make sure that position is correct based on its true index)
+
+        /*Paragraph::new(codeText)
+            .block(codeBlock)
+            .render(Rect {
+                x: area.x + 29 + (tabIndex * tabSize) as u16,
+                y: area.y + 2,
+                width: tabSize as u16,
+                //width: area.width - 29,
+                height: area.height - 10,
+            }, buf);*/
+        /*
+        if self.codeTabs.tabs.len() > 0 {
+            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), 29);
+
+            for tabIndex in 0..=self.codeTabs.panes.len() {
+                //let area = app.GetWindowArea();
+                self.RenderCodeTab(app, tabIndex, tabSize);
+            }
+        }
+         */
+    }
+
+    fn CheckWindowsMenu (&mut self, app: &mut TermRender::App) {
+        let terminalSize = app.GetTerminalSize().unwrap();
+
+        // settings, info text, whatever else
+        match self.menuState {
+            MenuState::Welcome => {
+                if app.ContainsWindow(String::from("Welcome")) {
+                    let window = app.GetWindowReferenceMut(String::from("Welcome"));
+                    window.Move((
+                        terminalSize.0 / 2 - 71/2,
+                        terminalSize.1 / 2 - 10,
+                    ));
+                    window.Resize((71, 15));
+                } else {
+                    let mut window = TermRender::Window::new(
+                        (terminalSize.0 / 2 - 71/2, terminalSize.1 / 2 - 10),
+                        0, (71, 15)
+                    );
+                    window.Bordered();
+                    app.AddWindow(window, String::from("Welcome"), vec![String::from("Menu")]);
+                    //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
+                }
+
+                if app.ChangedWindowLayout() {
+                    let _ = app.PruneByKeywords(vec![String::from("Settings")]);
+                    //self.currentCommand = String::from("pruning");
+                }
+            },
+            MenuState::Settings => {
+                if app.ContainsWindow(String::from("ColorSetting")) {
+                    let window = app.GetWindowReferenceMut(String::from("ColorSetting"));
+                    window.Move((
+                        10, 2,
+                    ));
+                    window.Resize((terminalSize.0 - 20, 4));
+                } else {
+                    let mut window = TermRender::Window::new(
+                        (10, 2), 0,
+                        (terminalSize.0 - 20, 4)
+                    );
+                    window.Bordered();
+                    app.AddWindow(window, String::from("ColorSetting"), vec![
+                        String::from("Menu"), String::from("Settings")
+                    ]);
+                    //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
+                }
+                if app.ContainsWindow(String::from("KeybindSetting")) {
+                    let window = app.GetWindowReferenceMut(String::from("KeybindSetting"));
+                    window.Move((
+                        10, 6,
+                    ));
+                    window.Resize((terminalSize.0 - 20, 4));
+                } else {
+                    let mut window = TermRender::Window::new(
+                        (10, 6), 0,
+                        (terminalSize.0 - 20, 4)
+                    );
+                    window.Bordered();
+                    app.AddWindow(window, String::from("KeybindSetting"), vec![
+                        String::from("Menu"), String::from("Settings")
+                    ]);
+                    //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
+                }
+
+                if app.ChangedWindowLayout() {
+                    let _ = app.PruneByKey(Box::new(|keywords| {
+                        keywords.contains(&String::from("Menu")) &&
+                            !keywords.contains(&String::from("Settings"))
+                    }));
+                    //self.currentCommand = String::from("pruning");
+                }
+            },
+        };
+    }
+
+    fn CheckWindows (&mut self, app: &mut TermRender::App) {
+        let terminalSize = app.GetTerminalSize().unwrap();
+
+        if app.ContainsWindow(String::from("CommandLine")) {
+            let window = app.GetWindowReferenceMut(String::from("CommandLine"));
+            window.Move((0, terminalSize.1 - 1));
+            window.Resize((terminalSize.0, 1));
+        } else {
+            let window = TermRender::Window::new(
+                (0, terminalSize.1 - 1), 0,
+                (terminalSize.0, 1),
+            );
+            app.AddWindow(window, String::from("CommandLine"), vec![]);
+            //app.UpdateWindowLayoutOrder();
+        }
+    }
+
+    fn RenderFrame (&mut self, app: &mut TermRender::App) {
+        self.CheckWindows(app);
         match self.appState {
             AppState::Tabs | AppState::CommandPrompt => {
-                self.RenderProject(area, buf);
+                self.CheckWindowsProject(app);
+                self.RenderProject(app);
             },
             AppState::Menu => {
-                self.RenderMenu(area, buf)
+                self.CheckWindowsMenu(app);
+                self.RenderMenu(app)
             }
         }
 
         // rendering the command line is necessary for all states
         // ============================================= Commandline =============================================
-        let commandText = Text::from(vec![
-            Line::from(vec![
-                "/".to_string().white().bold(),
-                self.currentCommand.clone().white().italic(),
+        let commandText =
+            TermRender::Span::FromTokens(vec![
+                color!["/", BrightWhite, Bold],//.to_string().white().bold(),
+                color![self.currentCommand, BrightWhite, Italic],//.clone().white().italic(),
                 {
                     if  matches!(self.appState, AppState::Menu) &&
                         self.currentCommand.starts_with("open ")
@@ -2057,30 +2346,28 @@ impl <'a> Widget for &mut App <'a> {
                             }
                         }
 
-                        validFinish.white().dim()
+                        color![validFinish, BrightBlack]//.white().dim()
                     } else {
-                        "".white().dim()
+                        color![""]//.white().dim()
                     }
                 },
                 {
                     if matches!(self.appState, AppState::CommandPrompt | AppState::Menu) {
-                        "_".to_string().white().slow_blink().bold()
+                        color!["_", BrightWhite, Blink, Bold]//.to_string().white().slow_blink().bold()
                     } else {
-                        "".to_string().white()
+                        color![""]//.white()
                     }
                 },
-            ])
         ]);
 
-        Paragraph::new(commandText)
-            .render(Rect {
-                x: area.x + 2,
-                y: area.y + area.height - 1,
-                width: area.width,
-                height: 1
-        }, buf);
+        let window = app.GetWindowReferenceMut(String::from("CommandLine"));
+        window.TryUpdateLines(vec![commandText]);
+
+        // rendering the updated app
+        app.Render();
     }
 }
+
 
 /*
 Commands: √ <esc>
@@ -2216,67 +2503,21 @@ Add a polling delay for when sampling events to hopefully reduce unnecessary com
 
 maybe look at using jit for the lua interfacing.
 
+todo!!!!!!! make the file browser disappear when viewing the code tab; when looking at all tabs, open it
+
 */
 
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let testRendering = false;
+    let mut termApp = TermRender::App::new();
 
-    if testRendering {
-        let mut app = TermRender::App::new();
-
-        let mut window = TermRender::Window::new((20, 15), (60, 20));
-        window.Colorize(TermRender::ColorType::Blue);
-        window.Colorize(TermRender::ColorType::Blink);
-        window.Bordered();
-        window.Titled("Test Window");
-        window.FromLines(
-            vec![
-                TermRender::Span::FromTokens(vec![
-                    "Testing...     ".Colorizes(vec![TermRender::ColorType::Blue, TermRender::ColorType::OnRGB(10, 25, 75)]),
-                    "Te st".Colorizes(vec![TermRender::ColorType::Green, TermRender::ColorType::OnRGB(80, 25, 75)]),
-                    "H ello Worlddd dd".Colorizes(vec![TermRender::ColorType::Green, TermRender::ColorType::Bold]),
-                    "H ello erg nrtiub ghrtiu ghriubvhrwebvnerwiubeiu rtnbiub dd".Colorizes(vec![TermRender::ColorType::Red, TermRender::ColorType::Italic]),
-                ]),
-            ]
-        );
-        app.AddWindow(window, String::from("Test Window"));
-
-        let mut window = TermRender::Window::new((40, 10), (25, 35));  // app.GetTerminalSize()?
-        window.Bordered();
-        window.Titled("Test");
-        for _ in 0..5 {
-            window.AddLine(TermRender::Span::FromTokens(vec![
-                "Hello World!!!".Colorize(TermRender::ColorType::OnBrightCyan),
-            ]));
-        }
-        //window.AddLines(TermRender::Span {
-            // add method to Span that generates a Span from a vector of strings
-        //})
-        app.AddWindow(window, String::from("Test"));
-
-        /*let mut window = TermRender::Window::new((0, 0), app.GetTerminalSize()?);
-        window.Bordered();
-        window.Titled(String::from("Test Window"));
-        app.AddWindow(window, String::from("Test Window"));
-
-        let mut window = TermRender::Window::new((0, 0), app.GetTerminalSize()?);
-        window.Bordered();
-        window.Titled(String::from("Test Window"));
-        app.AddWindow(window, String::from("Test Window"));*/
-
-        app.Render()?;
-
-        Ok(())
-    } else {
-        let mut terminal = ratatui::init();
-        enableMouseCapture().await;
-        let app_result = App::default().run(&mut terminal).await;
-        disableMouseCapture().await;
-        ratatui::restore();
-        app_result
-    }
+    //let mut terminal = ratatui::init();
+    enableMouseCapture().await;
+    let app_result = App::default().run(&mut termApp).await;
+    disableMouseCapture().await;
+    //ratatui::restore();
+    app_result
 }
 
 

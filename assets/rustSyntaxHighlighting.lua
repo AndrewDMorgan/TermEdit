@@ -6,7 +6,8 @@ keywords = {"if", "for", "while", "in", "else", "break", "loop", "match",
 primitives = {"i32", "isize", "i16", "i8", "i128", "i64", "u32", "usize",
               "u16", "u8", "u128", "u64", "f16", "f32", "f64", "f128",
               "String", "str", "Vec", "bool", "char", "Result", "Option",
-              "Debug", "Clone", "Copy", "Default", "new", "true", "false"}
+              "Debug", "Clone", "Copy", "Default", "new", "true", "false",
+              "Send", "Sync"}
 objects = {"enum", "pub", "struct", "impl", "self", "Self"}
 mathLogicTokens = {"=", "<", ">", "!", "-", "+", "/", "*"}
 logicTokens = {"=", "<", ">", "!"}

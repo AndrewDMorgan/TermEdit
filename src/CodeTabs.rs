@@ -1,13 +1,18 @@
 
+/*
 use ratatui::{
     layout::Rect,
     style::{Stylize, Modifier},
     text::{Line, Span},
 };
+*/
 
 use crate::Colors::Colors;
+use crate::TermRender::*;
 use crate::LuaScripts;
 use crate::Tokens::*;
+
+use crate::color;
 
 
 // the bounds from the screen edge at which the cursor will begin scrolling
@@ -1148,215 +1153,239 @@ impl CodeTab {
         // recalculating variables, methods, etc...
     }
 
-    pub fn GenerateColor <'a> (&self, token: &TokenType, text: String, colorMode: &Colors::ColorMode) -> Span <'a> {
+    pub fn GenerateColor (&self, token: &TokenType, text: String, colorMode: &Colors::ColorMode) -> Colored {
         match token {
             TokenType::Bracket => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::SquirlyBracket => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Parentheses => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Variable => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Member => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Object => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Function => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Method => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).italic()  // works for now ig
+                        .clone()
+                ), Italic]  // works for now ig
             },
             TokenType::Number => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Logic => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Math => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Assignment => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Endl => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Macro => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).italic().bold().underlined()
+                        .clone()
+                ), Italic, Bold, Underline]
             },
             TokenType::Const => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).italic()
+                        .clone()
+                ), Italic]
             },
             TokenType::Barrow => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).italic()
+                        .clone()
+                ), Italic]
             },
             TokenType::Lifetime => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).underlined().bold()
+                        .clone()
+                ), Underline, Bold]
             },
             TokenType::String => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                )
+                        .clone()
+                    )
             },
             TokenType::Comment | TokenType::CommentLong => {
                 if text == "todo" || text == "!" || text == "Todo" ||
                     text == "error" || text == "condition" ||
                     text == "conditions" || text == "fix" {
-                        text.fg(
-                            *colorMode.colorBindings
+                    color![text.Colorize(
+                            colorMode.colorBindings
                                 .syntaxHighlighting
                                 .get(&(&token, &colorMode.colorType))
                                 .expect("Error.... no color found")
-                        ).underlined()
+                                .clone()
+                        ), Underline]
                 }  // basic but it kinda does stuff idk
                 else {
-                    text.fg(
-                        *colorMode.colorBindings
+                    text.Colorize(
+                        colorMode.colorBindings
                             .syntaxHighlighting
                             .get(&(&token, &colorMode.colorType))
                             .expect("Error.... no color found")
+                            .clone()
                     )
                 }
             },
             TokenType::Null => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Primitive => {
-                text.fg(
-                    *colorMode.colorBindings
+                text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
+                        .clone()
                 )
             },
             TokenType::Keyword => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).bold().underlined()
+                        .clone()
+                ), Bold, Underline]
             },
             TokenType::Unsafe => {
-                text.fg(
-                    *colorMode.colorBindings
+                color![text.Colorize(
+                    colorMode.colorBindings
                         .syntaxHighlighting
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                ).italic().underlined().on_dark_gray().bold()
+                        .clone()
+                ), Italic, Underline, BrightBlack, Bold]  // bright black is dark gray? white is gray, bright white is pure white?
             },
             TokenType::Grayed => {
-                text.white().dim().italic()
+                color![text, BrightWhite, Dim, Italic]
             }
         }
     }
 
-    pub fn GetScrolledText <'a> (&mut self, area: Rect,
+    pub fn GetScrolledText <'a> (&mut self, area: &Rect,
                                  editingCode: bool,
                                  colorMode: &Colors::ColorMode,
                                  suggested: &'a String,  // the suggested auto-complete (for inline rendering)
-) -> Vec <Line> {
+) -> Vec <Span> {
         // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
         let currentTime = std::time::SystemTime::now()
             .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -1413,7 +1442,7 @@ impl CodeTab {
         let mut tabText = vec![];
         
         let mut i = 0;
-        for lineNumber in scroll..(scroll + area.height as usize - 10) {
+        for lineNumber in scroll..(scroll + area.height as usize - 12) {
             if lineNumber >= self.lines.len() { continue; }
 
             let mut lineNumberText = format!("{}: ",
@@ -1431,17 +1460,15 @@ impl CodeTab {
                 }
             }
 
-            let mut coloredLeft: Vec<(usize, Span)> = vec!();
-            let mut coloredRight: Vec<(usize, Span)> = vec!();
+            let mut coloredLeft: Vec<(usize, Colored)> = vec!();
+            let mut coloredRight: Vec<(usize, Colored)> = vec!();
 
             if lineNumber == self.cursor.0 {
                 coloredLeft.push((lineNumberText.len(),
-                                  lineNumberText
-                                      .red()
-                                      .bold()
-                                      .add_modifier(Modifier::UNDERLINED)));
+                                  color!(lineNumberText, Red, Bold, Underline)
+                ));
             } else {
-                coloredLeft.push((lineNumberText.len(), lineNumberText.gray().italic()));
+                coloredLeft.push((lineNumberText.len(), color!(lineNumberText, White, Italic)));
             }
             
             let mut currentCharNum = 0;
@@ -1453,7 +1480,7 @@ impl CodeTab {
                 if lineNumber == self.cursor.0 && currentCharNum + token.text.len() > self.cursor.1 {
                     if currentCharNum >= self.cursor.1 {
                         if currentCharNum == self.cursor.1 && editingCode {
-                            coloredLeft.push((1, "|".to_string().white().bold()));
+                            coloredLeft.push((1, color!("|", BrightWhite, Bold)));
                         }
                         if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
                             if self.highlighting && (lineNumber == self.cursorEnd.0 && currentCharNum + token.text.len() <= self.cursorEnd.1 ||
@@ -1463,15 +1490,17 @@ impl CodeTab {
                                     currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                             {
                                 coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                        .on_dark_gray())
+                                    (token.text.len(), color!(self.GenerateColor(
+                                        &token.token, tokenCloneStr, colorMode
+                                    ), OnBrightBlack))
                                 );
                             } else if self.highlighting && currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
                                 let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
                                 let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
                                 coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
-                                        .on_dark_gray())
+                                    (token.text.len(), color!(self.GenerateColor(
+                                        &token.token, txtLeft, colorMode
+                                    ), OnBrightBlack))
                                 );
                                 coloredRight.push(
                                     (token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode))
@@ -1506,16 +1535,16 @@ impl CodeTab {
                                 ));
                                 coloredLeft.push((
                                     txt.len() - (self.cursorEnd.1 - currentCharNum),
-                                    self.GenerateColor(
+                                    color!(self.GenerateColor(
                                         &token.token,
                                         txt[self.cursorEnd.1 - currentCharNum..].to_string(),
                                         colorMode
-                                    ).on_dark_gray()
+                                    ), OnBrightBlack)
                                 ));
                             } else {
                                 coloredLeft.push((
                                     txt.len(),
-                                    self.GenerateColor(&token.token, txt, colorMode).on_dark_gray()
+                                    color!(self.GenerateColor(&token.token, txt, colorMode), OnBrightBlack)
                                 ));
                             }
                         } else {
@@ -1525,10 +1554,7 @@ impl CodeTab {
                             ));
                         }
                         if editingCode {
-                            coloredLeft.push((1, "|"
-                                .to_string()
-                                .white()
-                                .bold()))
+                            coloredLeft.push((1, color!("|", BrightWhite, Bold)))
                         };
                         let txt = tokenClone.get(
                             token.text.len() - (
@@ -1540,11 +1566,11 @@ impl CodeTab {
                             if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + token.text.len() {
                                 coloredRight.push((
                                     self.cursorEnd.1 - (currentCharNum + leftSize),
-                                    self.GenerateColor(
+                                    color!(self.GenerateColor(
                                         &token.token,
                                         txt[..self.cursorEnd.1 - (currentCharNum + leftSize)].to_string(),
                                         colorMode
-                                    ).on_dark_gray()
+                                    ), OnBrightBlack)
                                 ));
                                 coloredRight.push((
                                     txt.len() - (self.cursorEnd.1 - (currentCharNum + leftSize)),
@@ -1557,7 +1583,7 @@ impl CodeTab {
                             } else {
                                 coloredRight.push((
                                     txt.len(),
-                                    self.GenerateColor(&token.token, txt, colorMode).on_dark_gray()
+                                    color!(self.GenerateColor(&token.token, txt, colorMode), OnBrightBlack)
                                 ));
                             }
                         } else {
@@ -1572,19 +1598,25 @@ impl CodeTab {
                         (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
                             currentCharNum >= self.cursorEnd.1 && currentCharNum + token.text.len() <= self.cursor.1)
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                            .on_dark_gray()));
+                        coloredLeft.push((token.text.len(),
+                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
+                                         , OnBrightBlack))
+                        );
                     } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
                         let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
                         let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)));
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)
-                            .on_dark_gray()));
+                        coloredLeft.push((token.text.len(),
+                                         color!(self.GenerateColor(&token.token, txtRight, colorMode)
+                                         , OnBrightBlack))
+                        );
                     } else if (lineNumber == self.cursor.0 && currentCharNum + token.text.len() <= self.cursor.1 ||
                         lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                            .on_dark_gray()));
+                        coloredLeft.push((token.text.len(),
+                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
+                                         , OnBrightBlack))
+                        );
                     } else {
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)));
                     }
@@ -1593,14 +1625,18 @@ impl CodeTab {
                         (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
                             currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
                     {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                            .on_dark_gray()));
+                        coloredLeft.push((token.text.len(),
+                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
+                                         , OnBrightBlack))
+                        );
                     } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
 
                         let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
                         let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)
-                            .on_dark_gray()));
+                        coloredLeft.push((token.text.len(),
+                                         color!(self.GenerateColor(&token.token, txtLeft, colorMode)
+                                         , OnBrightBlack))
+                        );
                         coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)));
                     } else if (
                         lineNumber == self.cursorEnd.0 &&
@@ -1610,8 +1646,9 @@ impl CodeTab {
                         self.cursorEnd.0 != self.cursor.0
                     {
                         coloredLeft.push(
-                            (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                .on_dark_gray())
+                            (token.text.len(),
+                             color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
+                                , OnBrightBlack))
                         );
                     } else {
                         coloredLeft.push(
@@ -1632,7 +1669,7 @@ impl CodeTab {
             drop(lineTokensRead);
 
             if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
-                coloredLeft.push((1, "|".to_string().white().bold()));
+                coloredLeft.push((1, color!("|", BrightWhite, Bold)));
                 // adding the suggested add-on
                 if !suggested.is_empty() {
                     let mut tokens = vec!();
@@ -1646,18 +1683,18 @@ impl CodeTab {
 
                         coloredLeft.push((
                             suggested.len().saturating_sub(selectedToken.len()),
-                            partialToken.white().dim().italic()
+                            color!(partialToken, BrightWhite, Dim, Italic)
                         ));
                     }
                 }
             }
 
             let mut charCount = 0usize;
-            let mut finalColText: Vec<Span> = vec!();
+            let mut finalColText: Vec<Colored> = vec!();
             for (size, col) in coloredLeft {
                 if charCount + size >= (area.width - 29 - 4) as usize { break; }
                 if self.cursor.0 == lineNumber && editingCode {
-                    finalColText.push(col.underlined());
+                    finalColText.push(color!(col, Underline));
                 } else {
                     finalColText.push(col);
                 }
@@ -1666,7 +1703,7 @@ impl CodeTab {
             for (size, col) in coloredRight {
                 if charCount + size >= (area.width - 29 - 4) as usize { break; }
                 if self.cursor.0 == lineNumber && editingCode {
-                    finalColText.push(col.underlined());
+                    finalColText.push(color!(col, Underline));
                 } else {
                     finalColText.push(col);
                 }
@@ -1682,27 +1719,25 @@ impl CodeTab {
                 self.pinedLines.contains(&lineNumber) {
                 let rightPadding = (area.width - 29 - 4) as usize - charCount;
                 for _ in 0..rightPadding {
-                    finalColText.push(" ".to_string().white());
+                    finalColText.push(color!(" ", BrightWhite));
                 }
 
                 // the scroll bar
                 if scrollPercent > 0 && i == scrollPercent - 1 {
-                    finalColText.push("/\\".to_string().white());
+                    finalColText.push(color!("/\\", White));
                 } else if i == scrollPercent {
-                    finalColText.push("||".to_string().white());
+                    finalColText.push(color!("||", White));
                 } else if i == scrollPercent + 1 {
-                    finalColText.push("\\/".to_string().white());
+                    finalColText.push(color!("\\/", White));
                 } else {
-                    finalColText.push("  ".to_string().on_red());
+                    finalColText.push(color!("  ", OnRed));
                     for spanIndex in 0..finalColText.len() {
-                        finalColText[spanIndex] = finalColText[spanIndex]
-                            .clone()
-                            .underlined();
+                        finalColText[spanIndex] = color!(finalColText[spanIndex], Underline);
                     }
                 }
             }
 
-            tabText.push(Line::from(
+            tabText.push(Span::FromTokens(
                 finalColText
             ));
 
@@ -1764,7 +1799,7 @@ impl CodeTabs {
         }
     }
 
-    pub fn GetRelativeTabPosition (&self, positionX: u16, area: Rect, paddingLeft: u16) -> u16 {
+    pub fn GetRelativeTabPosition (&self, positionX: u16, area: &Rect, paddingLeft: u16) -> u16 {
         let total = self.panes.len() as u16 + 1;
         let tabSize = (area.width - paddingLeft) / total;
 
@@ -1813,12 +1848,12 @@ impl CodeTabs {
     }
 
     pub fn GetScrolledText <'a> (&mut self,
-                                 area: Rect,
+                                 area: &Rect,
                                  editingCode: bool,
                                  colorMode: &Colors::ColorMode,
                                  suggested: &'a String,
                                  tabIndex: usize,
-    ) -> Vec <ratatui::text::Line> {
+    ) -> Vec <Span> {
         self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested)
     }
 
@@ -1859,36 +1894,37 @@ impl CodeTabs {
         );
     }
 
-    pub fn GetColoredNames (&self, onTabs: bool) -> Vec <Span> {
+    pub fn GetColoredNames (&self, onTabs: bool) -> Vec <Colored> {
         let mut colored = vec!();
 
         if onTabs {
             for (index, tab) in self.tabFileNames.iter().enumerate() {
                 if index == self.currentTab {
                     colored.push(
-                        format!(" ({}) ", index + 1)
-                            .to_string()
-                            .light_yellow()
-                            .bold()
-                            .on_dark_gray()
-                            .underlined()
+                        color!(
+                            format!(" ({}) ", index + 1),
+                            BrightYellow,
+                            Bold,
+                            OnBrightBlack,
+                            Underline
+                        )
                     );
                     colored.push(
-                        tab.clone().white().italic().on_dark_gray().underlined()
+                        color!(tab, White, Italic, OnBrightBlack, Underline)
                     );
                     colored.push(
-                        " |".to_string().white().bold().on_dark_gray().underlined()
+                        color!(" |", White, Bold, OnBrightBlack, Underline)
                     );
                     continue;
                 }
                 colored.push(
-                    format!(" ({}) ", index + 1).to_string().light_yellow().bold().underlined()
+                    color!(format!(" ({}) ", index + 1), BrightYellow, Bold, Underline)
                 );
                 colored.push(
-                    tab.clone().white().italic().underlined()
+                    color!(tab, White, Italic, Underline)
                 );
                 colored.push(
-                    " |".to_string().white().bold().underlined()
+                    color!(" |", White, Bold, Underline)
                 );
             }
             return colored;
@@ -1897,24 +1933,24 @@ impl CodeTabs {
         for (index, tab) in self.tabFileNames.iter().enumerate() {
             if index == self.currentTab {
                 colored.push(
-                    format!(" ({}) ", index + 1).to_string().light_yellow().bold().on_dark_gray()
+                    color!(format!(" ({}) ", index + 1), BrightYellow, Bold, OnBrightBlack)
                 );
                 colored.push(
-                    tab.clone().white().italic().on_dark_gray()
+                    color!(tab, White, Italic, OnBrightBlack)
                 );
                 colored.push(
-                    " |".to_string().white().bold().on_dark_gray()
+                    color!(" |", White, Bold, OnBrightBlack)
                 );
                 continue;
             }
             colored.push(
-                format!(" ({}) ", index + 1).to_string().light_yellow().bold()
+                color!(format!(" ({}) ", index + 1), BrightYellow, Bold)
             );
             colored.push(
-                tab.clone().white().italic()
+                color!(tab, White, Italic)
             );
             colored.push(
-                " |".to_string().white().bold()
+                color!(" |", White, Bold)
             );
         }
 

@@ -1,7 +1,7 @@
 // snake case is just bad
 #![allow(dead_code)]
 
-use proc_macros::color;
+//use proc_macros::color;
 use std::io::Write;
 
 //* Add a check for updated in the GetRender method for windows
@@ -308,6 +308,23 @@ impl Colored {
         }
     }
 
+    pub fn IsUncolored (&self) -> bool {
+        self.mods.is_empty() && self.color.is_none() && self.bgColor.is_none()
+    }
+
+    pub fn Contains (&self, color: &ColorType) -> bool {
+        let col = color.GetColor().UnwrapIntoTuple();
+        if col.0 == self.bgColor && col.2 {  return true;  }
+        if let Some(selfColor) = &self.color {
+            if let Some(otherCol) = col.0 {
+                if selfColor.contains(&otherCol) {  return true;  }
+            }
+        }
+        for modifier in col.1 {
+            if self.mods.contains(&modifier) {  return true;  }
+        } false
+    }
+
     pub fn ChangeText (&mut self, text: String) {
         self.text = text;
     }
@@ -498,11 +515,24 @@ impl Window {
     pub fn Colorizes (&mut self, colors: Vec <ColorType>) {
         for color in colors {
             self.color.AddColor(color);
-        }
+        } self.UpdateAll();
     }
 
     pub fn Colorize (&mut self, color: ColorType) {
         self.color.AddColor(color);
+        self.UpdateAll();
+    }
+
+    pub fn TryColorize (&mut self, color: ColorType) {
+        if self.color.Contains(&color) {  return;  }
+        self.color.AddColor(color);
+        self.UpdateAll();
+    }
+
+    pub fn ClearColors (&mut self) {
+        if self.color.IsUncolored() { return; }
+        self.color = Colored::new(String::new());
+        self.UpdateAll();
     }
 
     // Adds a border around the window/block
@@ -517,6 +547,8 @@ impl Window {
             vec![title.Colorizes(vec![])]),
             title.len()
         );
+        self.wasUpdated = false;
+        self.updated[0] = false;
         //self.color.ChangeText(title);
     }
 
@@ -527,6 +559,8 @@ impl Window {
     pub fn TitledColored (&mut self, title: Span) {
         let size = title.Size();
         self.title = (title, size);
+        self.wasUpdated = false;
+        self.updated[0] = false;
     }
 
     // Changes the size of the window
@@ -619,6 +653,7 @@ impl Window {
         let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
         let borderColor = self.color.GetText(&mut String::new());
 
+        // by rendering, the window is being updated
         self.wasUpdated = true;
 
         // make sure to not call UpdateRender when using closures
@@ -674,11 +709,17 @@ impl Window {
             // bottom
             let color = borderColor;  // consuming border color here
             let windowSize = self.size.0;  // idk a better way to do this other than cloning
+            let title = self.title.clone();
             let closure = move || {
                 let mut text = String::new();
                 text.push_str(&color.0);
                 text.push('┌');
-                text.push_str(&"─".repeat(windowSize as usize - 2));
+                let half = windowSize / 2 - title.1 as u16 / 2 - 1;
+                text.push_str(&"─".repeat(half as usize));
+                text.push_str(CLEAR);
+                text.push_str(&title.0.Join().0);
+                text.push_str(&color.0);
+                text.push_str(&"─".repeat(windowSize as usize - 2 - half as usize - title.1));
                 text.push('┐');
                 text.push_str(CLEAR);
                 text
@@ -801,14 +842,13 @@ impl Window {
     // checks to see if any lines need to be updated
     pub fn TryUpdateLines (&mut self, mut lines: Vec <Span>) {
         if lines.len() != self.lines.len() {
+            self.UpdateAll();  // making sure every line gets updated (incase it was shrunk)
             self.wasUpdated = false;
             self.lines.clear();
             let mut index = 0;
             for span in lines {
                 if index >= self.updated.len() {  break;  }
                 self.lines.push((span, String::new(), 0));
-                self.updated[index] = false;
-                self.wasUpdated = false;
                 index += 1;
             }
             return;
