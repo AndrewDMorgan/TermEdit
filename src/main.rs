@@ -26,31 +26,62 @@ use Tokens::*;
 
 use CodeTabs::CodeTab;
 
-use ratatui::{
-    //buffer::Buffer,
-    //layout::Rect,
-    style::Stylize,
-    symbols::border,
-    //text::{Line, Text},
-    widgets::Block,
-    //DefaultTerminal,
-};
-
-//use ratatui::prelude::Alignment;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
-use crate::TermRender::{Colorize, Span};
+use crate::TermRender::Colorize;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub enum FileTabs {
     Outline,
     #[default] Files,
 }
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub enum FileType {
+    #[default] File,
+    Directory,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FilePathNode {
+    pub pathName: String,
+    pub paths: Vec <FilePathNode>,  // the following embedded paths
+    pub dirFiles: Vec <String>,  // the files in the current directory
+    pub allItems: Vec <(String, FileType)>,  // includes files and further directories
+}
+
+impl FilePathNode {
+    pub fn GetChild (&self, pathName: String) -> Option <FilePathNode> {
+        for path in &self.paths {
+            if path.pathName == pathName {
+                return Some(path.clone());
+            }
+        } None
+    }
+
+    pub fn GetLeaf (&self, mut pathNames: Vec <String>) -> Option <FilePathNode> {
+        let pathName = pathNames.pop().unwrap_or(String::new());
+        if self.paths.is_empty() {
+            for file in &self.dirFiles {
+                if *file == pathName {
+                    return Some(self.clone());
+                }
+            }
+        }
+        for path in &self.paths {
+            if path.pathName == pathName {
+                return path.GetLeaf(pathNames);
+            }
+        } None
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct FileBrowser {
     files: Vec <String>,  // stores the names
-    filePaths: Vec <String>,
+    filePaths: Vec <String>,  // these two are here until the rest of the code is updated (temporary, to allow it to function)
 
+    // this one would be the 0th element
+    fileTree: FilePathNode,
     fileTab: FileTabs,
     fileCursor: usize,
     outlineCursor: usize,
@@ -71,6 +102,28 @@ static VALID_EXTENSIONS: [&str; 9] = [
 // manages the files for a given project
 // provides an outline and means for loading files
 impl FileBrowser {
+    /// returns the file path to get to the file of the nth element (which could be a file or folder/branch/path)
+    pub fn GetNthElement (&self, index: usize) -> Option <Vec <String>> {
+        self.SearchFiletree(&self.fileTree, &mut 0, index)
+    }
+
+    fn SearchFiletree (&self, path: &FilePathNode, mut i: &mut usize, index: usize) -> Option <Vec <String>> {
+        let mut dirCount = 0;
+        for (item, itemType) in &path.allItems {
+            if *i == index {  return Some(vec![item.clone()]);  }
+            *i += 1;
+            if *itemType == FileType::Directory {
+                let searchResults = self.SearchFiletree(&path.paths[dirCount], &mut i, index);
+                if searchResults.is_some() {
+                    let mut output = searchResults.unwrap();
+                    output.insert(0, item.clone());
+                    return Some(output);
+                }
+                dirCount += 1;
+            }
+        } None
+    }
+
     // gets the complete path name
     pub fn GetPathName (dirSuffix: &str) -> String {
         home_dir()
@@ -426,9 +479,9 @@ impl <'a> App <'a> {
         }
     }
 
-    fn PressedCode (&mut self, events: &KeyParser, event: &MouseEvent) {
+    fn PressedCode (&mut self, events: &KeyParser, event: &MouseEvent, padding: usize) {
         self.lastTab = self.codeTabs.GetTabNumber(
-            &self.area, 29,
+            &self.area, padding,
             event.position.0 as usize,
             &mut self.lastTab
         );
@@ -451,14 +504,14 @@ impl <'a> App <'a> {
 
         // adjusting the position for panes
         let position = (
-            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, 33),
+            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, padding as u16 + 4),
             event.position.1
         );
 
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         let lineSize = tab.lines.len().to_string().len();  // account for the length of the total lines
         let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                           position.1.saturating_sub(4) as usize,
+                           position.1.saturating_sub(3) as usize,
                        position.0.saturating_sub(lineSize as u16) as usize);
         tab.cursor = (
             std::cmp::min(
@@ -586,13 +639,13 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent) {
-        if  event.position.0 > 29 &&
+    async fn HandlePress (&mut self, events: &KeyParser, event: &MouseEvent, padding: u16) {
+        if  event.position.0 > padding &&
             event.position.1 < self.area.height - 8 &&
-            event.position.1 > 3 &&
+            event.position.1 > 2 &&
             self.codeTabs.tabs.len() > 0
         {
-            self.PressedCode(events, event);
+            self.PressedCode(events, event, padding as usize);
         } else if
         event.position.0 <= 29 &&
             event.position.1 < self.area.height - 10 &&
@@ -607,25 +660,26 @@ impl <'a> App <'a> {
         {
             self.PressedNewCodeTab(events, event);
         } else if  // selecting files to open
-        event.position.0 > 1 &&
+            event.position.0 > 1 &&
             event.position.0 < 30 && //height - 8, width 30
             event.position.1 < self.area.height - 8 &&
-            event.position.1 > 1
+            event.position.1 > 1 &&
+            matches!(self.appState, AppState::CommandPrompt)
         {
             self.PressedLoadFile(events, event).await;
         }
     }
 
-    fn HighlightLeftClick (&mut self, _events: &KeyParser, event: &MouseEvent) {
+    fn HighlightLeftClick (&mut self, _events: &KeyParser, event: &MouseEvent, padding: usize) {
         // updating the highlighting position
         self.lastTab = self.codeTabs.GetTabNumber(
-            &self.area, 29,
+            &self.area, padding,
             event.position.0 as usize,
             &mut self.lastTab
         );
         // adjusting the position
         let position = (
-            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, 33),
+            self.codeTabs.GetRelativeTabPosition(event.position.0, &self.area, padding as u16 + 4),
             event.position.1
         );
 
@@ -634,7 +688,7 @@ impl <'a> App <'a> {
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         let lineSize = tab.lines.len().to_string().len();  // account for the length of the total lines
         let linePos = (std::cmp::max(tab.scrolled as isize + tab.mouseScrolled, 0) as usize +
-                           position.1.saturating_sub(4) as usize,
+                           position.1.saturating_sub(3) as usize,
                        position.0.saturating_sub(lineSize as u16) as usize);
         tab.cursor = (
             std::cmp::min(
@@ -668,16 +722,19 @@ impl <'a> App <'a> {
     }
 
     async fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
+        let padding;
+        if matches!(self.appState, AppState::CommandPrompt) {  padding = 29;  }
+        else {  padding = 0;  }
         // checking for code selection
         if matches!(event.state, MouseState::Release | MouseState::Hold) {
-            if event.position.0 > 29 && event.position.1 < self.area.height - 8 &&
-                event.position.1 > 3 &&
+            if event.position.0 > padding && event.position.1 < self.area.height - 8 &&
+                event.position.1 > 2 &&
                 self.codeTabs.tabs.len() > 0
             {
-                self.HighlightLeftClick(events, event);
+                self.HighlightLeftClick(events, event, padding as usize);
             }
         } else if matches!(event.state, MouseState::Press) {
-            self.HandlePress(events, event).await;
+            self.HandlePress(events, event, padding).await;
         }
     }
 
@@ -1413,13 +1470,6 @@ impl <'a> App <'a> {
 
         {
             let window = app.GetWindowReferenceMut(String::from("Tabs"));
-
-            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) {
-                window.TryColorize(ColorType::BrightBlue);
-            } else {
-                window.ClearColors();
-            }
-
             window.TryUpdateLines(tabText);
         }
     }
@@ -1427,7 +1477,10 @@ impl <'a> App <'a> {
     // ============================================= code block here =============================================
     fn RenderCodeBlock (&mut self, app: &mut TermRender::App) {
         if self.codeTabs.tabs.len() > 0 {
-            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), 29);
+            let leftPadding;
+            if matches!(self.appState, AppState::CommandPrompt) {  leftPadding = 29;  }
+            else {  leftPadding = 0;  }
+            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), leftPadding);
 
             for tabIndex in 0..=self.codeTabs.panes.len() {
                 //let area = app.GetWindowArea();
@@ -1453,6 +1506,9 @@ impl <'a> App <'a> {
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
             codeBlock = codeBlock.light_blue();
         }*/
+        let padding: u16;
+        if matches!(self.appState, AppState::CommandPrompt) {  padding = 30;  }
+        else {  padding = 0;  }
 
         let codeText =
             self.codeTabs.GetScrolledText(
@@ -1464,6 +1520,7 @@ impl <'a> App <'a> {
                 {
                     if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
                 },
+                padding.saturating_sub(1),
         );
 
         {
@@ -1472,7 +1529,7 @@ impl <'a> App <'a> {
 
             // updating the sizing (incase it was changed to a pane)
             window.Move((
-                (tabIndex * tabSize) as u16 + 29, 3
+                (tabIndex * tabSize) as u16 + padding, 2
             ));
             window.Resize((
                 tabSize as u16,
@@ -1862,9 +1919,9 @@ impl <'a> App <'a> {
 
     fn RenderProject (&mut self, app: &mut TermRender::App) {//(&mut self, area: Rect, buf: &mut Buffer) {
         self.RenderFileBlock(app);
-        self.RenderCodeBlock(app);
         self.RenderFiles(app);
         self.RenderErrorBar(app);
+        self.RenderCodeBlock(app);
     }
 
     fn RenderSettings (&mut self, app: &mut TermRender::App) {//, area: Rect, buf: &mut Buffer) {
@@ -2056,14 +2113,14 @@ impl <'a> App <'a> {
             }, buf);*/
         if app.ContainsWindow(String::from("Tabs")) {
             let window = app.GetWindowReferenceMut(String::from("Tabs"));
-            window.Move((30, 1));
-            window.Resize((terminalSize.0 - 29, 3));
+            window.Move((30, 0));
+            window.Resize((terminalSize.0 - 29, 1));
         } else {
             let mut window = TermRender::Window::new(
-                (30, 1), 0,
-                (terminalSize.0 - 29, 3),
+                (30, 0), 0,
+                (terminalSize.0 - 29, 1),
             );
-            window.Bordered();
+            //window.Bordered();
             app.AddWindow(window, String::from("Tabs"), vec![String::from("Project")]);
         }
 
@@ -2131,27 +2188,38 @@ impl <'a> App <'a> {
     }
 
     fn CheckCodeTabs (&mut self, app: &mut TermRender::App, terminalSize: (u16, u16)) {
-        let names = app.GetWindowsByKeywordsNonRef(vec![
+        let mut names = app.GetWindowsByKeywordsNonRef(vec![
             String::from("CodeTab")
         ]);  // current active tabs
+        for i in 0..names.len() {
+            let size = names[i].len();
+            let newName = names[i][9..size].to_string();
+            names[i] = newName;
+        }
+
+        let (padding, shift);
+        if matches!(self.appState, AppState::CommandPrompt) {
+            app.GetWindowReferenceMut(String::from("Files")).Show();
+            (padding, shift) = (30, 29);
+        } else {
+            app.GetWindowReferenceMut(String::from("Files")).Hide();
+            (padding, shift) = (0, 0);
+        }
 
         // going through all windows and making sure that window exists
         // deleting windows that are no longer open
-        let mut safe = vec![];
         for tab in &self.codeTabs.tabs {
             if names.contains(&tab.name) {
-                for name in &names {
-                    if name == &tab.name {
-                        safe.push(name);
-                        break;
-                    }
-                }
+                /*let window = app.GetWindowReferenceMut(format!("CodeBlock{}", tab.name));
+                window.Move((padding, 3));
+                window.Resize(((terminalSize.0 - shift) / (self.codeTabs.panes.len() as u16 + 1), terminalSize.1 - 11));*/
                 continue;
             }
+
             // creating a new window
             let mut window = TermRender::Window::new(
-                (30, 3), 0,
-                (terminalSize.0 - 29, terminalSize.1 - 11),
+                (padding, 2), 0,
+                ((terminalSize.0 - shift) / (self.codeTabs.panes.len() as u16 + 1), terminalSize.1 - 11),
             );
             window.Bordered();
             app.AddWindow(window,
@@ -2512,11 +2580,9 @@ todo!!!!!!! make the file browser disappear when viewing the code tab; when look
 async fn main() -> io::Result<()> {
     let mut termApp = TermRender::App::new();
 
-    //let mut terminal = ratatui::init();
     enableMouseCapture().await;
     let app_result = App::default().run(&mut termApp).await;
     disableMouseCapture().await;
-    //ratatui::restore();
     app_result
 }
 

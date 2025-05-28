@@ -1385,6 +1385,7 @@ impl CodeTab {
                                  editingCode: bool,
                                  colorMode: &Colors::ColorMode,
                                  suggested: &'a String,  // the suggested auto-complete (for inline rendering)
+                                 padding: u16,
 ) -> Vec <Span> {
         // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
         let currentTime = std::time::SystemTime::now()
@@ -1692,7 +1693,7 @@ impl CodeTab {
             let mut charCount = 0usize;
             let mut finalColText: Vec<Colored> = vec!();
             for (size, col) in coloredLeft {
-                if charCount + size >= (area.width - 29 - 4) as usize { break; }
+                if charCount + size >= (area.width - padding - 4) as usize { break; }
                 if self.cursor.0 == lineNumber && editingCode {
                     finalColText.push(color!(col, Underline));
                 } else {
@@ -1701,7 +1702,7 @@ impl CodeTab {
                 charCount += size;
             }
             for (size, col) in coloredRight {
-                if charCount + size >= (area.width - 29 - 4) as usize { break; }
+                if charCount + size >= (area.width - padding - 4) as usize { break; }
                 if self.cursor.0 == lineNumber && editingCode {
                     finalColText.push(color!(col, Underline));
                 } else {
@@ -1717,7 +1718,7 @@ impl CodeTab {
             
             if scrollPercent.saturating_sub(1) <= i && i <= scrollPercent + 1 ||
                 self.pinedLines.contains(&lineNumber) {
-                let rightPadding = (area.width - 29 - 4) as usize - charCount;
+                let rightPadding = (area.width - padding - 4) as usize - charCount;
                 for _ in 0..rightPadding {
                     finalColText.push(color!(" ", BrightWhite));
                 }
@@ -1853,8 +1854,9 @@ impl CodeTabs {
                                  colorMode: &Colors::ColorMode,
                                  suggested: &'a String,
                                  tabIndex: usize,
+                                 padding: u16,
     ) -> Vec <Span> {
-        self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested)
+        self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested, padding)
     }
 
     pub fn CloseTab (&mut self) {
@@ -1905,15 +1907,15 @@ impl CodeTabs {
                             format!(" ({}) ", index + 1),
                             BrightYellow,
                             Bold,
-                            OnBrightBlack,
+                            OnBlue,
                             Underline
                         )
                     );
                     colored.push(
-                        color!(tab, White, Italic, OnBrightBlack, Underline)
+                        color!(tab, White, Italic, OnBlue, Underline)
                     );
                     colored.push(
-                        color!(" |", White, Bold, OnBrightBlack, Underline)
+                        color!(" |", White, Bold, OnBlue, Underline)
                     );
                     continue;
                 }

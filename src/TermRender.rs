@@ -490,6 +490,7 @@ pub struct Window {
     bordered: bool,
     title: (Span, usize),
     color: Colored,
+    hidden: bool,
 }
 
 impl Window {
@@ -504,12 +505,26 @@ impl Window {
             bordered: false,
             title: (Span::default(), 0),
             color: Colored::new(String::new()),  // format!("\x1b[38;2;{};{};{}m", 125, 125, 0),//String::new(),
+            hidden: false,
         }
+    }
+
+    pub fn Hide (&mut self) {
+        if self.hidden {  return;  }
+        self.hidden = true;
+        self.UpdateAll();
+    }
+
+    pub fn Show(&mut self) {
+        if !self.hidden {  return;  }
+        self.hidden = false;
+        self.UpdateAll();
     }
 
     pub fn Move (&mut self, newPosition: (u16, u16)) {
         if newPosition == self.position {  return;  }
         self.position = newPosition;
+        self.UpdateAll();
     }
 
     pub fn Colorizes (&mut self, colors: Vec <ColorType>) {
@@ -571,7 +586,7 @@ impl Window {
             std::cmp::max(changed.1, 0)
         );
         self.updated = vec![false; self.size.1 as usize];
-        self.wasUpdated = false;
+        self.UpdateAll();
     }
 
     // Updates the colorized rendering of the Spans for all lines
@@ -642,18 +657,31 @@ impl Window {
             text.push_str(CLEAR);
         } else {
             text.push_str(&lineText);
+            text.push_str(CLEAR);  // making sure the following are blank
             let padding = (size.0 as usize) - lineSize;
             text.push_str(&" ".repeat(padding));
-        }
-        text
+        } text
     }
 
     pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> {
-        // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
-        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
-        let borderColor = self.color.GetText(&mut String::new());
-
         // by rendering, the window is being updated
+        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
+
+        if self.hidden && !self.wasUpdated {
+            self.wasUpdated = true;
+            for i in 0..self.updated.len() {
+                self.updated[i] = true;
+                let width = self.size.0;
+                renderClosures.push((Box::new(move || {
+                    let text = " ".repeat(width as usize);
+                    text
+                }), self.position.0, self.position.1 + i as u16, self.depth));
+            }
+            return renderClosures;
+        }
+
+        // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
+        let borderColor = self.color.GetText(&mut String::new());
         self.wasUpdated = true;
 
         // make sure to not call UpdateRender when using closures
@@ -682,10 +710,10 @@ impl Window {
             let bordered = self.bordered;
 
             let closure = move || {
-                let slice = Window::RenderWindowSlice(color, bordered, (text, size), windowSize);
+                let mut slice = Window::RenderWindowSlice(color, bordered, (text, size), windowSize);
                 slice
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16, self.depth));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16, self.depth + 1));
         }
 
         if updated && self.bordered {
@@ -704,7 +732,7 @@ impl Window {
                 text.push_str(CLEAR);
                 text
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + self.size.1 - 1, self.depth));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1 + self.size.1 - 1, self.depth + 1));
 
             // bottom
             let color = borderColor;  // consuming border color here
@@ -724,7 +752,7 @@ impl Window {
                 text.push_str(CLEAR);
                 text
             };
-            renderClosures.push((Box::new(closure), self.position.0, self.position.1, self.depth));
+            renderClosures.push((Box::new(closure), self.position.0, self.position.1, self.depth + 1));
         }
 
         renderClosures
@@ -1260,8 +1288,7 @@ impl App {
                     break;
                 }
             }
-        }
-        names
+        } names
     }
 
     /// Gets the names to all windows which satisfy the given key (closure).
