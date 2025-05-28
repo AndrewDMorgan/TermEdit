@@ -1068,7 +1068,7 @@ impl App {
 
     // Renders all the active windows to the consol
     // It also clears the screen from previous writing
-    pub fn Render (&mut self) {
+    pub fn Render (&mut self) -> usize {
         //let start = std::time::Instant::now();
         if self.renderHandle.is_some() {
             let handle = self.renderHandle.take().unwrap();
@@ -1107,10 +1107,10 @@ impl App {
             updated = true;
             break;
         }
-        if !updated {  return;  }  // Ok(());  }
+        if !updated {  return 0;  }  // Ok(());  }
 
         // sorting the windows based on the horizontal position
-        let mut referenceArray = vec![];
+        /*let mut referenceArray = vec![];
         for keyPair in &self.windowReferences {
             referenceArray.push(keyPair.1);
         }
@@ -1118,16 +1118,18 @@ impl App {
         if self.changeWindowLayout {
             referenceArray.sort_by_key( |index| self.activeWindows[**index].0.position.0 );
             self.changeWindowLayout = false;
-        }
+        }*/
 
         // stores the draw calls
         let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
 
         // going through the sorted windows
-        for index in referenceArray {
-            let window = &mut self.activeWindows[*index];
+        for window in &mut self.activeWindows {
+            //let window = &mut self.activeWindows[*index];
             drawCalls.append(&mut window.0.GetRenderClosure());
         }
+
+        let numCalls = drawCalls.len();
 
         let size = (self.area.width, self.area.height);
         let buffer = self.buffer.clone();
@@ -1166,6 +1168,8 @@ impl App {
             out.write_all(writeBuffer.as_bytes()).unwrap();
             out.flush().unwrap();
         }));
+
+        numCalls
 
         //let elapsed = start.elapsed();
         //panic!("Render thread completed in {:?}", elapsed);

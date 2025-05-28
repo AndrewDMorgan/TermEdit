@@ -1457,7 +1457,7 @@ impl CodeTab {
             let totalSize = (self.lines.len()).to_string().len() + 1;  // number of digits + 2usize;
             for _ in 0..totalSize {
                 if lineNumberText.len() <= totalSize {
-                    lineNumberText.push(' ');
+                    lineNumberText.insert(0, ' ');
                 }
             }
 
@@ -1684,7 +1684,7 @@ impl CodeTab {
 
                         coloredLeft.push((
                             suggested.len().saturating_sub(selectedToken.len()),
-                            color!(partialToken, BrightWhite, Dim, Italic)
+                            color!(partialToken, BrightBlack, Italic)
                         ));
                     }
                 }
@@ -1717,24 +1717,27 @@ impl CodeTab {
             ) as usize;
             
             if scrollPercent.saturating_sub(1) <= i && i <= scrollPercent + 1 ||
-                self.pinedLines.contains(&lineNumber) {
-                let rightPadding = (area.width - padding - 4) as usize - charCount;
-                for _ in 0..rightPadding {
+                self.pinedLines.contains(&lineNumber) || true {
+                let rightPadding = (area.width - padding - 3) as usize - charCount;
+                finalColText.push(color!(" ".repeat(rightPadding), BrightWhite));
+                /*for _ in 0..rightPadding {
                     finalColText.push(color!(" ", BrightWhite));
-                }
+                }*/
 
                 // the scroll bar
                 if scrollPercent > 0 && i == scrollPercent - 1 {
-                    finalColText.push(color!("/\\", White));
+                    finalColText.push(color!(" ", OnWhite));
                 } else if i == scrollPercent {
-                    finalColText.push(color!("||", White));
+                    finalColText.push(color!(" ", OnWhite));
                 } else if i == scrollPercent + 1 {
-                    finalColText.push(color!("\\/", White));
-                } else {
-                    finalColText.push(color!("  ", OnRed));
+                    finalColText.push(color!(" ", OnWhite));
+                } else if self.pinedLines.contains(&lineNumber) {
+                    finalColText.push(color!(" ", OnRed));
                     for spanIndex in 0..finalColText.len() {
                         finalColText[spanIndex] = color!(finalColText[spanIndex], Underline);
                     }
+                } else {
+                    finalColText.push(color!(" ", OnBrightBlack));
                 }
             }
 

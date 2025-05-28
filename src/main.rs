@@ -305,6 +305,7 @@ impl <'a> App <'a> {
 
         let exit = self.exit.clone();
 
+        let mut times = vec![];
         loop {
             if *exit.read() {
                 break;
@@ -317,10 +318,26 @@ impl <'a> App <'a> {
 
             // rendering (will be more performant once the new framework is added)
             //terminal.draw(|frame| self.draw(frame))?;
-            self.RenderFrame(app);
-            std::thread::sleep(std::time::Duration::from_millis(10));  // rendering is too quick...
-
-            let termSize = app.GetTerminalSize().unwrap();
+            let start = std::time::SystemTime::now()
+                /*.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards...")
+                .as_millis()*/;
+            let updates = self.RenderFrame(app);
+            let end = std::time::SystemTime::now()
+                /*.duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .expect("Time went backwards...")
+                .as_millis()*/;
+            let time = end.duration_since(start).unwrap().as_micros();
+            times.push(time);
+            let mut avg = 0;
+            for time in &times {
+                avg += time
+            }
+            let (minTime, maxTime) = (times.iter().min().unwrap(), times.iter().max().unwrap());
+            self.debugInfo = format!("{}; Time: {} -- {}{}, {}{}", updates, avg/500, "{", minTime, maxTime, "}");
+            if times.len() > 500 {  times.remove(0);  }
+            //std::thread::sleep(std::time::Duration::from_millis(10));  // rendering is too quick...
+            let termSize = app.GetTerminalSize()?;
             self.area = TermRender::Rect {
                 x: 0, y: 0,
                 width: termSize.0,
@@ -2116,7 +2133,7 @@ impl <'a> App <'a> {
             window.Move((30, 0));
             window.Resize((terminalSize.0 - 29, 1));
         } else {
-            let mut window = TermRender::Window::new(
+            let window = TermRender::Window::new(
                 (30, 0), 0,
                 (terminalSize.0 - 29, 1),
             );
@@ -2374,7 +2391,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn RenderFrame (&mut self, app: &mut TermRender::App) {
+    fn RenderFrame (&mut self, app: &mut TermRender::App) -> usize {
         self.CheckWindows(app);
         match self.appState {
             AppState::Tabs | AppState::CommandPrompt => {
@@ -2432,7 +2449,7 @@ impl <'a> App <'a> {
         window.TryUpdateLines(vec![commandText]);
 
         // rendering the updated app
-        app.Render();
+        app.Render()
     }
 }
 
@@ -2565,14 +2582,11 @@ multi-line parameters on functions/methods aren't correctly read
 multi-line comments aren't updated properly when just pressing return (on empty lines)
     it may not be storing anything on empty lines?
 
-todo!! make it so when too many tabs are open it doesn't just crash and die...
+todo!! make it so when too many tabs are open it doesn't just crash and die... (does the new rendering framework fix this?)
 
 Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage?
 
 maybe look at using jit for the lua interfacing.
-
-todo!!!!!!! make the file browser disappear when viewing the code tab; when looking at all tabs, open it
-
 */
 
 
@@ -2585,5 +2599,4 @@ async fn main() -> io::Result<()> {
     disableMouseCapture().await;
     app_result
 }
-
 
