@@ -1458,9 +1458,11 @@ impl <'a> App <'a> {
             if matches!(self.appState, AppState::CommandPrompt) {  30  }
             else {  0  };
 
+        let mut rect = app.GetWindowArea().clone();
+        rect.width = tabSize as u16 + (padding.saturating_sub(1));
         let codeText =
             self.codeTabs.GetScrolledText(
-                app.GetWindowArea(),
+                &rect,
                 matches!(self.appState, AppState::Tabs) &&
                     matches!(self.tabState, TabState::Code),
                 &self.colorMode,
@@ -1481,7 +1483,7 @@ impl <'a> App <'a> {
             ));
             window.Resize((
                 tabSize as u16,
-                height - 11
+                height - 10
             ));
 
             if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {

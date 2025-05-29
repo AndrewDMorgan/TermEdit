@@ -14,7 +14,6 @@ use crate::Tokens::*;
 
 use crate::color;
 
-
 // the bounds from the screen edge at which the cursor will begin scrolling
 const SCROLL_BOUNDS: usize = 12;
 const CENTER_BOUNDS: usize = 0;
@@ -1384,7 +1383,7 @@ impl CodeTab {
                         .get(&(&token, &colorMode.colorType))
                         .expect("Error.... no color found")
                         .clone()
-                ), Italic, Underline, BrightBlack, Bold]  // bright black is dark gray? white is gray, bright white is pure white?
+                ), Italic, Underline, Bold]  // bright black is dark gray? white is gray, bright white is pure white?
             },
             TokenType::Grayed => {
                 color![text, BrightWhite, Dim, Italic]
@@ -1392,7 +1391,29 @@ impl CodeTab {
         }
     }
 
-    pub fn GetScrolledTextNew (&mut self, area: &Rect,
+    pub fn HighlightText (text: Colored, charIndexStart: usize, tokenCharCount: usize, highlight: (usize, usize)) -> Vec <Colored> {
+        // checking if the highlight range falls within the word
+        if highlight.0 < charIndexStart+tokenCharCount && highlight.1 > charIndexStart {
+            return
+                if highlight.0 <= charIndexStart && highlight.1 >= charIndexStart + tokenCharCount {
+                    vec![
+                        color![text, OnBrightBlack],
+                    ]  // full token
+                } else if highlight.0 <= charIndexStart && highlight.1 >= charIndexStart {  // if highlight.1 was greater, the previous statement would have caught it
+                    let split = text.Split(highlight.1 - charIndexStart);
+                    vec![color![split.0, OnBrightBlack], split.1]  // highlight(start -> point) + point -> end
+                } else if highlight.0 > charIndexStart && highlight.1 >= charIndexStart {
+                    let split = text.Split(highlight.0 - charIndexStart);
+                    vec![split.0, color![split.1, OnBrightBlack]]  // start -> point + highlight(point -> end)
+                } else {
+                    let split = text.Split(highlight.0 - charIndexStart);
+                    let split2 = split.1.Split(highlight.1 - highlight.0 - charIndexStart);
+                    vec![split.0, color![split2.0, OnBrightBlack], split2.1]  // start -> point1 + highlight(point1 -> point2) + point2 -> end
+            };
+        } vec![text]  // not a valid highlight
+    }
+
+    pub fn GetScrolledText (&mut self, area: &Rect,
                                     editingCode: bool,
                                     colorMode: &Colors::ColorMode,
                                     suggested: &String,  // the suggested auto-complete (for inline rendering)
@@ -1414,6 +1435,7 @@ impl CodeTab {
 
         // iterating over every line one by one
         //    -- (maybe change this to a buffer that can be shifted as it's moved around)
+        let mut i = 0;
         for lineNumber in scroll..(scroll + area.height as usize - 12) {
             if lineNumber >= self.lines.len() {
                 let mut text = " ".repeat(maxLineNumberSize - 2);
@@ -1432,11 +1454,119 @@ impl CodeTab {
             let mut lineText = vec![];
             lineText.push(lineNumberText.Colorizes(colors));
 
+            let mut charIndex = 0;
+            let width = area.width - padding - 8;
+            self.RenderSlice(&mut charIndex, &mut lineText, lineNumber, colorMode, editingCode, width as usize, suggested);
+
+            // the edge
+            let scrollPercent = f64::min(std::cmp::max(
+                self.scrolled as isize + self.mouseScrolled, 0
+            ) as f64 / self.lines.len() as f64 * (area.height as f64 - 10.0),
+                                         area.height as f64 - 12.0
+            ) as usize;
+
+            let borderSpace = width as usize - charIndex;
+            lineText.push(color![" ".repeat(borderSpace.saturating_sub(1))]);
+            if i == scrollPercent || i == scrollPercent.saturating_sub(1) || i == scrollPercent + 1 {
+                lineText.push(color![" ", OnBrightWhite]);
+            } else {
+                lineText.push(color![" ", OnBrightBlack]);
+            }
+
             // pushing the line
             tabRender.push(Span::FromTokens(lineText));
+            i += 1;
+        } tabRender
+    }
+
+    fn RenderSlice (&self, charIndex: &mut usize, lineText: &mut Vec <Colored>, lineNumber: usize, colorMode: &Colors::ColorMode, editingCode: bool, width: usize, suggested: &String) {
+        let highlighted = self.CheckHighlight(lineNumber);
+        let tokensRead = self.lineTokens.read();
+        for token in &tokensRead[lineNumber] {
+            let tokenCharCount = token.text.chars().count();
+
+            // rendering the cursor and the split half's
+            if editingCode &&
+               lineNumber == self.cursor.0 &&
+               self.cursor.1 >= *charIndex &&
+               self.cursor.1 < *charIndex+tokenCharCount
+            {
+                let middle = self.cursor.1 - *charIndex;
+                let left = self.GenerateColor(&token.token, token.text[0..middle].to_string(), colorMode);
+                let right = self.GenerateColor(&token.token, token.text[middle..].to_string(), colorMode);
+
+                lineText.append(&mut CodeTab::HighlightText(left, *charIndex, middle, highlighted));
+                lineText.push(color!["|"]);
+                lineText.append(&mut CodeTab::HighlightText(right, *charIndex+middle, tokenCharCount-middle, highlighted));
+                *charIndex += 1;
+            } else {
+                lineText.append(&mut CodeTab::HighlightText(
+                    self.GenerateColor(&token.token, token.text.clone(), colorMode),
+                    *charIndex,
+                    tokenCharCount,
+                    highlighted
+                ));
+            }
+
+            *charIndex += tokenCharCount;
+
+            // checking the current size; making sure the text is pruned to the edge
+            let overShoot = *charIndex as isize - width as isize;
+            if overShoot < 0 {  continue;  }
+            while *charIndex >= width {
+                let token = lineText.pop().unwrap();
+                let tokenSize = token.GetSize();
+                *charIndex -= tokenSize;
+            } break;
         }
 
-        tabRender
+        if self.cursor.0 == lineNumber && self.cursor.1 >= *charIndex && editingCode && *charIndex+1 < width {
+            let padded = lineText[lineText.len() - 1].GetSize();
+            lineText.push(color!["|"]);
+            *charIndex += 1;
+            if *charIndex+padded+1 < width && padded < suggested.len() {
+                let suggestedText = &suggested[padded..];
+                lineText.push(color![suggestedText, BrightBlack, Italic]);
+                *charIndex += suggested.len() - padded;
+            }
+        }
+    }
+
+    // returns start, end
+    pub fn CheckHighlightLines (lineNumber: usize,
+                                start: (usize, usize),
+                                end: (usize, usize),
+    ) -> (usize, usize) {
+        if lineNumber == start.0 {
+            if start.0 == end.0 {  (start.1, end.1)  }
+            else {  (start.1, 999)  }
+        } else if lineNumber == end.0 {
+            (0, end.1)
+        } else if lineNumber > start.0 && lineNumber < end.0 {
+            (0, 999)
+        } else {
+            (999, 999)
+        }
+    }
+
+    // returns start, end
+    fn CheckHighlight (&self, lineNumber: usize) -> (usize, usize) {
+        if !self.highlighting {  return (999, 999);  }
+        if self.cursor.0 == self.cursorEnd.0 {
+            if self.cursor.1 < self.cursorEnd.1 {
+                // left
+                CodeTab::CheckHighlightLines(lineNumber, self.cursor, self.cursorEnd)
+            } else {
+                // right
+                CodeTab::CheckHighlightLines(lineNumber, self.cursorEnd, self.cursor)
+            }
+        } else if self.cursor.0 < self.cursorEnd.0 {
+            // the cursor is above / left of the other cursor (order is cursor, end)
+            CodeTab::CheckHighlightLines(lineNumber, self.cursor, self.cursorEnd)
+        } else {
+            // the cursor is bellow / right of the other cursor (order is end, cursor)
+            CodeTab::CheckHighlightLines(lineNumber, self.cursorEnd, self.cursor)
+        }
     }
 
     fn GetLineNumberText (&self, lineNumber: usize, maxSize: usize) -> String {
@@ -1505,319 +1635,6 @@ impl CodeTab {
                 std::thread::sleep(std::time::Duration::from_millis(25));  // this.... probably needs to be better....
             }
         }
-    }
-
-    pub fn GetScrolledText (&mut self, area: &Rect,
-                                 editingCode: bool,
-                                 colorMode: &Colors::ColorMode,
-                                 suggested: &String,  // the suggested auto-complete (for inline rendering)
-                                 padding: u16,
-) -> Vec <Span> {
-        self.UpdateScrollingRender(area);
-
-        let scroll = std::cmp::max(
-            self.scrolled as isize + self.mouseScrolled,
-            0
-        ) as usize;
-        
-        let mut tabText = vec![];
-
-        // the maximum number of digits for the line number
-        let totalSize = self.lines.len().to_string().len() + 2;  // number of digits + 2usize;
-        
-        let mut i = 0;
-        for lineNumber in scroll..(scroll + area.height as usize - 12) {
-            if lineNumber >= self.lines.len() {
-                let mut text = " ".repeat(totalSize - 2);
-                text.push_str("~");
-                tabText.push(Span::FromTokens(vec![
-                    color![text, Bold, Blue]
-                ]));
-                continue;
-            }
-
-            let lineNumberText = self.GetLineNumberText(lineNumber, totalSize);
-
-            let mut coloredLeft: Vec<(usize, Colored)> = vec!();
-            let mut coloredRight: Vec<(usize, Colored)> = vec!();
-
-            let colors =
-                if lineNumber == self.cursor.0 {  vec![ColorType::Red, ColorType::Underline, ColorType::Bold]  }
-                else {  vec![ColorType::White, ColorType::Italic]  };  // no additional coloring
-
-            coloredLeft.push((totalSize, lineNumberText.Colorizes(colors)));
-
-            let mut currentCharNum = 0;
-            let lineTokensRead = self.lineTokens.read();
-            for token in &lineTokensRead[lineNumber] {
-                let tokenClone = token.text.clone();
-                let tokenCloneStr = tokenClone.clone();
-                //let tokenCloneStr: &'a str = &tokenClone[..];
-                if lineNumber == self.cursor.0 && currentCharNum + token.text.len() > self.cursor.1 {
-                    if currentCharNum >= self.cursor.1 {
-                        if currentCharNum == self.cursor.1 && editingCode {
-                            coloredLeft.push((1, color!("|", BrightWhite, Bold)));
-                        }
-                        if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
-                            if self.highlighting && (lineNumber == self.cursorEnd.0 && currentCharNum + token.text.len() <= self.cursorEnd.1 ||
-                                lineNumber == self.cursor.0 && currentCharNum >= self.cursor.1) && self.cursor.0 != self.cursorEnd.0 ||
-                                (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
-                                (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
-                                    currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
-                            {
-                                coloredRight.push(
-                                    (token.text.len(), color!(self.GenerateColor(
-                                        &token.token, tokenCloneStr, colorMode
-                                    ), OnBrightBlack))
-                                );
-                            } else if self.highlighting && currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                                let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
-                                let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
-                                coloredRight.push(
-                                    (token.text.len(), color!(self.GenerateColor(
-                                        &token.token, txtLeft, colorMode
-                                    ), OnBrightBlack))
-                                );
-                                coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode))
-                                );
-                            } else {
-                                coloredRight.push(
-                                    (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
-                                );
-                            }
-                        } else {
-                            coloredRight.push(
-                                (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
-                            );
-                        }
-                    } else {
-                        // (fixed... ugly but works) this can't handle non utf-8 chars... it just crashes because of the char-boundaries
-                        let txt = tokenClone.get(0..token.text.len() - (
-                                currentCharNum + token.text.len() - self.cursor.1
-                        )).unwrap_or("").to_string();
-                        let leftSize = txt.len();
-                        if self.highlighting && (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) {
-                            if self.cursorEnd.1 > currentCharNum && self.cursor.1 <= currentCharNum + leftSize && self.cursorEnd.1 - currentCharNum < token.text.len() &&
-                                self.cursor.0 == self.cursorEnd.0
-                            {
-                                coloredLeft.push((
-                                    self.cursorEnd.1 - currentCharNum,  // this is greater than the text length.....
-                                    self.GenerateColor(
-                                        &token.token,
-                                        txt[..self.cursorEnd.1 - currentCharNum].to_string(),
-                                        colorMode
-                                    )
-                                ));
-                                coloredLeft.push((
-                                    txt.len() - (self.cursorEnd.1 - currentCharNum),
-                                    color!(self.GenerateColor(
-                                        &token.token,
-                                        txt[self.cursorEnd.1 - currentCharNum..].to_string(),
-                                        colorMode
-                                    ), OnBrightBlack)
-                                ));
-                            } else {
-                                coloredLeft.push((
-                                    txt.len(),
-                                    color!(self.GenerateColor(&token.token, txt, colorMode), OnBrightBlack)
-                                ));
-                            }
-                        } else {
-                            coloredLeft.push((
-                                txt.len(),
-                                self.GenerateColor(&token.token, txt, colorMode)
-                            ));
-                        }
-                        if editingCode {
-                            coloredLeft.push((1, color!("|", BrightWhite, Bold)))
-                        };
-                        let txt = tokenClone.get(
-                            token.text.len() - (
-                                currentCharNum + token.text.len() - self.cursor.1
-                            )..token.text.len()
-                        ).unwrap_or("").to_string();
-
-                        if self.highlighting && (self.cursorEnd.0 > self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 > self.cursor.1) {
-                            if self.cursorEnd.1 > currentCharNum + leftSize && self.cursorEnd.1 < currentCharNum + token.text.len() {
-                                coloredRight.push((
-                                    self.cursorEnd.1 - (currentCharNum + leftSize),
-                                    color!(self.GenerateColor(
-                                        &token.token,
-                                        txt[..self.cursorEnd.1 - (currentCharNum + leftSize)].to_string(),
-                                        colorMode
-                                    ), OnBrightBlack)
-                                ));
-                                coloredRight.push((
-                                    txt.len() - (self.cursorEnd.1 - (currentCharNum + leftSize)),
-                                    self.GenerateColor(
-                                        &token.token,
-                                        txt[self.cursorEnd.1 - (currentCharNum + leftSize)..].to_string(),
-                                        colorMode
-                                    )
-                                ));
-                            } else {
-                                coloredRight.push((
-                                    txt.len(),
-                                    color!(self.GenerateColor(&token.token, txt, colorMode), OnBrightBlack)
-                                ));
-                            }
-                        } else {
-                            coloredRight.push((
-                                txt.len(),
-                                self.GenerateColor(&token.token, txt, colorMode)
-                            ));
-                        }
-                    }
-                } else if (self.cursorEnd.0 < self.cursor.0 || self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1) && self.highlighting {
-                    if (lineNumber > self.cursorEnd.0 && lineNumber < self.cursor.0) ||
-                        (lineNumber == self.cursor.0 && lineNumber == self.cursorEnd.0 &&
-                            currentCharNum >= self.cursorEnd.1 && currentCharNum + token.text.len() <= self.cursor.1)
-                    {
-                        coloredLeft.push((token.text.len(),
-                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                         , OnBrightBlack))
-                        );
-                    } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum < self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-                        let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
-                        let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtLeft, colorMode)));
-                        coloredLeft.push((token.text.len(),
-                                         color!(self.GenerateColor(&token.token, txtRight, colorMode)
-                                         , OnBrightBlack))
-                        );
-                    } else if (lineNumber == self.cursor.0 && currentCharNum + token.text.len() <= self.cursor.1 ||
-                        lineNumber == self.cursorEnd.0 && currentCharNum >= self.cursorEnd.1) && self.cursor.0 != self.cursorEnd.0
-                    {
-                        coloredLeft.push((token.text.len(),
-                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                         , OnBrightBlack))
-                        );
-                    } else {
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)));
-                    }
-                } else if self.highlighting {
-                    if (lineNumber > self.cursor.0 && lineNumber < self.cursorEnd.0) ||
-                        (lineNumber == self.cursorEnd.0 && lineNumber == self.cursor.0 &&
-                            currentCharNum >= self.cursor.1 && currentCharNum + token.text.len() <= self.cursorEnd.1)
-                    {
-                        coloredLeft.push((token.text.len(),
-                                         color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                         , OnBrightBlack))
-                        );
-                    } else if currentCharNum + token.text.len() > self.cursorEnd.1 && currentCharNum <= self.cursorEnd.1 && lineNumber == self.cursorEnd.0 {   // can't be equal to cursor line
-
-                        let txtRight = tokenClone[self.cursorEnd.1 - currentCharNum..].to_string();
-                        let txtLeft = tokenClone[..self.cursorEnd.1 - currentCharNum].to_string();
-                        coloredLeft.push((token.text.len(),
-                                         color!(self.GenerateColor(&token.token, txtLeft, colorMode)
-                                         , OnBrightBlack))
-                        );
-                        coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, txtRight, colorMode)));
-                    } else if (
-                        lineNumber == self.cursorEnd.0 &&
-                            currentCharNum <= self.cursorEnd.1 ||
-                            lineNumber == self.cursor.0 &&
-                                currentCharNum >= self.cursor.1) &&
-                        self.cursorEnd.0 != self.cursor.0
-                    {
-                        coloredLeft.push(
-                            (token.text.len(),
-                             color!(self.GenerateColor(&token.token, tokenCloneStr, colorMode)
-                                , OnBrightBlack))
-                        );
-                    } else {
-                        coloredLeft.push(
-                            (token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode))
-                        );
-                    }
-                } else {
-                    coloredLeft.push((token.text.len(), self.GenerateColor(&token.token, tokenCloneStr, colorMode)));
-                    //coloredLeft.push((1, "|".white()))  // shows the tokens    todo (just to pin this line idk)
-                }
-
-                currentCharNum += token.text.len();
-            }
-
-            // !the loop finished so the read is being dropped
-            // it's unfortunately a very long time to have the read
-            // but there aren't really any good ways to do otherwise
-            drop(lineTokensRead);
-
-            if lineNumber == self.cursor.0 && currentCharNum <= self.cursor.1 && editingCode {
-                coloredLeft.push((1, color!("|", BrightWhite, Bold)));
-                // adding the suggested add-on
-                if !suggested.is_empty() {
-                    let mut tokens = vec!();
-                    self.GetCurrentToken(&mut tokens);
-                    if !tokens.is_empty() {
-                        let selectedToken = tokens.remove(0);
-                        let partialToken = suggested
-                            .get(selectedToken.len()..)
-                            .unwrap_or("")
-                            .to_string();
-
-                        coloredLeft.push((
-                            suggested.len().saturating_sub(selectedToken.len()),
-                            color!(partialToken, BrightBlack, Italic)
-                        ));
-                    }
-                }
-            }
-
-            let mut charCount = 0usize;
-            let mut finalColText: Vec<Colored> = vec!();
-            for (size, col) in coloredLeft {
-                if charCount + size >= (area.width - padding - 4) as usize { break; }
-                if self.cursor.0 == lineNumber && editingCode {
-                    finalColText.push(color!(col, Underline));
-                } else {
-                    finalColText.push(col);
-                }
-                charCount += size;
-            }
-            for (size, col) in coloredRight {
-                if charCount + size >= (area.width - padding - 3) as usize { break; }
-                if self.cursor.0 == lineNumber && editingCode {
-                    finalColText.push(color!(col, Underline));
-                } else {
-                    finalColText.push(col);
-                }
-                charCount += size;
-            }
-            let scrollPercent = f64::min(std::cmp::max(
-                self.scrolled as isize + self.mouseScrolled, 0
-            ) as f64 / self.lines.len() as f64 * (area.height as f64 - 10.0),
-                                         area.height as f64 - 12.0
-            ) as usize;
-            
-            let rightPadding = (area.width - padding - 3) as usize - charCount;
-            finalColText.push(color!(" ".repeat(rightPadding), BrightWhite));
-
-            // the scroll bar
-            if scrollPercent > 0 && i == scrollPercent - 1 {
-                finalColText.push(color!(" ", OnWhite));
-            } else if i == scrollPercent {
-                finalColText.push(color!(" ", OnWhite));
-            } else if i == scrollPercent + 1 {
-                finalColText.push(color!(" ", OnWhite));
-            } else if self.pinedLines.contains(&lineNumber) {
-                finalColText.push(color!(" ", OnRed));
-                for spanIndex in 0..finalColText.len() {
-                    finalColText[spanIndex] = color!(finalColText[spanIndex], Underline);
-                }
-            } else {
-                finalColText.push(color!(" ", OnBrightBlack));
-            }
-
-            tabText.push(Span::FromTokens(
-                finalColText
-            ));
-
-            i += 1;
-        }
-
-        tabText
     }
 }
 
@@ -1889,7 +1706,7 @@ impl CodeTabs {
         let offset = (error * (tabNumber+1) as f64) as u16;
         // println!("Offset: {}", offset);
         positionX.saturating_sub(paddingLeft)
-            .saturating_sub((tabSize * tabNumber) as u16)
+            .saturating_sub(tabSize * tabNumber)
             .saturating_sub(tabNumber)  // no clue why this is needed tbh
             .saturating_sub(offset)
     }

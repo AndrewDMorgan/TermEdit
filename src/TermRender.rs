@@ -251,16 +251,16 @@ impl ColorType {
             ColorType::RGB (r, g, b) => {
                 let (mut rn, mut gn, mut bn) = (*r, *g, *b);
                 if rn > 128 {  rn = rn - 128;  }
-                if gn > 128 {  rn = gn - 128;  }
-                if bn > 128 {  rn = bn - 128;  }
+                if gn > 128 {  gn = gn - 128;  }
+                if bn > 128 {  bn = bn - 128;  }
                 UniqueColor::Dynamic((Some(format!("38;2;{};{};{}", rn, gn, bn)), EMPTY_MODIFIER_REFERENCE, false))
             },
             // background 24-bit? Make sure that's right
             ColorType::OnRGB (r, g, b) => {
                 let (mut rn, mut gn, mut bn) = (*r, *g, *b);
                 if rn > 128 {  rn = rn - 128;  }
-                if gn > 128 {  rn = gn - 128;  }
-                if bn > 128 {  rn = bn - 128;  }
+                if gn > 128 {  gn = gn - 128;  }
+                if bn > 128 {  bn = bn - 128;  }
                 UniqueColor::Dynamic((Some(format!("48;2;{};{};{}", rn, gn, bn)), EMPTY_MODIFIER_REFERENCE, true))
             },
             ColorType::ANSI (index) => {
@@ -416,6 +416,24 @@ impl Colored {
         }
     }
 
+    /// returns the left and right halves as unique Colored instances. Keeps the original instance untouched.
+    pub fn Split (&self, midPoint: usize) -> (Colored, Colored) {
+        (
+            Colored {
+                text: self.text[..midPoint].to_string(),
+                mods: self.mods.clone(),
+                color: self.color.clone(),
+                bgColor: self.bgColor.clone(),
+            },
+            Colored {
+                text: self.text[midPoint..].to_string(),
+                mods: self.mods.clone(),
+                color: self.color.clone(),
+                bgColor: self.bgColor.clone(),
+            }
+        )
+    }
+
     pub fn IsUncolored (&self) -> bool {
         self.mods.is_empty() && self.color.is_none() && self.bgColor.is_none()
     }
@@ -533,7 +551,7 @@ impl Colored {
     }
 
     pub fn GetSize (&self) -> usize {
-        self.text.len()
+        self.text.chars().count()
     }
 }
 
