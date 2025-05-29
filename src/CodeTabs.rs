@@ -252,6 +252,18 @@ pub struct CodeTab {
 }
 
 impl CodeTab {
+    pub fn UpdateScroll (&mut self, acceleration: f64) {
+        self.mouseScrolledFlt += acceleration;
+
+        // clamping the bounds
+        let linePos = self.cursor.0 as f64 + self.mouseScrolledFlt;
+        let lowerBound = 0.;
+        let upperBound = self.lines.len() as f64 - 10.;  // 10 lines bellow should be fine?
+        self.mouseScrolledFlt =
+            f64::min(f64::max(self.mouseScrolledFlt, lowerBound), upperBound);  // lower bound
+
+        self.mouseScrolled = self.mouseScrolledFlt as isize;
+    }
 
     pub fn CreateScopeThread (&mut self) {
         // offsetting from existing calculations (staggering the computation (1/4 second per thread)
@@ -1702,7 +1714,7 @@ impl CodeTab {
                 charCount += size;
             }
             for (size, col) in coloredRight {
-                if charCount + size >= (area.width - padding - 4) as usize { break; }
+                if charCount + size >= (area.width - padding - 3) as usize { break; }
                 if self.cursor.0 == lineNumber && editingCode {
                     finalColText.push(color!(col, Underline));
                 } else {
@@ -1716,29 +1728,23 @@ impl CodeTab {
                                          area.height as f64 - 12.0
             ) as usize;
             
-            if scrollPercent.saturating_sub(1) <= i && i <= scrollPercent + 1 ||
-                self.pinedLines.contains(&lineNumber) || true {
-                let rightPadding = (area.width - padding - 3) as usize - charCount;
-                finalColText.push(color!(" ".repeat(rightPadding), BrightWhite));
-                /*for _ in 0..rightPadding {
-                    finalColText.push(color!(" ", BrightWhite));
-                }*/
+            let rightPadding = (area.width - padding - 3) as usize - charCount;
+            finalColText.push(color!(" ".repeat(rightPadding), BrightWhite));
 
-                // the scroll bar
-                if scrollPercent > 0 && i == scrollPercent - 1 {
-                    finalColText.push(color!(" ", OnWhite));
-                } else if i == scrollPercent {
-                    finalColText.push(color!(" ", OnWhite));
-                } else if i == scrollPercent + 1 {
-                    finalColText.push(color!(" ", OnWhite));
-                } else if self.pinedLines.contains(&lineNumber) {
-                    finalColText.push(color!(" ", OnRed));
-                    for spanIndex in 0..finalColText.len() {
-                        finalColText[spanIndex] = color!(finalColText[spanIndex], Underline);
-                    }
-                } else {
-                    finalColText.push(color!(" ", OnBrightBlack));
+            // the scroll bar
+            if scrollPercent > 0 && i == scrollPercent - 1 {
+                finalColText.push(color!(" ", OnWhite));
+            } else if i == scrollPercent {
+                finalColText.push(color!(" ", OnWhite));
+            } else if i == scrollPercent + 1 {
+                finalColText.push(color!(" ", OnWhite));
+            } else if self.pinedLines.contains(&lineNumber) {
+                finalColText.push(color!(" ", OnRed));
+                for spanIndex in 0..finalColText.len() {
+                    finalColText[spanIndex] = color!(finalColText[spanIndex], Underline);
                 }
+            } else {
+                finalColText.push(color!(" ", OnBrightBlack));
             }
 
             tabText.push(Span::FromTokens(

@@ -5,6 +5,7 @@
 use std::io::Write;
 
 //* Add a check for updated in the GetRender method for windows
+//      -- (I think this is being done?)
 //* Make a proc macro for easier colorizing (Color![White, Dim, ...])
 //      -- expands to something like .Colorizes(vec![ColorType::White, ...])
 //      -- right now it's just very wordy (a bit annoying to type bc/ of that)
@@ -390,7 +391,7 @@ impl Colored {
         };
 
         let color = match
-            (self.bgColor.is_some(), self.color.is_some(), self.mods.is_empty())
+            (self.bgColor.is_some(), self.color.is_some(), !self.mods.is_empty())
         {
             (true, true, true) => format!("\x1b[0;{};{};{}m", col, bgCol, self.mods.join(";")),
             (true, true, false) => format!("\x1b[0;{};{}m", col, bgCol),
@@ -710,8 +711,7 @@ impl Window {
             let bordered = self.bordered;
 
             let closure = move || {
-                let mut slice = Window::RenderWindowSlice(color, bordered, (text, size), windowSize);
-                slice
+                Window::RenderWindowSlice(color, bordered, (text, size), windowSize)
             };
             renderClosures.push((Box::new(closure), self.position.0, self.position.1 + index as u16, self.depth + 1));
         }

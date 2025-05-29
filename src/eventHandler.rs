@@ -1,6 +1,10 @@
 use tokio::io::AsyncWriteExt;
 use vte::Perform;
 
+// constants for tracking mouse scrolling
+const SCROLL_SENSITIVITY: f64 = 0.05;
+const SCROLL_LOG_TIME: f64 = 0.75;
+
 #[derive(PartialEq, Debug, Default)]
 pub enum KeyModifiers {
     Shift,
@@ -53,6 +57,8 @@ pub struct KeyParser {
     pub mouseEvent: Option <MouseEvent>,
     pub mouseModifiers: Vec <KeyModifiers>,
     pub lastPress: u128,
+    pub scrollEvents: Vec <(std::time::SystemTime, i8)>,  // the sign is the direction
+    pub scrollAccumulate: f64,
 }
 
 impl KeyParser {
@@ -75,7 +81,35 @@ impl KeyParser {
             mouseEvent: None,
             mouseModifiers: vec!(),
             lastPress: 0,
+            scrollEvents: vec![],
+            scrollAccumulate: 0.0,
         }
+    }
+
+    // tracking a log of scroll events to average them out over a duration of time
+    fn Scroll (&mut self, sign: i8) {
+        let time = std::time::SystemTime::now();
+        if self.scrollAccumulate.is_sign_negative() != sign.is_negative(){
+            self.scrollEvents.clear();  // so on sign flip it doesn't do weird things
+        }
+        self.scrollEvents.push((time, sign));
+        self.UpdateScroll();
+    }
+
+    fn UpdateScroll(&mut self) {
+        let time = std::time::SystemTime::now();
+        let mut valid = vec![];
+        let mut avg = 0.0;
+        for (otherTime, otherSign) in &self.scrollEvents {
+            // 0.000001 is the conversion rate from micro seconds to seconds
+            let duration = time.duration_since(*otherTime).unwrap().as_secs_f64();
+            if duration < SCROLL_LOG_TIME {
+                avg += *otherSign as f64; valid.push((*otherTime, *otherSign));
+            }
+        }
+        avg *= SCROLL_SENSITIVITY / SCROLL_LOG_TIME;
+        self.scrollAccumulate = avg;
+        self.scrollEvents = valid;
     }
 
     pub fn ClearEvents (&mut self) {
@@ -84,6 +118,7 @@ impl KeyParser {
         self.mouseModifiers.clear();
         self.keyEvents.clear();
         self.inEscapeSeq = false;
+        self.UpdateScroll();
 
         if let Some(event) = &mut self.mouseEvent {
             match event.state {
@@ -140,8 +175,14 @@ impl KeyParser {
 
             let isScroll = (byte & 64) != 0;
             let eventType = match (isScroll, button) {
-                (true, 0) => MouseEventType::Up,   // 1???? ig so
-                (true, 1) => MouseEventType::Down, // 2???? ig so
+                (true, 0) => {
+                    self.Scroll(-1i8);
+                    MouseEventType::Up
+                },
+                (true, 1) => {
+                    self.Scroll(1i8);
+                    MouseEventType::Down
+                },
                 (false, 0) => MouseEventType::Left,
                 (false, 1) => MouseEventType::Middle,
                 (false, 2) => MouseEventType::Right,

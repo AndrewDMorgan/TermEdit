@@ -59,7 +59,7 @@ impl FilePathNode {
     }
 
     pub fn GetLeaf (&self, mut pathNames: Vec <String>) -> Option <FilePathNode> {
-        let pathName = pathNames.pop().unwrap_or(String::new());
+        let pathName = pathNames.pop().unwrap_or_default();
         if self.paths.is_empty() {
             for file in &self.dirFiles {
                 if *file == pathName {
@@ -104,16 +104,16 @@ static VALID_EXTENSIONS: [&str; 9] = [
 impl FileBrowser {
     /// returns the file path to get to the file of the nth element (which could be a file or folder/branch/path)
     pub fn GetNthElement (&self, index: usize) -> Option <Vec <String>> {
-        self.SearchFiletree(&self.fileTree, &mut 0, index)
+        FileBrowser::SearchFiletree(&self.fileTree, &mut 0, index)
     }
 
-    fn SearchFiletree (&self, path: &FilePathNode, mut i: &mut usize, index: usize) -> Option <Vec <String>> {
+    fn SearchFiletree (path: &FilePathNode, i: &mut usize, index: usize) -> Option <Vec <String>> {
         let mut dirCount = 0;
         for (item, itemType) in &path.allItems {
             if *i == index {  return Some(vec![item.clone()]);  }
             *i += 1;
             if *itemType == FileType::Directory {
-                let searchResults = self.SearchFiletree(&path.paths[dirCount], &mut i, index);
+                let searchResults = FileBrowser::SearchFiletree(&path.paths[dirCount], i, index);
                 if searchResults.is_some() {
                     let mut output = searchResults.unwrap();
                     output.insert(0, item.clone());
@@ -296,7 +296,7 @@ impl <'a> App <'a> {
         let buffer = std::sync::Arc::new(parking_lot::RwLock::new([0; 128]));  // [0; 10]; not sure how much the larger buffer is actually helping
         let stdin = std::sync::Arc::new(parking_lot::RwLock::new(tokio::io::stdin()));
 
-        let _ = self.HandleMainLoop(
+        self.HandleMainLoop(
             buffer.clone(),
             keyParser.clone(),
             stdin.clone(),
@@ -305,8 +305,10 @@ impl <'a> App <'a> {
 
         let exit = self.exit.clone();
 
-        let mut times = vec![];
+        //let mut times = vec![];
         loop {
+            let start = std::time::SystemTime::now();
+
             if *exit.read() {
                 break;
             }
@@ -318,25 +320,8 @@ impl <'a> App <'a> {
 
             // rendering (will be more performant once the new framework is added)
             //terminal.draw(|frame| self.draw(frame))?;
-            let start = std::time::SystemTime::now()
-                /*.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards...")
-                .as_millis()*/;
             let updates = self.RenderFrame(app);
-            let end = std::time::SystemTime::now()
-                /*.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards...")
-                .as_millis()*/;
-            let time = end.duration_since(start).unwrap().as_micros();
-            times.push(time);
-            let mut avg = 0;
-            for time in &times {
-                avg += time
-            }
-            let (minTime, maxTime) = (times.iter().min().unwrap(), times.iter().max().unwrap());
-            self.debugInfo = format!("{}; Time: {} -- {}{}, {}{}", updates, avg/500, "{", minTime, maxTime, "}");
-            if times.len() > 500 {  times.remove(0);  }
-            //std::thread::sleep(std::time::Duration::from_millis(10));  // rendering is too quick...
+
             let termSize = app.GetTerminalSize()?;
             self.area = TermRender::Rect {
                 x: 0, y: 0,
@@ -349,6 +334,16 @@ impl <'a> App <'a> {
             self.HandleKeyEvents(&keyParser.read(), &mut clipboard).await;
             self.HandleMouseEvents(&keyParser.read()).await;  // not sure if this will be delayed, but I think it should work? idk
             keyParser.write().ClearEvents();
+
+            let end = std::time::SystemTime::now();
+            let elapsedTime = end.duration_since(start).unwrap().as_micros() as f64 * 0.000001;  // in seconds
+            const FPS_AIM: f64 = 1f64 / 60f64;  // the target fps (forces it to stall to this to ensure low CPU usage)
+            let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
+            tokio::time::sleep(tokio::time::Duration::from_secs_f64(difference)).await;
+            self.debugInfo = format!("scroll: {}/{}  |  redraws: {}  |  elapsedTime: {}  |  waited: {}",
+                 keyParser.read().scrollAccumulate, keyParser.read().scrollEvents.len(), updates,
+                 (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
+                difference);
         }
 
         Ok(())
@@ -414,11 +409,7 @@ impl <'a> App <'a> {
         Ok(())
     }
 
-    /*pub fn draw (&mut self, frame: &mut Frame) {
-        //frame.render_widget(self, frame.area());
-    }*/
-
-    fn HandleUpScroll (&mut self, event: &MouseEvent) {
+    fn HandleScrollEvent (&mut self, event: &MouseEvent, events: &KeyParser) {
         if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
             let mut tabIndex = 0;
             tabIndex = self.codeTabs.GetTabNumber(
@@ -427,71 +418,15 @@ impl <'a> App <'a> {
                 &mut tabIndex
             );
 
-            let currentTime = std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .expect("Time went backwards...")
-                .as_millis();
-            //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-            let acceleration;
-            let timeSinceScroll = currentTime.saturating_sub(self.lastScrolled);
-            if timeSinceScroll < 17 {
-                acceleration = 2.5;
-            } else if timeSinceScroll < 25 {
-                acceleration = 1.75;
-            } else if timeSinceScroll < 50 {
-                acceleration = 1.25;
-            } else {
-                acceleration = 1.;
-            }
-
-            self.codeTabs.tabs[tabIndex].mouseScrolledFlt = {
-                let v1 = self.codeTabs.tabs[tabIndex].mouseScrolledFlt - acceleration;
-                let v2 = (self.codeTabs.tabs[tabIndex].cursor.0 + self.codeTabs.tabs[tabIndex].mouseScrolledFlt as usize) as f64 * -1.0;
-                if v1 > v2 {  v1  }
-                else {  v2  }
-            };  // change based on the speed of scrolling to allow fast scrolling
+            self.codeTabs.tabs[tabIndex].UpdateScroll(events.scrollAccumulate);
+            /*self.codeTabs.tabs[tabIndex].mouseScrolledFlt += events.scrollAccumulate;  // change based on the speed of scrolling to allow fast scrolling
             self.codeTabs.tabs[tabIndex].mouseScrolled =
-                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;
-
-            self.lastScrolled = currentTime;
-        }
-    }
-
-    fn HandleDownScroll (&mut self, event: &MouseEvent) {
-        if event.position.0 > 29 && event.position.1 < 10 + self.area.height && event.position.1 > 2 {
-            let mut tabIndex = 0;
-            tabIndex = self.codeTabs.GetTabNumber(
-                &self.area, 29,
-                event.position.0 as usize,
-                &mut tabIndex
-            );
+                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;*/
 
             let currentTime = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .expect("Time went backwards...")
                 .as_millis();
-            //let acceleration = (1.0 / ((currentTime - self.lastScrolled) as f64 * 0.5 + 0.3) + 1.0) / 3.0;
-            /*let acceleration = {
-                let v1 = currentTime.saturating_sub(self.lastScrolled) as f64 * -9.0 + 1.5;
-                if v1 > 1.0/10000000000.0 {  1./3.  }
-                else {  1.0  }
-            };*/
-            let acceleration;
-            let timeSinceScroll = currentTime.saturating_sub(self.lastScrolled);
-            if timeSinceScroll < 17 {
-                acceleration = 2.5;
-            } else if timeSinceScroll < 25 {
-                acceleration = 1.75;
-            } else if timeSinceScroll < 50 {
-                acceleration = 1.25;
-            } else {
-                acceleration = 1.;
-            }
-
-            self.codeTabs.tabs[tabIndex].mouseScrolledFlt += acceleration;  // change based on the speed of scrolling to allow fast scrolling
-            self.codeTabs.tabs[tabIndex].mouseScrolled =
-                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;
-
             self.lastScrolled = currentTime;
         }
     }
@@ -610,7 +545,7 @@ impl <'a> App <'a> {
             let fullPath = &self.fileBrowser.filePaths[height];
 
             let msg = fullPath.as_str().trim();  // temporary for debugging
-            let contents = std::fs::read_to_string(&fullPath).expect(msg);
+            let contents = std::fs::read_to_string(fullPath).expect(msg);
             let mut current = String::new();
             for chr in contents.chars() {
                 if chr == '\n' {
@@ -631,22 +566,18 @@ impl <'a> App <'a> {
             tab.fileName = fullPath.clone();
 
             tab.lineTokens.write().clear();
-            let mut lineNumber = 0;
-            let ending = tab.fileName.split('.').last().unwrap_or("");
-            for line in tab.lines.iter() {
+            let ending = tab.fileName.split('.').next_back().unwrap_or("");
+            for (lineNumber, line) in tab.lines.iter().enumerate() {
+                let value =
+                    GenerateTokens(line.clone(),
+                                   ending,
+                                   &tab.lineTokenFlags,
+                                   lineNumber,
+                                   &tab.outlineKeywords,
+                                   &self.luaSyntaxHighlightScripts
+                    ).await;
                 tab.lineTokenFlags.write().push(vec!());
-                tab.lineTokens.write().push(
-                    {
-                        GenerateTokens(line.clone(),
-                                       ending,
-                                       &mut tab.lineTokenFlags,
-                                       lineNumber,
-                                       &mut tab.outlineKeywords,
-                                       &self.luaSyntaxHighlightScripts
-                        ).await
-                    }
-                );
-                lineNumber += 1;
+                tab.lineTokens.write().push(value);
             }
             tab.CreateScopeThread();
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
@@ -660,20 +591,20 @@ impl <'a> App <'a> {
         if  event.position.0 > padding &&
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 2 &&
-            self.codeTabs.tabs.len() > 0
+            !self.codeTabs.tabs.is_empty()
         {
             self.PressedCode(events, event, padding as usize);
         } else if
         event.position.0 <= 29 &&
             event.position.1 < self.area.height - 10 &&
             matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
-            self.codeTabs.tabs.len() > 0
+            !self.codeTabs.tabs.is_empty()
         {
             self.PressedScopeJump(events, event);
         } else if
         event.position.0 > 29 &&
             event.position.1 <= 2 &&
-            self.codeTabs.tabs.len() > 0
+            !self.codeTabs.tabs.is_empty()
         {
             self.PressedNewCodeTab(events, event);
         } else if  // selecting files to open
@@ -739,14 +670,14 @@ impl <'a> App <'a> {
     }
 
     async fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
-        let padding;
-        if matches!(self.appState, AppState::CommandPrompt) {  padding = 29;  }
-        else {  padding = 0;  }
+        let padding =
+            if matches!(self.appState, AppState::CommandPrompt) {  29  }
+            else {  0  };
         // checking for code selection
         if matches!(event.state, MouseState::Release | MouseState::Hold) {
             if event.position.0 > padding && event.position.1 < self.area.height - 8 &&
                 event.position.1 > 2 &&
-                self.codeTabs.tabs.len() > 0
+                !self.codeTabs.tabs.is_empty()
             {
                 self.HighlightLeftClick(events, event, padding as usize);
             }
@@ -767,23 +698,23 @@ impl <'a> App <'a> {
             }
 
             match event.eventType {
-                MouseEventType::Down if self.codeTabs.tabs.len() > 0 => {
+                MouseEventType::Down if !self.codeTabs.tabs.is_empty() => {
                     let currentTime = std::time::SystemTime::now()
                         .duration_since(std::time::SystemTime::UNIX_EPOCH)
                         .expect("Time went backwards...")
                         .as_millis();
-                    if currentTime.saturating_sub(self.lastScrolled) < 12
+                    if currentTime.saturating_sub(self.lastScrolled) < 8
                         {  return;  }
-                    self.HandleDownScroll(event);
+                    self.HandleScrollEvent(event, events);
                 },
-                MouseEventType::Up if self.codeTabs.tabs.len() > 0 => {
+                MouseEventType::Up if !self.codeTabs.tabs.is_empty() => {
                     let currentTime = std::time::SystemTime::now()
                         .duration_since(std::time::SystemTime::UNIX_EPOCH)
                         .expect("Time went backwards...")
                         .as_millis();
-                    if currentTime.saturating_sub(self.lastScrolled) < 12
+                    if currentTime.saturating_sub(self.lastScrolled) < 8
                         {  return;  }
-                    self.HandleUpScroll(event);
+                    self.HandleScrollEvent(event, events);
                 },
                 MouseEventType::Left => {
                     self.HandleLeftClick(events, event).await;
@@ -872,7 +803,7 @@ impl <'a> App <'a> {
                 self.JumpLineUp();
             } else if self.currentCommand.starts_with(']') {
                 self.JumpLineDown();
-            } else if self.currentCommand == String::from("gd") {
+            } else if self.currentCommand == *"gd" {
                 // todo!
             }
 
@@ -1321,16 +1252,11 @@ impl <'a> App <'a> {
                     .LoadFilePath(self.currentCommand
                                       .get(5..)
                                       .unwrap_or(""), &mut self.codeTabs);
+                if foundFile.is_ok() {
+                    self.fileBrowser.fileCursor = 0;
+                    self.codeTabs.currentTab = 0;
 
-                match foundFile {
-                    Ok(_) => {
-                        //self.fileBrowser.LoadFilePath("Desktop/Programing/Rust/TermEdit/src/", &mut self.codeTabs);
-                        self.fileBrowser.fileCursor = 0;
-                        self.codeTabs.currentTab = 0;
-
-                        self.appState = AppState::CommandPrompt;
-                    },
-                    _ => {},
+                    self.appState = AppState::CommandPrompt;
                 }
             }
 
@@ -1428,7 +1354,7 @@ impl <'a> App <'a> {
             },
             AppState::Tabs => {
                 match self.tabState {
-                    TabState::Code if self.codeTabs.tabs.len() > 0 => {
+                    TabState::Code if !self.codeTabs.tabs.is_empty() => {
                         self.HandleCodeKeyEvents(keyEvents, clipBoard).await;
                     },
                     _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
@@ -1493,10 +1419,10 @@ impl <'a> App <'a> {
 
     // ============================================= code block here =============================================
     fn RenderCodeBlock (&mut self, app: &mut TermRender::App) {
-        if self.codeTabs.tabs.len() > 0 {
-            let leftPadding;
-            if matches!(self.appState, AppState::CommandPrompt) {  leftPadding = 29;  }
-            else {  leftPadding = 0;  }
+        if !self.codeTabs.tabs.is_empty() {
+            let leftPadding =
+                if matches!(self.appState, AppState::CommandPrompt) {  29  }
+                else {  0  };
             let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), leftPadding);
 
             for tabIndex in 0..=self.codeTabs.panes.len() {
@@ -1523,9 +1449,9 @@ impl <'a> App <'a> {
         if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
             codeBlock = codeBlock.light_blue();
         }*/
-        let padding: u16;
-        if matches!(self.appState, AppState::CommandPrompt) {  padding = 30;  }
-        else {  padding = 0;  }
+        let padding: u16 =
+            if matches!(self.appState, AppState::CommandPrompt) {  30  }
+            else {  0  };
 
         let codeText =
             self.codeTabs.GetScrolledText(
@@ -1617,20 +1543,18 @@ impl <'a> App <'a> {
                     color![self.RenderOutlinePartOne(scopeIndex), BrightWhite]
                 },
                 {
-                    // this is a mess...
+                    // this is a mess... (ya.......)
                     if *scopeIndex ==
                         self.codeTabs.tabs[self.lastTab]
                             .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
                         matches!(self.appState, AppState::CommandPrompt) &&
-                        matches!(self.tabState, TabState::Code)
-                    {
-                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()), Underline]
-                    } else if
-                        matches!(self.appState, AppState::CommandPrompt) &&
-                        matches!(self.tabState, TabState::Files) &&
-                        self.codeTabs.tabs[self.lastTab].linearScopes.read()[
-                            self.fileBrowser.outlineCursor
-                            ] == *scopeIndex
+                        matches!(self.tabState, TabState::Code) || (
+                            matches!(self.appState, AppState::CommandPrompt) &&
+                            matches!(self.tabState, TabState::Files) &&
+                            self.codeTabs.tabs[self.lastTab].linearScopes.read()[
+                                self.fileBrowser.outlineCursor
+                                ] == *scopeIndex
+                        )
                     {
                         color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()), Underline]
                     } else {
@@ -1680,10 +1604,10 @@ impl <'a> App <'a> {
             }
 
             scrolled += 1;
-            self.HandleScrolled(scrolled, &mut newScroll, &scopeIndex);
+            self.HandleScrolled(scrolled, &mut newScroll, scopeIndex);
 
             if scrolled < scrollTo { continue; }
-            self.GetFilebrowserOutline(&mut fileStringText, &scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
+            self.GetFilebrowserOutline(&mut fileStringText, scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
         }
         self.fileBrowser.outlineCursor = newScroll;
         fileStringText  //Text::from(fileStringText)
@@ -1773,13 +1697,14 @@ impl <'a> App <'a> {
                 &self.codeTabs.tabs[self.lastTab].outlineKeywords,
                 keyword.typedType.clone().unwrap()
             );
-            for newKeyword in newKeywordBase {
+            /*for newKeyword in newKeywordBase*/ {
                 //self.debugInfo.push_str(&format!("{:?}; {:?}", keyword.typedType, newKeyword.childKeywords));
                 // figure out how to add the children to suggestions
+                if newKeywordBase.is_empty() {  continue;  }
                 *currentScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
-                    newKeyword.lineNumber
+                    newKeywordBase[0].lineNumber
                 ].clone();
-                break;
+                //break;
             }
         }
     }
@@ -1856,10 +1781,7 @@ impl <'a> App <'a> {
         }
 
         if closest.0 < 15 {  // finalBest.1 != token.as_str()
-            if token == finalBest.1 && false {
-            } else {
-                self.suggested = finalBest.1;
-            }
+            self.suggested = finalBest.1;
         }
     }
 
@@ -1894,26 +1816,6 @@ impl <'a> App <'a> {
 
     // ============================================= Error Bar =============================================
     fn RenderErrorBar (&mut self, app: &mut TermRender::App) {//, area: Rect, buf: &mut Buffer) {
-        //let errorBlock = Block::bordered()
-        //    .border_set(border::THICK);
-
-        // temp todo! replace elsewhere (the sudo auto-checker is kinda crap tbh)
-        //self.debugInfo.clear();
-        if self.codeTabs.tabs.len() > 0 {
-            // tracking the memory leak in the scope generation threads (within scope generation)
-            //self.debugInfo = format!("Total handles: {} Scope: {} Jumps: {} Outline: {}", self.codeTabs.tabs[0].scopeGenerationHandles.len(), self.codeTabs.tabs[0].linearScopes.read().len(), self.codeTabs.tabs[0].scopeJumps.read().len(), self.codeTabs.tabs[0].outlineKeywords.read().len());
-        }
-        /*
-        for var in &self.codeTabs.tabs[self.lastTab].outlineKeywords {
-            if matches!(var.kwType, OutlineType::Function) {
-                self.debugInfo.push('(');
-                self.debugInfo.push_str(var.keyword.as_str());
-                self.debugInfo.push('/');
-                self.debugInfo.push_str(&format!("{:?}", var.scope));
-                self.debugInfo.push(')');
-            }
-        }*/
-
         self.UpdateRenderErrorBar();
 
         let errorText = vec![
@@ -2208,10 +2110,10 @@ impl <'a> App <'a> {
         let mut names = app.GetWindowsByKeywordsNonRef(vec![
             String::from("CodeTab")
         ]);  // current active tabs
-        for i in 0..names.len() {
-            let size = names[i].len();
-            let newName = names[i][9..size].to_string();
-            names[i] = newName;
+        for name in &mut names {
+            let size = name.len();
+            let newName = name[9..size].to_string();
+            *name = newName;
         }
 
         let (padding, shift);
