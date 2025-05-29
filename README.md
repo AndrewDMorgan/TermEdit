@@ -47,3 +47,6 @@ All mouse events should be standardized so as long as the terminal is sending th
 
 
 If the text or color rendering is messed up, make sure to go into settings on the main menu and change the color type setting. Pretty much all terminals support the base 7 ASCII colors. Most support the ANSI colors. Only a few support 8-bit color.
+
+ - Type q to quit
+ - Type -light or -dark to change the color theme
