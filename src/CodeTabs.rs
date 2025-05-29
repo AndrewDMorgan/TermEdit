@@ -7,7 +7,7 @@ use ratatui::{
 };
 */
 
-use crate::Colors::Colors;
+use crate::Colors;
 use crate::TermRender::*;
 use crate::LuaScripts;
 use crate::Tokens::*;
@@ -1392,10 +1392,10 @@ impl CodeTab {
         }
     }
 
-    pub fn GetScrolledTextNew <'a> (&mut self, area: &Rect,
+    pub fn GetScrolledTextNew (&mut self, area: &Rect,
                                     editingCode: bool,
                                     colorMode: &Colors::ColorMode,
-                                    suggested: &'a String,  // the suggested auto-complete (for inline rendering)
+                                    suggested: &String,  // the suggested auto-complete (for inline rendering)
                                     padding: u16,
     ) -> Vec <Span> {
         self.UpdateScrollingRender(area);
@@ -1415,7 +1415,15 @@ impl CodeTab {
         // iterating over every line one by one
         //    -- (maybe change this to a buffer that can be shifted as it's moved around)
         for lineNumber in scroll..(scroll + area.height as usize - 12) {
-            if lineNumber >= self.lines.len() { continue; }
+            if lineNumber >= self.lines.len() {
+                let mut text = " ".repeat(maxLineNumberSize - 2);
+                text.push_str("~");
+                tabRender.push(Span::FromTokens(vec![
+                    color![text, Bold, Blue]
+                ]));
+                continue;
+            }
+            // getting the text for the line number
             let lineNumberText = self.GetLineNumberText(lineNumber, maxLineNumberSize);
             let colors =
                 if lineNumber == self.cursor.0 {  vec![ColorType::Red, ColorType::Underline, ColorType::Bold]  }
@@ -1424,6 +1432,7 @@ impl CodeTab {
             let mut lineText = vec![];
             lineText.push(lineNumberText.Colorizes(colors));
 
+            // pushing the line
             tabRender.push(Span::FromTokens(lineText));
         }
 
@@ -1498,10 +1507,10 @@ impl CodeTab {
         }
     }
 
-    pub fn GetScrolledText <'a> (&mut self, area: &Rect,
+    pub fn GetScrolledText (&mut self, area: &Rect,
                                  editingCode: bool,
                                  colorMode: &Colors::ColorMode,
-                                 suggested: &'a String,  // the suggested auto-complete (for inline rendering)
+                                 suggested: &String,  // the suggested auto-complete (for inline rendering)
                                  padding: u16,
 ) -> Vec <Span> {
         self.UpdateScrollingRender(area);
@@ -1518,7 +1527,14 @@ impl CodeTab {
         
         let mut i = 0;
         for lineNumber in scroll..(scroll + area.height as usize - 12) {
-            if lineNumber >= self.lines.len() { continue; }
+            if lineNumber >= self.lines.len() {
+                let mut text = " ".repeat(totalSize - 2);
+                text.push_str("~");
+                tabText.push(Span::FromTokens(vec![
+                    color![text, Bold, Blue]
+                ]));
+                continue;
+            }
 
             let lineNumberText = self.GetLineNumberText(lineNumber, totalSize);
 

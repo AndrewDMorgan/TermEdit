@@ -20,7 +20,7 @@ mod Colors;
 
 use StringPatternMatching::*;
 use TermRender::ColorType;
-use Colors::Colors::*;
+use Colors::*;
 use eventHandler::*;
 use Tokens::*;
 
@@ -252,6 +252,8 @@ pub struct App <'a> {
     luaSyntaxHighlightScripts: LuaScripts,
 
     mainThreadHandles: Vec <std::thread::JoinHandle<()>>,
+
+    dtScalar: f64,
 }
 
 impl <'a> App <'a> {
@@ -339,9 +341,10 @@ impl <'a> App <'a> {
             let elapsedTime = end.duration_since(start).unwrap().as_micros() as f64 * 0.000001;  // in seconds
             const FPS_AIM: f64 = 1f64 / 60f64;  // the target fps (forces it to stall to this to ensure low CPU usage)
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
+            self.dtScalar = 1.0 / (FPS_AIM / (elapsedTime + difference));  // for dt scaling
             tokio::time::sleep(tokio::time::Duration::from_secs_f64(difference)).await;
             self.debugInfo = format!("scroll: {}/{}  |  redraws: {}  |  elapsedTime: {}  |  waited: {}",
-                 keyParser.read().scrollAccumulate, keyParser.read().scrollEvents.len(), updates,
+                 keyParser.read().scrollAccumulate.round(), keyParser.read().scrollEvents.len(), updates,
                  (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
                 difference);
         }
@@ -418,7 +421,7 @@ impl <'a> App <'a> {
                 &mut tabIndex
             );
 
-            self.codeTabs.tabs[tabIndex].UpdateScroll(events.scrollAccumulate);
+            self.codeTabs.tabs[tabIndex].UpdateScroll(events.scrollAccumulate * self.dtScalar);
             /*self.codeTabs.tabs[tabIndex].mouseScrolledFlt += events.scrollAccumulate;  // change based on the speed of scrolling to allow fast scrolling
             self.codeTabs.tabs[tabIndex].mouseScrolled =
                 self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;*/
@@ -792,7 +795,6 @@ impl <'a> App <'a> {
     }
 
     fn HandleCommands (&mut self, keyEvents: &KeyParser) {
-        // quiting
         if keyEvents.ContainsKeyCode(KeyCode::Return) {
             if self.currentCommand == "q" {
                 self.Exit();
@@ -805,6 +807,10 @@ impl <'a> App <'a> {
                 self.JumpLineDown();
             } else if self.currentCommand == *"gd" {
                 // todo!
+            } else if self.currentCommand == *"-light" {
+                TermRender::ColorMode::ToLight();
+            } else if self.currentCommand == *"-dark" {
+                TermRender::ColorMode::ToDark();
             }
 
             self.currentCommand.clear();
@@ -1239,25 +1245,24 @@ impl <'a> App <'a> {
     fn HandleMenuCommandKeyEvents (&mut self, keyEvents: &KeyParser) {
         // quiting
         if keyEvents.ContainsKeyCode(KeyCode::Return) {
-            if self.currentCommand == "q" {
-                self.Exit();
-            }
+            match self.currentCommand.as_str() {
+                "q" => {  self.Exit();  },
+                "settings" => {  self.menuState = MenuState::Settings;  }
+                _ if self.currentCommand.starts_with("open ") => {
+                    let foundFile = self.fileBrowser
+                        .LoadFilePath(self.currentCommand
+                                          .get(5..)
+                                          .unwrap_or(""), &mut self.codeTabs);
+                    if foundFile.is_ok() {
+                        self.fileBrowser.fileCursor = 0;
+                        self.codeTabs.currentTab = 0;
 
-            if self.currentCommand == "settings" {
-                self.menuState = MenuState::Settings;
-            }
-
-            if self.currentCommand.starts_with("open ") {
-                let foundFile = self.fileBrowser
-                    .LoadFilePath(self.currentCommand
-                                      .get(5..)
-                                      .unwrap_or(""), &mut self.codeTabs);
-                if foundFile.is_ok() {
-                    self.fileBrowser.fileCursor = 0;
-                    self.codeTabs.currentTab = 0;
-
-                    self.appState = AppState::CommandPrompt;
-                }
+                        self.appState = AppState::CommandPrompt;
+                    }
+                },
+                "-light" => {  TermRender::ColorMode::ToLight();  },
+                "-dark" => {  TermRender::ColorMode::ToDark();  },
+                _ => {}
             }
 
             self.currentCommand.clear();
@@ -1303,9 +1308,9 @@ impl <'a> App <'a> {
         match self.currentMenuSettingBox {
             0 => {
                 self.colorMode.colorType = match self.colorMode.colorType {
-                    ColorTypes::BasicColor => ColorTypes::BasicColor,
-                    ColorTypes::PartialColor => ColorTypes::BasicColor,
-                    ColorTypes::TrueColor => ColorTypes::PartialColor,
+                    ColorTypes::Basic => ColorTypes::Basic,
+                    ColorTypes::Partial => ColorTypes::Basic,
+                    ColorTypes::True => ColorTypes::Partial,
                 }
             },
             1 => {
@@ -1321,9 +1326,9 @@ impl <'a> App <'a> {
         match self.currentMenuSettingBox {
             0 => {
                 self.colorMode.colorType = match self.colorMode.colorType {
-                    ColorTypes::BasicColor => ColorTypes::PartialColor,
-                    ColorTypes::PartialColor => ColorTypes::TrueColor,
-                    ColorTypes::TrueColor => ColorTypes::TrueColor,
+                    ColorTypes::Basic => ColorTypes::Partial,
+                    ColorTypes::Partial => ColorTypes::True,
+                    ColorTypes::True => ColorTypes::True,
                 }
             },
             1 => {
@@ -1850,7 +1855,7 @@ impl <'a> App <'a> {
             TermRender::Span::FromTokens(vec![
                 color!["Color Mode: [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::BasicColor) {
+                    if matches!(self.colorMode.colorType, ColorTypes::Basic) {
                         color!["Basic", Yellow, Bold, Underline]
                     } else {
                         color!["Basic", BrightWhite]
@@ -1859,7 +1864,7 @@ impl <'a> App <'a> {
                 color!["]", BrightWhite],
                 color![" [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::PartialColor) {
+                    if matches!(self.colorMode.colorType, ColorTypes::Partial) {
                         color!["8-bit", Yellow, Bold, Underline]
                     } else {
                         color!["8-bit", BrightWhite]
@@ -1868,7 +1873,7 @@ impl <'a> App <'a> {
                 color!["]", BrightWhite],
                 color![" [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::TrueColor) {
+                    if matches!(self.colorMode.colorType, ColorTypes::True) {
                         color!["24-bit", Yellow, Bold, Underline]
                     } else {
                         color!["24-bit", BrightWhite]
@@ -1993,7 +1998,7 @@ impl <'a> App <'a> {
                             color!["q", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color!["> followed by <", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["return", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
-                            color!["> to quit"],//.white().bold().dim(),    39/2 = 35.5 - 19.5 = 16
+                            color!["> to quit", BrightWhite, Bold, Dim],//.white().bold().dim(),    39/2 = 35.5 - 19.5 = 16
                         ]),
                         TermRender::Span::FromTokens(vec![
                             color!["           Type ", BrightWhite, Bold, Dim],//.white().bold().dim(),
@@ -2008,6 +2013,9 @@ impl <'a> App <'a> {
                             color!["esc", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color!["> to leave )", BrightWhite, Bold, Dim],//.white().bold().dim(),
                         ]),  // 51 / 2 = 35.5 - 25.5 = 10
+                        TermRender::Span::FromTokens(vec![
+                            color![" *If you see this, type -light to enter light mode; -dark to return*", Black, Italic],//.white().bold().dim(),
+                        ]),
                         //Line::from(vec![
                         //    self.dirFiles.concat().white().bold().dim(),
                         //]),

@@ -75,7 +75,31 @@ pub static BLINK:     (Option <&str>, &[&str], bool) = (None    , &["5"], false)
 pub static REVERSE:   (Option <&str>, &[&str], bool) = (None    , &["7"], false);
 pub static HIDE:      (Option <&str>, &[&str], bool) = (None    , &["8"], false);
 
-#[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
+
+// manages the global state for light/dark modes (handles basic colors switching around)
+// no support for RGB/custom color codes, only the default variants
+#[derive(Clone, PartialEq, Eq, Debug, Default, Hash, Copy)]
+pub enum ColorMode {
+    #[default] Dark,
+    Light,
+}
+
+impl ColorMode {
+    pub fn ToLight () {
+        unsafe {COLOR_MODE = ColorMode::Light};
+    }
+
+    pub fn ToDark () {
+        unsafe {COLOR_MODE = ColorMode::Dark};
+    }
+}
+
+// hopefully this will let full usage of colors while not worrying too much about light/dark mode
+// -- (basic but limited automatic support; not everything will look perfect by default)
+static mut COLOR_MODE: ColorMode = ColorMode::Dark;
+
+
+#[derive(Clone, Debug, Eq, PartialEq, Default, Hash, Copy)]
 // Different base ascii text modifiers (static constants)
 pub enum ColorType {
     Black,
@@ -174,6 +198,89 @@ impl UniqueColor {
 impl ColorType {
     // Converts the color type into a unique color (static or dynamic)
     pub fn GetColor (&self) -> UniqueColor {
+        if unsafe { COLOR_MODE } == ColorMode::Dark {
+            self.GetDarkColor()
+        } else {
+            self.GetLightColor()
+        }
+    }
+
+    fn GetLightColor (&self) -> UniqueColor {
+        match self {
+            ColorType::Black =>   { UniqueColor::Static(BRIGHT_WHITE) },
+            ColorType::Red =>     { UniqueColor::Static(RED) },
+            ColorType::Green =>   { UniqueColor::Static(GREEN) },
+            ColorType::Yellow =>  { UniqueColor::Static(YELLOW) },
+            ColorType::Blue =>    { UniqueColor::Static(BLUE) },
+            ColorType::Magenta => { UniqueColor::Static(MAGENTA) },
+            ColorType::Cyan =>    { UniqueColor::Static(CYAN) },
+            ColorType::White =>   { UniqueColor::Static(BRIGHT_BLACK) },
+            ColorType::Default => { UniqueColor::Static(BRIGHT_DEFAULT) },
+
+            ColorType::BrightBlack =>   { UniqueColor::Static(WHITE) },
+            ColorType::BrightRed =>     { UniqueColor::Static(RED) },
+            ColorType::BrightGreen =>   { UniqueColor::Static(GREEN) },
+            ColorType::BrightYellow =>  { UniqueColor::Static(YELLOW) },
+            ColorType::BrightBlue =>    { UniqueColor::Static(BLUE) },
+            ColorType::BrightMagenta => { UniqueColor::Static(MAGENTA) },
+            ColorType::BrightCyan =>    { UniqueColor::Static(CYAN) },
+            ColorType::BrightWhite =>   { UniqueColor::Static(BLACK) },
+            ColorType::BrightDefault => { UniqueColor::Static(DEFAULT) },
+
+            ColorType::OnBlack => { UniqueColor::Static(ON_WHITE) },
+            ColorType::OnRed => { UniqueColor::Static(ON_RED) },
+            ColorType::OnGreen => { UniqueColor::Static(ON_GREEN) },
+            ColorType::OnYellow => { UniqueColor::Static(ON_YELLOW) },
+            ColorType::OnBlue => { UniqueColor::Static(ON_BLUE) },
+            ColorType::OnMagenta => { UniqueColor::Static(ON_MAGENTA) },
+            ColorType::OnCyan => { UniqueColor::Static(ON_CYAN) },
+            ColorType::OnWhite => { UniqueColor::Static(ON_BRIGHT_BLACK) },
+            ColorType::OnDefault => { UniqueColor::Static(ON_BRIGHT_DEFAULT) },
+
+            ColorType::OnBrightBlack => { UniqueColor::Static(ON_BRIGHT_WHITE) },
+            ColorType::OnBrightRed => { UniqueColor::Static(ON_RED) },
+            ColorType::OnBrightGreen => { UniqueColor::Static(ON_GREEN) },
+            ColorType::OnBrightYellow => { UniqueColor::Static(ON_YELLOW) },
+            ColorType::OnBrightBlue => { UniqueColor::Static(ON_BLUE) },
+            ColorType::OnBrightMagenta => { UniqueColor::Static(ON_MAGENTA) },
+            ColorType::OnBrightCyan => { UniqueColor::Static(ON_CYAN) },
+            ColorType::OnBrightWhite => { UniqueColor::Static(ON_BLACK) },
+            ColorType::OnBrightDefault => { UniqueColor::Static(ON_DEFAULT) },
+
+            // 24-bit? I think so but make sure it works
+            ColorType::RGB (r, g, b) => {
+                let (mut rn, mut gn, mut bn) = (*r, *g, *b);
+                if rn > 128 {  rn = rn - 128;  }
+                if gn > 128 {  rn = gn - 128;  }
+                if bn > 128 {  rn = bn - 128;  }
+                UniqueColor::Dynamic((Some(format!("38;2;{};{};{}", rn, gn, bn)), EMPTY_MODIFIER_REFERENCE, false))
+            },
+            // background 24-bit? Make sure that's right
+            ColorType::OnRGB (r, g, b) => {
+                let (mut rn, mut gn, mut bn) = (*r, *g, *b);
+                if rn > 128 {  rn = rn - 128;  }
+                if gn > 128 {  rn = gn - 128;  }
+                if bn > 128 {  rn = bn - 128;  }
+                UniqueColor::Dynamic((Some(format!("48;2;{};{};{}", rn, gn, bn)), EMPTY_MODIFIER_REFERENCE, true))
+            },
+            ColorType::ANSI (index) => {
+                UniqueColor::Dynamic((Some(format!("38;5;{}", index)), EMPTY_MODIFIER_REFERENCE, false))
+            },
+            ColorType::OnANSI (index) => {
+                UniqueColor::Dynamic((Some(format!("48;5;{}", index)), EMPTY_MODIFIER_REFERENCE, true))
+            },
+
+            ColorType::Bold => { UniqueColor::Static(BOLD) },
+            ColorType::Dim => { UniqueColor::Static(DIM) },
+            ColorType::Italic => { UniqueColor::Static(ITALIC) },
+            ColorType::Underline => { UniqueColor::Static(UNDERLINE) },
+            ColorType::Blink => { UniqueColor::Static(BLINK) },
+            ColorType::Reverse => { UniqueColor::Static(REVERSE) },
+            ColorType::Hide => { UniqueColor::Static(HIDE) },
+        }
+    }
+
+    fn GetDarkColor (&self) -> UniqueColor {
         match self {
             ColorType::Black => { UniqueColor::Static(BLACK) },
             ColorType::Red => { UniqueColor::Static(RED) },
