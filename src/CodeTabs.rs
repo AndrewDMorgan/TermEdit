@@ -256,9 +256,8 @@ impl CodeTab {
         self.mouseScrolledFlt += acceleration;
 
         // clamping the bounds
-        let linePos = self.cursor.0 as f64 + self.mouseScrolledFlt;
-        let lowerBound = 0.;
-        let upperBound = self.lines.len() as f64 - 10.;  // 10 lines bellow should be fine?
+        let lowerBound = -(self.cursor.0 as f64);
+        let upperBound = self.lines.len() as f64 - 10.0 - self.cursor.0 as f64;  // 10 lines bellow should be fine?
         self.mouseScrolledFlt =
             f64::min(f64::max(self.mouseScrolledFlt, lowerBound), upperBound);  // lower bound
 
@@ -1393,59 +1392,119 @@ impl CodeTab {
         }
     }
 
+    pub fn GetScrolledTextNew <'a> (&mut self, area: &Rect,
+                                    editingCode: bool,
+                                    colorMode: &Colors::ColorMode,
+                                    suggested: &'a String,  // the suggested auto-complete (for inline rendering)
+                                    padding: u16,
+    ) -> Vec <Span> {
+        self.UpdateScrollingRender(area);
+
+        // the cumulative render
+        let mut tabRender = vec![];
+
+        // getting the current line being viewed
+        let scroll = std::cmp::max(
+            self.scrolled as isize + self.mouseScrolled,
+            0
+        ) as usize;
+
+        // the maximum number of digits for the line number
+        let maxLineNumberSize = self.lines.len().to_string().len() + 2;  // number of digits + 2usize;
+
+        // iterating over every line one by one
+        //    -- (maybe change this to a buffer that can be shifted as it's moved around)
+        for lineNumber in scroll..(scroll + area.height as usize - 12) {
+            if lineNumber >= self.lines.len() { continue; }
+            let lineNumberText = self.GetLineNumberText(lineNumber, maxLineNumberSize);
+            let colors =
+                if lineNumber == self.cursor.0 {  vec![ColorType::Red, ColorType::Underline, ColorType::Bold]  }
+                else {  vec![ColorType::White, ColorType::Italic]  };  // no additional coloring
+
+            let mut lineText = vec![];
+            lineText.push(lineNumberText.Colorizes(colors));
+
+            tabRender.push(Span::FromTokens(lineText));
+        }
+
+        tabRender
+    }
+
+    fn GetLineNumberText (&self, lineNumber: usize, maxSize: usize) -> String {
+        // choosing between the line number and lines from cursor
+        let mut lineNumberText =
+            if self.cursor.0 == lineNumber {  format!("{}: ", lineNumber + 1)  }  // current line number
+            else {  format!("{}: ", (lineNumber as isize - self.cursor.0 as isize)
+                        .unsigned_abs())  };  // distance from cursor
+        lineNumberText.insert_str(0, &" ".repeat(maxSize - lineNumberText.len()));
+        lineNumberText
+    }
+
+    fn UpdateScrollingRender (&mut self, area: &Rect) {
+        // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
+        let currentTime = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .expect("Time went backwards...")
+            .as_millis();
+        if currentTime.saturating_sub(self.pauseScroll) <= 125 {  return;  }
+
+        if self.scrolled + SCROLL_BOUNDS >= self.cursor.0 {
+            self.ScrollBranchOne(area);
+        }
+        if (self.scrolled + area.height as usize - 12)
+            .saturating_sub(SCROLL_BOUNDS) <= self.cursor.0
+        {
+            self.ScrollBranchTwo(area);
+        }
+    }
+
+    fn ScrollBranchOne (&mut self, area: &Rect) {
+        if self.scrolled
+            .saturating_sub(CENTER_BOUNDS) >=
+            self.cursor.0 && !self.highlighting
+        {
+            let center = std::cmp::min(
+                self.cursor.0
+                    .saturating_sub((area.height as usize)
+                        .saturating_sub(10) / 2),
+                self.lines.len() - 1
+            );
+            self.scrolled = center;
+        } else {
+            self.scrolled = self.cursor.0.saturating_sub(SCROLL_BOUNDS);
+            if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+        }
+    }
+
+    fn ScrollBranchTwo (&mut self, area: &Rect) {
+        if self.scrolled + area.height as usize + CENTER_BOUNDS <=
+            self.cursor.0 && !self.highlighting
+        {
+            let center = std::cmp::min(
+                self.cursor.0
+                    .saturating_sub((area.height as usize)
+                        .saturating_sub(10) / 2),
+                self.lines.len() - 1
+            );
+            self.scrolled = center;
+        } else {
+            self.scrolled = (self.cursor.0 + SCROLL_BOUNDS)
+                .saturating_sub(area.height as usize - 12);
+            if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
+                std::thread::sleep(std::time::Duration::from_millis(25));  // this.... probably needs to be better....
+            }
+        }
+    }
+
     pub fn GetScrolledText <'a> (&mut self, area: &Rect,
                                  editingCode: bool,
                                  colorMode: &Colors::ColorMode,
                                  suggested: &'a String,  // the suggested auto-complete (for inline rendering)
                                  padding: u16,
 ) -> Vec <Span> {
-        // using the known area to adjust the scrolled position (even though this can now be done else wise..... too lazy to move it)
-        let currentTime = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .expect("Time went backwards...")
-            .as_millis();
-        if currentTime.saturating_sub(self.pauseScroll) > 125 {
-            if self.scrolled + SCROLL_BOUNDS >= self.cursor.0 {
-                if self.scrolled
-                    .saturating_sub(CENTER_BOUNDS) >=
-                    self.cursor.0 && !self.highlighting
-                {
-                    let center = std::cmp::min(
-                        self.cursor.0
-                            .saturating_sub((area.height as usize)
-                            .saturating_sub(10) / 2),
-                        self.lines.len() - 1
-                    );
-                    self.scrolled = center;
-                } else {
-                    self.scrolled = self.cursor.0.saturating_sub(SCROLL_BOUNDS);
-                    if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                }
-            }
-            if (self.scrolled + area.height as usize - 12)
-                .saturating_sub(SCROLL_BOUNDS) <= self.cursor.0
-            {
-                if self.scrolled + area.height as usize + CENTER_BOUNDS <=
-                    self.cursor.0 && !self.highlighting
-                {
-                    let center = std::cmp::min(
-                        self.cursor.0
-                            .saturating_sub((area.height as usize)
-                            .saturating_sub(10) / 2),
-                        self.lines.len() - 1
-                    );
-                    self.scrolled = center;
-                } else {
-                    self.scrolled = (self.cursor.0 + SCROLL_BOUNDS)
-                        .saturating_sub(area.height as usize - 12);
-                    if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
-                        std::thread::sleep(std::time::Duration::from_millis(25));
-                    }
-                }
-            }
-        }
+        self.UpdateScrollingRender(area);
 
         let scroll = std::cmp::max(
             self.scrolled as isize + self.mouseScrolled,
@@ -1453,37 +1512,25 @@ impl CodeTab {
         ) as usize;
         
         let mut tabText = vec![];
+
+        // the maximum number of digits for the line number
+        let totalSize = self.lines.len().to_string().len() + 2;  // number of digits + 2usize;
         
         let mut i = 0;
         for lineNumber in scroll..(scroll + area.height as usize - 12) {
             if lineNumber >= self.lines.len() { continue; }
 
-            let mut lineNumberText = format!("{}: ",
-                                             (lineNumber as isize - self.cursor.0 as isize)
-                                                 .unsigned_abs());
-            if self.cursor.0 == lineNumber {
-                lineNumberText = format!("{}: ", lineNumber + 1);
-            }
-
-            // adjust this for the total length of the file so everything is held to the same line length
-            let totalSize = (self.lines.len()).to_string().len() + 1;  // number of digits + 2usize;
-            for _ in 0..totalSize {
-                if lineNumberText.len() <= totalSize {
-                    lineNumberText.insert(0, ' ');
-                }
-            }
+            let lineNumberText = self.GetLineNumberText(lineNumber, totalSize);
 
             let mut coloredLeft: Vec<(usize, Colored)> = vec!();
             let mut coloredRight: Vec<(usize, Colored)> = vec!();
 
-            if lineNumber == self.cursor.0 {
-                coloredLeft.push((lineNumberText.len(),
-                                  color!(lineNumberText, Red, Bold, Underline)
-                ));
-            } else {
-                coloredLeft.push((lineNumberText.len(), color!(lineNumberText, White, Italic)));
-            }
-            
+            let colors =
+                if lineNumber == self.cursor.0 {  vec![ColorType::Red, ColorType::Underline, ColorType::Bold]  }
+                else {  vec![ColorType::White, ColorType::Italic]  };  // no additional coloring
+
+            coloredLeft.push((totalSize, lineNumberText.Colorizes(colors)));
+
             let mut currentCharNum = 0;
             let lineTokensRead = self.lineTokens.read();
             for token in &lineTokensRead[lineNumber] {

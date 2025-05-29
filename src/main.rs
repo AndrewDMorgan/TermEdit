@@ -316,7 +316,7 @@ impl <'a> App <'a> {
             buffer.write().fill(0);
 
             // updating the thread handles for core functionality
-            self.UpdateMainHandles();
+            //self.UpdateMainHandles();
 
             // rendering (will be more performant once the new framework is added)
             //terminal.draw(|frame| self.draw(frame))?;
@@ -349,11 +349,11 @@ impl <'a> App <'a> {
         Ok(())
     }
 
-    fn UpdateMainHandles (&mut self) {
+    /*fn UpdateMainHandles (&mut self) {
         for _handle in &self.mainThreadHandles {
             // do anything here...
         }
-    }
+    }*/  // Not being used. Not 100% sure of what it was meant for?
 
     fn GetEventHandlerHandle (&mut self,
                               buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
