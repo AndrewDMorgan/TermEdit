@@ -1,15 +1,13 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
-use std::path::PathBuf;
 use tokio::io::{self, AsyncReadExt};
 use vte::Parser;
 
 use crossterm::terminal::enable_raw_mode;
-use arboard::Clipboard;  // for copy + paste + cut
-use dirs::home_dir;  // auto gets the starting file path
+use arboard::Clipboard;  // auto gets the starting file path
 
-use proc_macros::{load_lua_script, color};
+use proc_macros::{color, load_lua_script};
 
 mod StringPatternMatching;
 mod eventHandler;
@@ -17,6 +15,7 @@ mod TermRender;
 mod CodeTabs;
 mod Tokens;
 mod Colors;
+mod FileManager;
 
 use StringPatternMatching::*;
 use TermRender::ColorType;
@@ -28,195 +27,30 @@ use CodeTabs::CodeTab;
 
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 use crate::TermRender::{Colorize, Span};
+use crate::FileManager::*;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FileTabs {
     Outline,
     #[default] Files,
 }
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub enum FileType {
-    #[default] File,
-    Directory,
-}
 
-#[derive(Debug, Default, Clone)]
-pub struct FilePathNode {
-    pub pathName: String,
-    pub paths: Vec <FilePathNode>,  // the following embedded paths
-    pub dirFiles: Vec <String>,  // the files in the current directory
-    pub allItems: Vec <(String, FileType)>,  // includes files and further directories
-}
-
-impl FilePathNode {
-    pub fn GetChild (&self, pathName: String) -> Option <FilePathNode> {
-        for path in &self.paths {
-            if path.pathName == pathName {
-                return Some(path.clone());
-            }
-        } None
-    }
-
-    pub fn GetLeaf (&self, mut pathNames: Vec <String>) -> Option <FilePathNode> {
-        let pathName = pathNames.pop().unwrap_or_default();
-        if self.paths.is_empty() {
-            for file in &self.dirFiles {
-                if *file == pathName {
-                    return Some(self.clone());
-                }
-            }
-        }
-        for path in &self.paths {
-            if path.pathName == pathName {
-                return path.GetLeaf(pathNames);
-            }
-        } None
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct FileBrowser {
-    files: Vec <String>,  // stores the names
-    filePaths: Vec <String>,  // these two are here until the rest of the code is updated (temporary, to allow it to function)
-
-    // this one would be the 0th element
-    fileTree: FilePathNode,
-    fileTab: FileTabs,
-    fileCursor: usize,
-    outlineCursor: usize,
-}
-
-static VALID_EXTENSIONS: [&str; 9] = [
-    "txt",
-    "rs",
-    "py",
-    "cpp",
-    "hpp",
-    "c",
-    "h",
-    "lua",
-    "toml",
-];
-
-// manages the files for a given project
-// provides an outline and means for loading files
-impl FileBrowser {
-    /// returns the file path to get to the file of the nth element (which could be a file or folder/branch/path)
-    pub fn GetNthElement (&self, index: usize) -> Option <Vec <String>> {
-        FileBrowser::SearchFiletree(&self.fileTree, &mut 0, index)
-    }
-
-    fn SearchFiletree (path: &FilePathNode, i: &mut usize, index: usize) -> Option <Vec <String>> {
-        let mut dirCount = 0;
-        for (item, itemType) in &path.allItems {
-            if *i == index {  return Some(vec![item.clone()]);  }
-            *i += 1;
-            if *itemType == FileType::Directory {
-                let searchResults = FileBrowser::SearchFiletree(&path.paths[dirCount], i, index);
-                if searchResults.is_some() {
-                    let mut output = searchResults.unwrap();
-                    output.insert(0, item.clone());
-                    return Some(output);
-                }
-                dirCount += 1;
-            }
-        } None
-    }
-
-    // gets the complete path name
-    pub fn GetPathName (dirSuffix: &str) -> String {
-        home_dir()
-            .unwrap_or(PathBuf::from("/"))
-            .join(dirSuffix)
-            .to_string_lossy()
-            .into_owned()
-    }
-
-    // finds all directories in a given directory
-    pub fn CalculateDirectories (directory: &String, nextDirectories: &mut Vec <String>) {
-        if let Ok(paths) = std::fs::read_dir(directory) {
-            for path in paths.flatten() {
-                if std::fs::FileType::is_dir(&path.file_type().unwrap()) {
-                    nextDirectories.push(path
-                        .file_name()
-                        .to_str()
-                        .unwrap_or("")
-                        .to_string()
-                    );
-                }
-            }
-        }
-    }
-
-    // loads a project into memory
-    pub fn LoadFilePath (
-        &mut self,
-        indirectPathInput: &str,
-        codeTabs: &mut CodeTabs::CodeTabs
-    ) -> io::Result <()> {
-        self.files.clear();
-        codeTabs.tabs.clear();
-        let pathInput = home_dir()
-            .unwrap_or(PathBuf::from("/"))
-            .join(indirectPathInput)
-            .to_string_lossy()
-            .into_owned();
-        if let Ok(paths) = std::fs::read_dir(pathInput.clone()) {
-            for path in paths.flatten() {
-                if std::fs::FileType::is_file(&path.file_type()?) {
-                    let name = path.file_name().to_str().unwrap_or("").to_string();
-
-                    // so it doesn't try and load invalid files
-                    if !VALID_EXTENSIONS.contains(&name.split(".").last().unwrap_or("")) {  continue;  }
-
-                    self.files.push(name.clone());
-                    let mut fullPath = pathInput.clone();
-                    fullPath.push_str(&name);
-                    self.filePaths.push(fullPath);
-                }
-            } Ok(())
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to find directory"))
-        }
-    }
-
-    pub fn MoveCursorDown (&mut self, outline: &[Vec<usize>], _rootNode: &ScopeNode) {
-        if matches!(self.fileTab, FileTabs::Outline) {
-            self.outlineCursor = std::cmp::min(
-                self.outlineCursor + 1,
-                outline.len() - 1
-            );
-        } else {
-            // todo
-        }
-    }
-
-    pub fn MoveCursorUp (&mut self) {
-        if matches!(self.fileTab, FileTabs::Outline) {
-            self.outlineCursor = self.outlineCursor.saturating_sub(1);  // simple
-        } else {
-            // todo
-        }
-    }
-}
-
-
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum TabState {
     #[default] Code,
     Files,
     Tabs,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum AppState {
     Tabs,
     CommandPrompt,
     #[default] Menu,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub enum MenuState {
     #[default] Welcome,
     Settings
@@ -594,7 +428,7 @@ impl <'a> App <'a> {
         } else if
         event.position.0 <= 29 &&
             event.position.1 < self.area.height - 10 &&
-            matches!(self.fileBrowser.fileTab, FileTabs::Outline) &&
+            self.fileBrowser.fileTab == FileTabs::Outline &&
             !self.codeTabs.tabs.is_empty()
         {
             self.PressedScopeJump(events, event);
@@ -609,7 +443,7 @@ impl <'a> App <'a> {
             event.position.0 < 30 && //height - 8, width 30
             event.position.1 < self.area.height - 8 &&
             event.position.1 > 1 &&
-            matches!(self.appState, AppState::CommandPrompt)
+            self.appState == AppState::CommandPrompt
         {
             self.PressedLoadFile(events, event).await;
         }
@@ -668,7 +502,7 @@ impl <'a> App <'a> {
 
     async fn HandleLeftClick (&mut self, events: &KeyParser, event: &MouseEvent) {
         let padding =
-            if matches!(self.appState, AppState::CommandPrompt) {  29  }
+            if self.appState == AppState::CommandPrompt {  29  }
             else {  0  };
         // checking for code selection
         if matches!(event.state, MouseState::Release | MouseState::Hold) {
@@ -678,7 +512,7 @@ impl <'a> App <'a> {
             {
                 self.HighlightLeftClick(events, event, padding as usize);
             }
-        } else if matches!(event.state, MouseState::Press) {
+        } else if event.state == MouseState::Press {
             self.HandlePress(events, event, padding).await;
         }
     }
@@ -689,7 +523,7 @@ impl <'a> App <'a> {
 
     async fn HandleMouseEvents (&mut self, events: &KeyParser) {
         if let Some(event) = &events.mouseEvent {
-            if matches!(self.appState, AppState::Menu) {
+            if self.appState == AppState::Menu {
                 self.HandleMenuMouseEvents(events, event);
                 return;
             }
@@ -726,7 +560,7 @@ impl <'a> App <'a> {
     fn HandleTabViewTabPress (&mut self, keyEvents: &KeyParser) {
         if keyEvents.ContainsKeyCode(KeyCode::Tab) {
             if keyEvents.ContainsModifier(&KeyModifiers::Shift) &&
-                matches!(self.tabState, TabState::Files) {
+                self.tabState == TabState::Files {
 
                 self.fileBrowser.fileTab = match self.fileBrowser.fileTab {
                     FileTabs::Files => FileTabs::Outline,
@@ -825,7 +659,7 @@ impl <'a> App <'a> {
     }
 
     fn HandleFilebrowserKeyEvents (&mut self, keyEvents: &KeyParser) {
-        if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
+        if self.fileBrowser.fileTab == FileTabs::Outline {
             if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
                 let mut nodePath = self.codeTabs.tabs[self.lastTab].linearScopes.read()[
                     self.fileBrowser.outlineCursor].clone();
@@ -1222,7 +1056,7 @@ impl <'a> App <'a> {
             self.HandleMenuCommandKeyEvents(keyEvents);
         }
 
-        if matches!(self.menuState, MenuState::Settings) {
+        if self.menuState == MenuState::Settings {
             self.HandleSettingsKeyEvents(keyEvents);
         }
 
@@ -1316,7 +1150,7 @@ impl <'a> App <'a> {
                 }
             },
             1 => {
-                if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                if self.preferredCommandKeybind == KeyModifiers::Control {
                     self.preferredCommandKeybind = KeyModifiers::Command;
                 }
             }
@@ -1334,7 +1168,7 @@ impl <'a> App <'a> {
                 }
             },
             1 => {
-                if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                if self.preferredCommandKeybind == KeyModifiers::Command {
                     self.preferredCommandKeybind = KeyModifiers::Control;
                 }
             }
@@ -1389,7 +1223,7 @@ impl <'a> App <'a> {
                     AppState::Tabs
                 },
                 _ => {
-                    if matches!(self.menuState, MenuState::Settings) {
+                    if self.menuState == MenuState::Settings {
                         self.menuState = MenuState::Welcome;
                     }
 
@@ -1406,7 +1240,7 @@ impl <'a> App <'a> {
     // ============================================= file block here =============================================
     fn RenderFileBlock (&mut self, app: &mut TermRender::App){
         let coloredTabText = self.codeTabs.GetColoredNames(
-            matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs)
+            self.appState == AppState::CommandPrompt && self.tabState == TabState::Tabs
         );
         let tabText = vec![
             Span::FromTokens(coloredTabText)
@@ -1422,7 +1256,7 @@ impl <'a> App <'a> {
     fn RenderCodeBlock (&mut self, app: &mut TermRender::App) {
         if !self.codeTabs.tabs.is_empty() {
             let leftPadding =
-                if matches!(self.appState, AppState::CommandPrompt) {  29  }
+                if self.appState == AppState::CommandPrompt {  29  }
                 else {  0  };
             let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), leftPadding);
 
@@ -1470,7 +1304,7 @@ impl <'a> App <'a> {
         ]);
 
         let padding: u16 =
-            if matches!(self.appState, AppState::CommandPrompt) {  30  }
+            if self.appState == AppState::CommandPrompt {  30  }
             else {  0  };
 
         let mut rect = app.GetWindowArea().clone();
@@ -1478,8 +1312,8 @@ impl <'a> App <'a> {
         let codeText =
             self.codeTabs.GetScrolledText(
                 &rect,
-                matches!(self.appState, AppState::Tabs) &&
-                    matches!(self.tabState, TabState::Code),
+                self.appState == AppState::Tabs &&
+                    self.tabState == TabState::Code,
                 &self.colorMode,
                 &self.suggested,
                 {
@@ -1501,7 +1335,7 @@ impl <'a> App <'a> {
                 height - 9
             ));
 
-            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
+            if self.appState == AppState::CommandPrompt && self.tabState == TabState::Code {
                 window.TryColorize(ColorType::BrightBlue);
             } else {
                 window.ClearColors();
@@ -1513,155 +1347,6 @@ impl <'a> App <'a> {
 
             window.TryUpdateLines(codeText);
             //window.FromLines(codeText);
-        }
-    }
-
-    fn RenderOutlinePartOne (&self, scopeIndex: &Vec <usize>) -> String {
-        let mut offset = String::new();
-        if *scopeIndex ==
-            self.codeTabs.tabs[self.lastTab]
-                .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
-            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code) {
-            offset.push('>')
-        } else if
-        matches!(self.appState, AppState::CommandPrompt) &&
-            matches!(self.tabState, TabState::Files) &&
-            self.codeTabs.tabs[self.lastTab].linearScopes.read()[
-                self.fileBrowser.outlineCursor
-                ] == *scopeIndex {
-            offset.push('>');
-        }
-        for _ in 0..scopeIndex.len().saturating_sub(1) {
-            offset.push_str("  ");
-        }
-        offset
-    }
-
-    fn GetColoredScope (&self, scopeName: String, scopeLength: usize) -> TermRender::Colored {
-        match scopeLength {
-            1 => color![scopeName, BrightBlue],
-            2 => color![scopeName, BrightMagenta],
-            3 => color![scopeName, BrightRed],
-            4 => color![scopeName, BrightYellow],
-            5 => color![scopeName, BrightGreen],
-            _ => color![scopeName, BrightWhite],
-        }
-    }
-
-    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Span>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
-        fileStringText.push(
-            Span::FromTokens(vec![
-                {
-                    color![self.RenderOutlinePartOne(scopeIndex), BrightWhite]
-                },
-                {
-                    // this is a mess... (ya.......)
-                    if *scopeIndex ==
-                        self.codeTabs.tabs[self.lastTab]
-                            .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
-                        matches!(self.appState, AppState::CommandPrompt) &&
-                        matches!(self.tabState, TabState::Code) || (
-                            matches!(self.appState, AppState::CommandPrompt) &&
-                            matches!(self.tabState, TabState::Files) &&
-                            self.codeTabs.tabs[self.lastTab].linearScopes.read()[
-                                self.fileBrowser.outlineCursor
-                                ] == *scopeIndex
-                        )
-                    {
-                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len()), Underline]
-                    } else {
-                        color![self.GetColoredScope(scope.read().name.clone(), scopeIndex.len())]
-                    }
-                },
-                //format!(" ({}, {})", scope.start + 1, scope.end + 1).white(),  // (not enough space for it to fit...)
-            ])
-        );
-    }
-
-    fn HandleScrolled(&self, scrolled: usize, newScroll: &mut usize, scopeIndex: &Vec <usize>) {
-        let tab = &self.codeTabs.tabs[self.lastTab];
-        if *scopeIndex == tab.scopeJumps.read()[tab.cursor.0] &&
-            matches!(self.appState, AppState::Tabs) && matches!(self.tabState, TabState::Code)
-        {
-            *newScroll = scrolled - 1;
-        }
-    }
-
-    fn RenderFilebrowserOutline (&mut self, area: &TermRender::Rect) -> Vec <Span> {
-        let mut fileStringText = vec!();
-        let mut scopes: Vec<usize> = vec![];
-
-        let mut newScroll = self.fileBrowser.outlineCursor;
-        let mut scrolled = 0;
-        let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
-
-        let jumps = self.codeTabs.tabs[self.lastTab].scopeJumps.read();
-        for scopeIndex in jumps.iter() {
-            self.RenderInnerFilebrowserRender(&mut scopes, scopeIndex, &mut scrolled, scrollTo, &mut newScroll, &mut fileStringText);
-        }
-        self.fileBrowser.outlineCursor = newScroll;
-        fileStringText
-    }
-    
-    fn RenderInnerFilebrowserRender (&self, scopes: &mut Vec <usize>, scopeIndex: &Vec <usize>, scrolled: &mut usize, scrollTo: usize, newScroll: &mut usize, fileStringText: &mut Vec <Span>) {
-        let mut valid = true;
-        for i in 0..scopes.len() {
-            let slice = scopes.get(0..(scopes.len() - i));
-            if slice.unwrap_or(&[]) != *scopeIndex {  continue;  }
-            valid = false;
-            break;
-        }
-        if !valid || scopeIndex.is_empty() {  return;  }
-        scopes.clear();
-
-        {
-            let scopesWrite = &mut self.codeTabs.tabs[self.lastTab].scopes.write();
-            for index in scopeIndex {
-                scopes.push(*index);
-                if *index >= scopesWrite.children.len() {  continue;  }
-                **scopesWrite = scopesWrite.children[*index].clone();
-            }  // the write is naturally dropped
-        }
-
-        *scrolled += 1;
-        self.HandleScrolled(*scrolled, newScroll, scopeIndex);
-
-        if *scrolled < scrollTo { return; }
-        self.GetFilebrowserOutline(fileStringText, scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
-    }
-
-    // ============================================= files =============================================
-    fn RenderFiles (&mut self, app: &mut TermRender::App) {
-        let mut fileText = vec![];
-
-        if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
-            fileText = self.RenderFilebrowserOutline(app.GetWindowArea());
-        } else {
-            //let mut allFiles = vec!();
-            for (index, file) in self.fileBrowser.files.iter().enumerate() {
-                fileText.push(Span::FromTokens(vec![
-                    {
-                        if index == self.fileBrowser.fileCursor {
-                            color![file, BrightWhite, Underline]
-                        } else {
-                            color![file, BrightWhite]
-                        }
-                    }
-                ]));
-            }
-            //fileText = Text::from(allFiles);
-        }
-
-        {
-            let window = app.GetWindowReferenceMut(String::from("Files"));
-
-            if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
-                window.TryColorize(ColorType::BrightBlue);
-            } else {
-                window.ClearColors();
-            }
-
-            window.TryUpdateLines(fileText);
         }
     }
 
@@ -1853,7 +1538,7 @@ impl <'a> App <'a> {
             Span::FromTokens(vec![
                 color!["Color Mode: [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::Basic) {
+                    if self.colorMode.colorType == ColorTypes::Basic {
                         color!["Basic", Yellow, Bold, Underline]
                     } else {
                         color!["Basic", BrightWhite]
@@ -1862,7 +1547,7 @@ impl <'a> App <'a> {
                 color!["]", BrightWhite],
                 color![" [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::Partial) {
+                    if self.colorMode.colorType == ColorTypes::Partial {
                         color!["8-bit", Yellow, Bold, Underline]
                     } else {
                         color!["8-bit", BrightWhite]
@@ -1871,7 +1556,7 @@ impl <'a> App <'a> {
                 color!["]", BrightWhite],
                 color![" [", BrightWhite],
                 {
-                    if matches!(self.colorMode.colorType, ColorTypes::True) {
+                    if self.colorMode.colorType == ColorTypes::True {
                         color!["24-bit", Yellow, Bold, Underline]
                     } else {
                         color!["24-bit", BrightWhite]
@@ -1901,7 +1586,7 @@ impl <'a> App <'a> {
             Span::FromTokens(vec![
                 color!["Preferred Modifier Key: [", BrightWhite],
                 {
-                    if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
+                    if self.preferredCommandKeybind == KeyModifiers::Command {
                         color!["Command", Yellow, Bold, Underline]
                     } else {
                         color!["Command", BrightWhite]
@@ -1910,7 +1595,7 @@ impl <'a> App <'a> {
                 color!["]", BrightWhite],
                 color![" [", BrightWhite],
                 {
-                    if matches!(self.preferredCommandKeybind, KeyModifiers::Control) {
+                    if self.preferredCommandKeybind == KeyModifiers::Control {
                         color!["Control", Yellow, Bold, Underline]
                     } else {
                         color!["Control", BrightWhite]
@@ -2081,7 +1766,7 @@ impl <'a> App <'a> {
         }
 
         let (padding, shift);
-        if matches!(self.appState, AppState::CommandPrompt) {
+        if self.appState == AppState::CommandPrompt {
             app.GetWindowReferenceMut(String::from("Files")).Show();
             (padding, shift) = (30, 29);
         } else {
@@ -2229,7 +1914,7 @@ impl <'a> App <'a> {
                 color!["/", BrightWhite, Bold],//.to_string().white().bold(),
                 color![self.currentCommand, BrightWhite, Italic],//.clone().white().italic(),
                 {
-                    if  matches!(self.appState, AppState::Menu) &&
+                    if  self.appState == AppState::Menu &&
                         self.currentCommand.starts_with("open ")
                     {
                         // handling suggested directory auto fills

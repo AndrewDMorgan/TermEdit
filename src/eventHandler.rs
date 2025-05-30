@@ -5,7 +5,7 @@ use vte::Perform;
 const SCROLL_SENSITIVITY: f64 = 0.05;
 const SCROLL_LOG_TIME: f64 = 0.75;
 
-#[derive(PartialEq, Debug, Default)]
+#[derive(PartialEq, Eq, Debug, Default)]
 pub enum KeyModifiers {
     Shift,
     #[default] Command,
@@ -25,6 +25,7 @@ pub enum KeyCode {
     Escape,
 }
 
+#[derive(PartialEq, Debug)]
 pub enum MouseEventType {
     Null,
     Left,
@@ -34,6 +35,7 @@ pub enum MouseEventType {
     Up,
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum MouseState {
     Release,
     Press,
