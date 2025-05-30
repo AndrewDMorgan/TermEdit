@@ -27,7 +27,7 @@ use Tokens::*;
 use CodeTabs::CodeTab;
 
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
-use crate::TermRender::Colorize;
+use crate::TermRender::{Colorize, Span};
 
 #[derive(Debug, Default, Clone)]
 pub enum FileTabs {
@@ -261,6 +261,12 @@ impl <'a> App <'a> {
     pub async fn run (&mut self, app: &mut TermRender::App) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
+        let terminalSize = app.GetTerminalSize()?;
+        self.area = TermRender::Rect {
+            width: terminalSize.0,
+            height: terminalSize.1
+        };
+
         // loading the lua syntax highlighting scripts (using proc_macros)
         load_lua_script!(
             self.luaSyntaxHighlightScripts,
@@ -307,26 +313,19 @@ impl <'a> App <'a> {
 
         let exit = self.exit.clone();
 
-        //let mut times = vec![];
         loop {
             let start = std::time::SystemTime::now();
 
-            if *exit.read() {
-                break;
-            }
+            let exitRead = *exit.read();
+            if exitRead {  break;  }
 
             buffer.write().fill(0);
 
-            // updating the thread handles for core functionality
-            //self.UpdateMainHandles();
-
             // rendering (will be more performant once the new framework is added)
-            //terminal.draw(|frame| self.draw(frame))?;
             let updates = self.RenderFrame(app);
 
             let termSize = app.GetTerminalSize()?;
             self.area = TermRender::Rect {
-                x: 0, y: 0,
                 width: termSize.0,
                 height: termSize.1,
             };  // ig this is a thing
@@ -343,20 +342,19 @@ impl <'a> App <'a> {
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
             self.dtScalar = 1.0 / (FPS_AIM / (elapsedTime + difference));  // for dt scaling
             tokio::time::sleep(tokio::time::Duration::from_secs_f64(difference)).await;
-            self.debugInfo = format!("scroll: {}/{}  |  redraws: {}  |  elapsedTime: {}  |  waited: {}",
-                 keyParser.read().scrollAccumulate.round(), keyParser.read().scrollEvents.len(), updates,
+            self.debugInfo = format!("redraws: {}  |  elapsedTime: {}  |  waited: {}",
+                 updates,
                  (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
                 difference);
         }
 
+        // joining the threads (they should have exited already and thus should be done)
+        while let Some(handle) = self.mainThreadHandles.pop() {
+            let _ = handle.join();
+        }
+
         Ok(())
     }
-
-    /*fn UpdateMainHandles (&mut self) {
-        for _handle in &self.mainThreadHandles {
-            // do anything here...
-        }
-    }*/  // Not being used. Not 100% sure of what it was meant for?
 
     fn GetEventHandlerHandle (&mut self,
                               buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
@@ -377,8 +375,12 @@ impl <'a> App <'a> {
                 let stdin = stdin.clone();
                 rt.block_on(async move {
                     let mut localBuffer = [0; 128];
-                    let result = stdin.write().read(&mut localBuffer).await;
-                    if let Ok(n) = result {
+                    // should cancel after 0.5 seconds? (incase an early exit or something)
+                    let mut stdWrite = stdin.write();
+                    let result = tokio::time::timeout(
+                        tokio::time::Duration::from_secs_f64(0.25), stdWrite.read(&mut localBuffer)
+                    ).await; drop(stdWrite);
+                    if let Ok(Ok(n)) = result {
                         *buffer.write() = localBuffer;
                         keyParser.write().bytes = n;
 
@@ -389,7 +391,7 @@ impl <'a> App <'a> {
                         }
                     }
                 })
-            }
+            } rt.shutdown_background();
         })
     }
 
@@ -422,10 +424,6 @@ impl <'a> App <'a> {
             );
 
             self.codeTabs.tabs[tabIndex].UpdateScroll(events.scrollAccumulate * self.dtScalar);
-            /*self.codeTabs.tabs[tabIndex].mouseScrolledFlt += events.scrollAccumulate;  // change based on the speed of scrolling to allow fast scrolling
-            self.codeTabs.tabs[tabIndex].mouseScrolled =
-                self.codeTabs.tabs[tabIndex].mouseScrolledFlt as isize;*/
-
             let currentTime = std::time::SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .expect("Time went backwards...")
@@ -534,11 +532,6 @@ impl <'a> App <'a> {
         let height = event.position.1.saturating_sub(2) as usize;
         if self.fileBrowser.files.len() > height {
             // loading the file's contents
-            /*if !self.codeTabs.tabs.is_empty() {
-                self.codeTabs.panes.push(self.codeTabs.tabs.len());
-            } else {
-                self.codeTabs.currentTab = self.codeTabs.tabs.len();
-            }*/
             self.codeTabs.currentTab = self.codeTabs.tabs.len();
 
             let name = &self.fileBrowser.files[height];
@@ -729,11 +722,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn HandleCommandPromptKeyEvents (&mut self, keyEvents: &KeyParser) {
-        for chr in &keyEvents.charEvents {
-            self.currentCommand.push(*chr);
-        }
-
+    fn HandleTabViewTabPress (&mut self, keyEvents: &KeyParser) {
         if keyEvents.ContainsKeyCode(KeyCode::Tab) {
             if keyEvents.ContainsModifier(&KeyModifiers::Shift) &&
                 matches!(self.tabState, TabState::Files) {
@@ -750,6 +739,15 @@ impl <'a> App <'a> {
                 }
             }
         }
+    }
+
+    fn HandleCommandPromptKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {  return;  }
+        for chr in &keyEvents.charEvents {
+            self.currentCommand.push(*chr);
+        }
+
+        self.HandleTabViewTabPress(keyEvents);
 
         match self.tabState {
             TabState::Code => {
@@ -775,7 +773,7 @@ impl <'a> App <'a> {
             if number.is_ok() {
                 let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
                 self.codeTabs.tabs[self.lastTab].JumpCursor(
-                    cursor.saturating_sub(number.unwrap()), 1
+                    cursor.saturating_sub(number.unwrap_or(0)), 1
                 );
             }
         }
@@ -788,7 +786,7 @@ impl <'a> App <'a> {
             if number.is_ok() {
                 let cursor = self.codeTabs.tabs[self.lastTab].cursor.0;
                 self.codeTabs.tabs[self.lastTab].JumpCursor(
-                    cursor.saturating_add(number.unwrap()), 1
+                    cursor.saturating_add(number.unwrap_or(0)), 1
                 );
             }
         }
@@ -878,7 +876,8 @@ impl <'a> App <'a> {
     async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // making sure command + s or other commands aren't being pressed
         if !(keyEvents.ContainsModifier(&KeyModifiers::Command) ||
-            keyEvents.ContainsModifier(&KeyModifiers::Control)
+            keyEvents.ContainsModifier(&KeyModifiers::Control) ||
+            keyEvents.ContainsModifier(&KeyModifiers::Option)
         ) {
             for chr in &keyEvents.charEvents {
                 if *chr == '(' {
@@ -1218,6 +1217,16 @@ impl <'a> App <'a> {
     }
 
     fn HandleMenuKeyEvents (&mut self, keyEvents: &KeyParser) {
+        if !self.currentCommand.is_empty() {
+            self.HandleMenuCommandKeyEvents(keyEvents);
+        }
+
+        if matches!(self.menuState, MenuState::Settings) {
+            self.HandleSettingsKeyEvents(keyEvents);
+        }
+
+        if keyEvents.ContainsModifier(&KeyModifiers::Option) {  return;  }
+
         for chr in &keyEvents.charEvents {
             self.currentCommand.push(*chr);
 
@@ -1231,14 +1240,6 @@ impl <'a> App <'a> {
                 self.dirFiles.clear();
                 FileBrowser::CalculateDirectories(&self.currentDir, &mut self.dirFiles);
             }
-        }
-
-        if !self.currentCommand.is_empty() {
-            self.HandleMenuCommandKeyEvents(keyEvents);
-        }
-
-        if matches!(self.menuState, MenuState::Settings) {
-            self.HandleSettingsKeyEvents(keyEvents);
         }
     }
 
@@ -1403,12 +1404,6 @@ impl <'a> App <'a> {
 
     // ============================================= file block here =============================================
     fn RenderFileBlock (&mut self, app: &mut TermRender::App){
-        /*let mut tabBlock = Block::bordered()
-            .border_set(border::THICK);
-        if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs) {
-            tabBlock = tabBlock.light_blue();
-        }*/
-
         let coloredTabText = self.codeTabs.GetColoredNames(
             matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs)
         );
@@ -1434,6 +1429,30 @@ impl <'a> App <'a> {
                 //let area = app.GetWindowArea();
                 self.RenderCodeTab(app, tabIndex, tabSize);
             }
+
+            // rendering the info on the cursor's position
+            let tab = &self.codeTabs.tabs[self.lastTab];
+            let text = Span::FromTokens(vec![
+                if tab.highlighting {
+                    let (start, end) = (
+                        std::cmp::min(tab.cursor.0, tab.cursorEnd.0),
+                        std::cmp::max(tab.cursor.0, tab.cursorEnd.0)
+                    );
+                    color![format!("Line: {} - {} ({} lines)", start, end, end - start + 1), BrightBlack, Italic]
+                } else {
+                    let charCount = tab.lines[tab.cursor.0].chars().count();
+                    let charCursor = std::cmp::min(tab.cursor.1 + 1, charCount);
+                    color![format!("Line: {}/{} ({}%)   Char: {}/{} ({}%)",
+                            tab.cursor.0 + 1,
+                            std::cmp::min(tab.lines.len(), charCount),
+                            ((tab.cursor.0 as f64 + 1.0) / tab.lines.len() as f64 * 100.0) as usize,
+                            charCursor,
+                            charCount,
+                            (charCursor as f64 / charCount as f64 * 100.0) as usize
+                    ), BrightBlack, Italic]
+            }]);
+            let window = app.GetWindowReferenceMut(String::from("CursorInfo"));
+            window.TryUpdateLines(vec![text]);
         }
     }
 
@@ -1448,12 +1467,7 @@ impl <'a> App <'a> {
             color![name, Bold],
             color![" ", BrightWhite],
         ]);
-        /*let mut codeBlock = Block::bordered()
-            //.title_top(codeBlockTitle.centered())
-            .border_set(border::THICK);
-        if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
-            codeBlock = codeBlock.light_blue();
-        }*/
+
         let padding: u16 =
             if matches!(self.appState, AppState::CommandPrompt) {  30  }
             else {  0  };
@@ -1474,7 +1488,7 @@ impl <'a> App <'a> {
         );
 
         {
-            let height = app.GetTerminalSize().unwrap().1;
+            let height = self.area.height;
             let window = app.GetWindowReferenceMut(format!("CodeBlock{name}"));
 
             // updating the sizing (incase it was changed to a pane)
@@ -1483,7 +1497,7 @@ impl <'a> App <'a> {
             ));
             window.Resize((
                 tabSize as u16,
-                height - 10
+                height - 9
             ));
 
             if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Code) {
@@ -1499,16 +1513,6 @@ impl <'a> App <'a> {
             window.TryUpdateLines(codeText);
             //window.FromLines(codeText);
         }
-        // todo!!!! deal with this :(    storing the name is really annoying
-        /*Paragraph::new(codeText)
-            .block(codeBlock)
-            .render(Rect {
-                x: area.x + 29 + (tabIndex * tabSize) as u16,
-                y: area.y + 2,
-                width: tabSize as u16,
-                //width: area.width - 29,
-                height: area.height - 10,
-            }, buf);*/
     }
 
     fn RenderOutlinePartOne (&self, scopeIndex: &Vec <usize>) -> String {
@@ -1606,6 +1610,7 @@ impl <'a> App <'a> {
                 //let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
                 for index in scopeIndex {
                     scopes.push(*index);
+                    if *index >= scopesWrite.children.len() {  continue;  }
                     **scopesWrite = scopesWrite.children[*index].clone();
                 }  // the write is naturally dropped
             }
@@ -1622,12 +1627,6 @@ impl <'a> App <'a> {
 
     // ============================================= files =============================================
     fn RenderFiles (&mut self, app: &mut TermRender::App) {
-        /*let mut fileBlock = Block::bordered()
-            .border_set(border::THICK);
-        if matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Files) {
-            fileBlock = fileBlock.light_blue();
-        }*/
-
         let mut fileText = vec![];
 
         if matches!(self.fileBrowser.fileTab, FileTabs::Outline) {
@@ -1702,7 +1701,7 @@ impl <'a> App <'a> {
             if keyword.typedType.is_none() {  continue;  }
             let newKeywordBase = OutlineKeyword::TryFindKeywords(
                 &self.codeTabs.tabs[self.lastTab].outlineKeywords,
-                keyword.typedType.clone().unwrap()
+                keyword.typedType.clone().unwrap_or(String::new())
             );
             /*for newKeyword in newKeywordBase*/ {
                 //self.debugInfo.push_str(&format!("{:?}; {:?}", keyword.typedType, newKeyword.childKeywords));
@@ -1722,7 +1721,7 @@ impl <'a> App <'a> {
         let baseToken = tokenSet[tokenSet.len() - 1].clone();
         let mut currentElement = OutlineKeyword::TryFindKeyword(
             &self.codeTabs.tabs[self.lastTab].outlineKeywords,
-            tokenSet.pop().unwrap(),
+            tokenSet.pop().unwrap_or(String::new()),
         );
         if let Some(set) = &currentElement {
             let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
@@ -1763,14 +1762,6 @@ impl <'a> App <'a> {
 
         let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
         for (i, var) in validKeywords.iter().enumerate() {
-            /*
-            if !var.scope.is_empty() {  // matches!(var.kwType, OutlineType::Function) {
-                self.debugInfo.push('(');
-                self.debugInfo.push_str(var.keyword.as_str());
-                //self.debugInfo.push('/');
-                //self.debugInfo.push_str(&format!("{:?}", var.scope));
-                self.debugInfo.push(')');
-            }  // */
             let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
             if value < closest.0 {
                 closest = (value, vec![var.keyword.clone()], i);
@@ -1889,12 +1880,6 @@ impl <'a> App <'a> {
             ]),
         ];
 
-        /*let mut colorSettingsBlock = Block::bordered()
-            .border_set(border::THICK);
-        if self.currentMenuSettingBox == 0 {
-            colorSettingsBlock = colorSettingsBlock.light_blue();
-        }*/
-
         {
             let window = app.GetWindowReferenceMut(String::from("ColorSetting"));
             if self.currentMenuSettingBox == 0 {
@@ -1932,12 +1917,6 @@ impl <'a> App <'a> {
                 color![" * The preferred modifier key for things like ctrl/cmd 'c'", BrightWhite, Dim, Italic]
             ]),
         ];
-
-        /*let mut colorSettingsBlock = Block::bordered()
-            .border_set(border::THICK);
-        if self.currentMenuSettingBox == 1 {
-            colorSettingsBlock = colorSettingsBlock.light_blue();
-        }*/
 
         {
             let window = app.GetWindowReferenceMut(String::from("KeybindSetting"));
@@ -2030,76 +2009,46 @@ impl <'a> App <'a> {
     }
 
     fn CheckWindowsProject (&mut self, app: &mut TermRender::App) {
-        let terminalSize = app.GetTerminalSize().unwrap();
-
-        /*Paragraph::new(tabText)
-            .block(tabBlock)
-            .render(Rect {
-                x: area.x + 29,
-                y: area.y,
-                width: area.width - 20,
-                height: 3,
-            }, buf);*/
         if app.ContainsWindow(String::from("Tabs")) {
             let window = app.GetWindowReferenceMut(String::from("Tabs"));
             window.Move((30, 0));
-            window.Resize((terminalSize.0 - 29, 1));
+            window.Resize((self.area.width - 29, 1));
         } else {
             let window = TermRender::Window::new(
                 (30, 0), 0,
-                (terminalSize.0 - 29, 1),
+                (self.area.width - 29, 1),
             );
             //window.Bordered();
             app.AddWindow(window, String::from("Tabs"), vec![String::from("Project")]);
         }
 
         // file, tabs, error thingy, code
-        /*
-        Paragraph::new(errorText)
-            .block(errorBlock)
-            .render(Rect {
-                x: area.x,
-                y: area.y + area.height - 9,
-                width: area.width,
-                height: 8,
-            }, buf);
-         */
         if app.ContainsWindow(String::from("ErrorBar")) {
             let window = app.GetWindowReferenceMut(String::from("ErrorBar"));
             window.Move((
-                0, terminalSize.1  - 9,
+                0, self.area.height - 8,
             ));
-            window.Resize((terminalSize.0, 8));
+            window.Resize((self.area.width, 8));
         } else {
             let mut window = TermRender::Window::new(
-                (0, terminalSize.1 - 9), 0,
-                (terminalSize.0, 8)
+                (0, self.area.height - 8), 0,
+                (self.area.width, 8)
             );
             window.Bordered();
             app.AddWindow(window, String::from("ErrorBar"), vec![String::from("Project")]);
             //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
         }
 
-        /*
-        Paragraph::new("Files")
-                .block(fileBlock)
-                .render(Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: 30,
-                    height: area.height - 8,
-                }, buf);
-         */
         if app.ContainsWindow(String::from("Files")) {
             let window = app.GetWindowReferenceMut(String::from("Files"));
             window.Move((
                 0, 1,
             ));
-            window.Resize((30, terminalSize.1 - 9));
+            window.Resize((30, self.area.height - 8));
         } else {
             let mut window = TermRender::Window::new(
                 (0, 1), 0,
-                (30, terminalSize.1 - 9)
+                (30, self.area.height - 8)
             );
             window.Bordered();
             app.AddWindow(window, String::from("Files"), vec![String::from("Project")]);
@@ -2107,7 +2056,7 @@ impl <'a> App <'a> {
         }
 
         // dealing with the annoying code tabs
-        self.CheckCodeTabs(app, terminalSize);
+        self.CheckCodeTabs(app, (self.area.width, self.area.height));
 
         if app.ChangedWindowLayout() {
             app.PruneByKeywords(
@@ -2138,17 +2087,12 @@ impl <'a> App <'a> {
         // going through all windows and making sure that window exists
         // deleting windows that are no longer open
         for tab in &self.codeTabs.tabs {
-            if names.contains(&tab.name) {
-                /*let window = app.GetWindowReferenceMut(format!("CodeBlock{}", tab.name));
-                window.Move((padding, 3));
-                window.Resize(((terminalSize.0 - shift) / (self.codeTabs.panes.len() as u16 + 1), terminalSize.1 - 11));*/
-                continue;
-            }
+            if names.contains(&tab.name) {  continue;  }
 
             // creating a new window
             let mut window = TermRender::Window::new(
                 (padding, 2), 0,
-                ((terminalSize.0 - shift) / (self.codeTabs.panes.len() as u16 + 1), terminalSize.1 - 11),
+                ((terminalSize.0 - shift) / (self.codeTabs.panes.len() as u16 + 1), terminalSize.1 - 9),
             );
             window.Bordered();
             app.AddWindow(window,
@@ -2158,75 +2102,34 @@ impl <'a> App <'a> {
             );
         }
 
-        // going through all the windows
-        /*let mut windows = vec![];
-        // !!! iterating like this won't work
-        for (tabIndex, name) in names.iter().enumerate() {
-            let tabName = self.codeTabs.tabs[
-                {
-                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
-                }
-                ].name.clone();
-
-            // pruning closed windows
-            if !app.WindowContainsKeyword(*name, &tabName) {
-                windows.push(((*name).clone(), true));
-                continue;
-            }
-            windows.push(((*name).clone(), false));
+        // the cursor information bar
+        if app.ContainsWindow(String::from("CursorInfo")) {
+            let window = app.GetWindowReferenceMut(String::from("CursorInfo"));
+            window.Move((self.area.width - 50, self.area.height));
+            window.Resize((50, 1));
+        } else {
+            let window = TermRender::Window::new(
+                (self.area.width - 50, self.area.height),
+                1, (50, 1)
+            );
+            app.AddWindow(window, String::from("CursorInfo"), vec![String::from("Cursor")]);
         }
-
-        for name in windows {
-            if name.1 {
-                let _ = app.RemoveWindow(name.0);
-                continue;
-            }
-
-            let window = app.GetWindowReferenceMut(name.0);
-            //
-        }*/
-
-        // todo!    check if new code tabs need to be opened/rendered
-        // todo!    finish updating the window based on its position (
-        // and make sure that position is correct based on its true index)
-
-        /*Paragraph::new(codeText)
-            .block(codeBlock)
-            .render(Rect {
-                x: area.x + 29 + (tabIndex * tabSize) as u16,
-                y: area.y + 2,
-                width: tabSize as u16,
-                //width: area.width - 29,
-                height: area.height - 10,
-            }, buf);*/
-        /*
-        if self.codeTabs.tabs.len() > 0 {
-            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), 29);
-
-            for tabIndex in 0..=self.codeTabs.panes.len() {
-                //let area = app.GetWindowArea();
-                self.RenderCodeTab(app, tabIndex, tabSize);
-            }
-        }
-         */
     }
 
     fn CheckWindowsMenu (&mut self, app: &mut TermRender::App) {
-        let terminalSize = app.GetTerminalSize().unwrap();
-
         // settings, info text, whatever else
         match self.menuState {
             MenuState::Welcome => {
                 if app.ContainsWindow(String::from("Welcome")) {
                     let window = app.GetWindowReferenceMut(String::from("Welcome"));
                     window.Move((
-                        terminalSize.0 / 2 - 71/2,
-                        terminalSize.1 / 2 - 10,
+                        self.area.width / 2 - 71/2,
+                        self.area.height / 2 - 10,
                     ));
                     window.Resize((71, 15));
                 } else {
                     let mut window = TermRender::Window::new(
-                        (terminalSize.0 / 2 - 71/2, terminalSize.1 / 2 - 10),
+                        (self.area.width / 2 - 71/2, self.area.height / 2 - 10),
                         0, (71, 15)
                     );
                     window.Bordered();
@@ -2245,11 +2148,11 @@ impl <'a> App <'a> {
                     window.Move((
                         10, 2,
                     ));
-                    window.Resize((terminalSize.0 - 20, 4));
+                    window.Resize((self.area.width - 20, 4));
                 } else {
                     let mut window = TermRender::Window::new(
                         (10, 2), 0,
-                        (terminalSize.0 - 20, 4)
+                        (self.area.width - 20, 4)
                     );
                     window.Bordered();
                     app.AddWindow(window, String::from("ColorSetting"), vec![
@@ -2262,11 +2165,11 @@ impl <'a> App <'a> {
                     window.Move((
                         10, 6,
                     ));
-                    window.Resize((terminalSize.0 - 20, 4));
+                    window.Resize((self.area.width - 20, 4));
                 } else {
                     let mut window = TermRender::Window::new(
                         (10, 6), 0,
-                        (terminalSize.0 - 20, 4)
+                        (self.area.width - 20, 4)
                     );
                     window.Bordered();
                     app.AddWindow(window, String::from("KeybindSetting"), vec![
@@ -2287,16 +2190,14 @@ impl <'a> App <'a> {
     }
 
     fn CheckWindows (&mut self, app: &mut TermRender::App) {
-        let terminalSize = app.GetTerminalSize().unwrap();
-
         if app.ContainsWindow(String::from("CommandLine")) {
             let window = app.GetWindowReferenceMut(String::from("CommandLine"));
-            window.Move((0, terminalSize.1 - 1));
-            window.Resize((terminalSize.0, 1));
+            window.Move((0, self.area.height));
+            window.Resize((self.area.width.saturating_sub(51), 1));
         } else {
             let window = TermRender::Window::new(
-                (0, terminalSize.1 - 1), 0,
-                (terminalSize.0, 1),
+                (0, self.area.height), 0,
+                (self.area.width.saturating_sub(51), 1),
             );
             app.AddWindow(window, String::from("CommandLine"), vec![]);
             //app.UpdateWindowLayoutOrder();

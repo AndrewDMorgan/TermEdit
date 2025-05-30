@@ -1,12 +1,4 @@
 
-/*
-use ratatui::{
-    layout::Rect,
-    style::{Stylize, Modifier},
-    text::{Line, Span},
-};
-*/
-
 use crate::Colors;
 use crate::TermRender::*;
 use crate::LuaScripts;
@@ -206,12 +198,6 @@ pub mod Edits {
 // only access the inner value explicitly editing the value, then return ownership
 // otherwise the element will block usage of the main item in the codeTab, which
 // would block the main thread (aka not good)
-/*type ScopeHandle = std::thread::JoinHandle< Box <dyn Fn(
-        std::sync::Arc < parking_lot::RwLock <ScopeNode>>,
-        std::sync::Arc < parking_lot::RwLock <Vec <Vec <usize>>>>,
-        std::sync::Arc < parking_lot::RwLock <Vec <Vec <usize>>>>,
-        crossbeam::channel::Sender <bool>,
-) -> () >>;*/
 
 // this isn't nearly as long as I thought it would be lol (too lazy to inline it)
 type ScopeHandle = std::thread::JoinHandle <()>;
@@ -1391,26 +1377,38 @@ impl CodeTab {
         }
     }
 
-    pub fn HighlightText (text: Colored, charIndexStart: usize, tokenCharCount: usize, highlight: (usize, usize)) -> Vec <Colored> {
+    pub fn CheckUnderline (mut text: Vec <Colored>, (lineNumber, cursor): (usize, usize)) -> Vec <Colored> {
+        if lineNumber != cursor {  return text;  }
+        for token in text.iter_mut() {
+            *token = color![token, Underline]
+        } text
+    }
+
+    pub fn HighlightText (text: Colored,
+                          charIndexStart: usize,
+                          tokenCharCount: usize,
+                          highlight: (usize, usize),
+                          lineInfo: (usize, usize)
+    ) -> Vec <Colored> {
         // checking if the highlight range falls within the word
         if highlight.0 < charIndexStart+tokenCharCount && highlight.1 > charIndexStart {
             return
                 if highlight.0 <= charIndexStart && highlight.1 >= charIndexStart + tokenCharCount {
-                    vec![
+                    CodeTab::CheckUnderline(vec![
                         color![text, OnBrightBlack],
-                    ]  // full token
+                    ], lineInfo)  // full token
                 } else if highlight.0 <= charIndexStart && highlight.1 >= charIndexStart {  // if highlight.1 was greater, the previous statement would have caught it
                     let split = text.Split(highlight.1 - charIndexStart);
-                    vec![color![split.0, OnBrightBlack], split.1]  // highlight(start -> point) + point -> end
+                    CodeTab::CheckUnderline(vec![color![split.0, OnBrightBlack], split.1], lineInfo)  // highlight(start -> point) + point -> end
                 } else if highlight.0 > charIndexStart && highlight.1 >= charIndexStart {
                     let split = text.Split(highlight.0 - charIndexStart);
-                    vec![split.0, color![split.1, OnBrightBlack]]  // start -> point + highlight(point -> end)
+                    CodeTab::CheckUnderline(vec![split.0, color![split.1, OnBrightBlack]], lineInfo)  // start -> point + highlight(point -> end)
                 } else {
                     let split = text.Split(highlight.0 - charIndexStart);
                     let split2 = split.1.Split(highlight.1 - highlight.0 - charIndexStart);
-                    vec![split.0, color![split2.0, OnBrightBlack], split2.1]  // start -> point1 + highlight(point1 -> point2) + point2 -> end
+                    CodeTab::CheckUnderline(vec![split.0, color![split2.0, OnBrightBlack], split2.1], lineInfo)  // start -> point1 + highlight(point1 -> point2) + point2 -> end
             };
-        } vec![text]  // not a valid highlight
+        } CodeTab::CheckUnderline(vec![text], lineInfo)  // not a valid highlight
     }
 
     pub fn GetScrolledText (&mut self, area: &Rect,
@@ -1436,7 +1434,8 @@ impl CodeTab {
         // iterating over every line one by one
         //    -- (maybe change this to a buffer that can be shifted as it's moved around)
         let mut i = 0;
-        for lineNumber in scroll..(scroll + area.height as usize - 12) {
+        // the magic number of 11 is the size of the code-tab window (kinda ugly having it here but I'm too lazy to move it)
+        for lineNumber in scroll..(scroll + area.height as usize - 11) {
             if lineNumber >= self.lines.len() {
                 let mut text = " ".repeat(maxLineNumberSize - 2);
                 text.push_str("~");
@@ -1495,16 +1494,17 @@ impl CodeTab {
                 let left = self.GenerateColor(&token.token, token.text[0..middle].to_string(), colorMode);
                 let right = self.GenerateColor(&token.token, token.text[middle..].to_string(), colorMode);
 
-                lineText.append(&mut CodeTab::HighlightText(left, *charIndex, middle, highlighted));
+                lineText.append(&mut CodeTab::HighlightText(left, *charIndex, middle, highlighted, (lineNumber, self.cursor.0)));
                 lineText.push(color!["|"]);
-                lineText.append(&mut CodeTab::HighlightText(right, *charIndex+middle, tokenCharCount-middle, highlighted));
+                lineText.append(&mut CodeTab::HighlightText(right, *charIndex+middle, tokenCharCount-middle, highlighted, (lineNumber, self.cursor.0)));
                 *charIndex += 1;
             } else {
                 lineText.append(&mut CodeTab::HighlightText(
                     self.GenerateColor(&token.token, token.text.clone(), colorMode),
                     *charIndex,
                     tokenCharCount,
-                    highlighted
+                    highlighted,
+                    (lineNumber, self.cursor.0),
                 ));
             }
 

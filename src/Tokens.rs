@@ -685,13 +685,6 @@ pub async fn GenerateTokens (
     }
     drop(tokenFlagsRead);  // dropped the read
 
-    // moved to the generating scopes routine
-    /*HandleDefinitions(&tokens,
-                      lineTokenFlags,
-                      outline,
-                      &text, lineNumber
-    );*/
-    
     tokens
 }
 
@@ -721,7 +714,7 @@ impl ScopeNode {
             return self;
         }
 
-        // this crashed, figure it out at some point......
+        //  !!! *error* this crashed, figure it out at some point...... (ya........)
         self.children[index.unwrap()].GetNode(scope)
     }
 

@@ -535,19 +535,6 @@ impl Colored {
 
         text.push_str(&self.text);
         (text, self.text.len())
-
-        /*let mut color = String::new();
-        if self.mods.is_empty() && self.color.is_some() {
-            color = format!("\x1b[{}m", *col);
-        } else if self.color.is_some() {
-            color = format!("\x1b[{};{}m", *col, self.mods.join(";"));
-        }
-
-        if let Some(bgCol) = &self.bgColor {
-            color.push_str(&format!(
-                "\x1b[{}m", bgCol  //, self.mods.join(";")  can't have modifiers on backgrounds?
-            ));
-        }*/
     }
 
     pub fn GetSize (&self) -> usize {
@@ -582,11 +569,6 @@ impl Span {
         let mut total = String::new();
         let mut totalSize = 0;
         for colored in &self.line {
-            /*if lastColored != colored.mods {
-                lastColored = colored.mods.clone();
-                total.push_str(CLEAR);
-                total.push_str(&colored.mods.concat());
-            }*/
             let (text, size) = colored.GetText(&mut lastColored);
             total.push_str(&text);
             totalSize += size;
@@ -714,20 +696,7 @@ impl Window {
         self.updated = vec![false; self.size.1 as usize];
         self.UpdateAll();
     }
-
-    // Updates the colorized rendering of the Spans for all lines
-    // Each line is only re-computed if a change was indicated
-    /*pub fn UpdateRender (&mut self) {
-        for index in 0..self.updated.len() {
-            if !self.updated[index] {  continue;  }
-            self.updated[index] = false;
-
-            let (text, size) = self.lines[index].0.Join();
-            self.lines[index].1 = text;
-            self.lines[index].2 = size;
-        }
-    }*/
-
+    
     // Clamps a string to a maximum length of visible UTF-8 characters while preserving escape codes
     fn ClampStringVisibleUTF_8 (text: &String, maxLength: usize) -> String {
         let mut accumulative: String = String::new();
@@ -1038,8 +1007,6 @@ impl Window {
 // honestly this could be removed.... the x and y fields are never used
 #[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Rect {
-    pub x: u16,
-    pub y: u16,
     pub width: u16,
     pub height: u16,
 }
@@ -1218,8 +1185,6 @@ impl App {
         }
 
         self.area = Rect {
-            x: 0,
-            y: 0,
             width: size.0,
             height: size.1,
         };
@@ -1234,16 +1199,7 @@ impl App {
         }
         if !updated {  return 0;  }  // Ok(());  }
 
-        // sorting the windows based on the horizontal position
-        /*let mut referenceArray = vec![];
-        for keyPair in &self.windowReferences {
-            referenceArray.push(keyPair.1);
-        }
-
-        if self.changeWindowLayout {
-            referenceArray.sort_by_key( |index| self.activeWindows[**index].0.position.0 );
-            self.changeWindowLayout = false;
-        }*/
+        // sorting the windows based on the horizontal position (replaced by the sorting on the background thread)
 
         // stores the draw calls
         let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
