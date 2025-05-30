@@ -191,6 +191,7 @@ impl FileBrowser {
             // todo
         }
     }
+
     pub fn MoveCursorUp (&mut self) {
         if matches!(self.fileTab, FileTabs::Outline) {
             self.outlineCursor = self.outlineCursor.saturating_sub(1);  // simple
@@ -1408,7 +1409,7 @@ impl <'a> App <'a> {
             matches!(self.appState, AppState::CommandPrompt) && matches!(self.tabState, TabState::Tabs)
         );
         let tabText = vec![
-            TermRender::Span::FromTokens(coloredTabText)
+            Span::FromTokens(coloredTabText)
         ];
 
         {
@@ -1462,7 +1463,7 @@ impl <'a> App <'a> {
                 if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
             }
         ].name.clone();
-        let codeBlockTitle = TermRender::Span::FromTokens(vec![
+        let codeBlockTitle = Span::FromTokens(vec![
             color![" ", BrightWhite],
             color![name, Bold],
             color![" ", BrightWhite],
@@ -1547,9 +1548,9 @@ impl <'a> App <'a> {
         }
     }
 
-    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <TermRender::Span>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
+    fn GetFilebrowserOutline (&self, fileStringText: &mut Vec <Span>, scopeIndex: &Vec <usize>, scope: &std::sync::Arc <parking_lot::RwLock<ScopeNode>>) {
         fileStringText.push(
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 {
                     color![self.RenderOutlinePartOne(scopeIndex), BrightWhite]
                 },
@@ -1586,7 +1587,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn RenderFilebrowserOutline (&mut self, area: &TermRender::Rect) -> Vec <TermRender::Span> {
+    fn RenderFilebrowserOutline (&mut self, area: &TermRender::Rect) -> Vec <Span> {
         let mut fileStringText = vec!();
         let mut scopes: Vec<usize> = vec![];
 
@@ -1594,35 +1595,39 @@ impl <'a> App <'a> {
         let mut scrolled = 0;
         let scrollTo = self.fileBrowser.outlineCursor.saturating_sub(((area.height - 8) / 2) as usize);
 
-        for scopeIndex in self.codeTabs.tabs[self.lastTab].scopeJumps.read().iter() {
-            let mut valid = true;
-            for i in 0..scopes.len() {
-                let slice = scopes.get(0..(scopes.len() - i));
-                if slice.unwrap_or(&[]) != *scopeIndex {  continue;  }
-                valid = false;
-                break;
-            }
-            if !valid || scopeIndex.is_empty() {  continue;  }
-            scopes.clear();
-
-            {
-                let scopesWrite = &mut self.codeTabs.tabs[self.lastTab].scopes.write();
-                //let mut scope = &self.codeTabs.tabs[self.lastTab].scopes;
-                for index in scopeIndex {
-                    scopes.push(*index);
-                    if *index >= scopesWrite.children.len() {  continue;  }
-                    **scopesWrite = scopesWrite.children[*index].clone();
-                }  // the write is naturally dropped
-            }
-
-            scrolled += 1;
-            self.HandleScrolled(scrolled, &mut newScroll, scopeIndex);
-
-            if scrolled < scrollTo { continue; }
-            self.GetFilebrowserOutline(&mut fileStringText, scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
+        let jumps = self.codeTabs.tabs[self.lastTab].scopeJumps.read();
+        for scopeIndex in jumps.iter() {
+            self.RenderInnerFilebrowserRender(&mut scopes, scopeIndex, &mut scrolled, scrollTo, &mut newScroll, &mut fileStringText);
         }
         self.fileBrowser.outlineCursor = newScroll;
-        fileStringText  //Text::from(fileStringText)
+        fileStringText
+    }
+    
+    fn RenderInnerFilebrowserRender (&self, scopes: &mut Vec <usize>, scopeIndex: &Vec <usize>, scrolled: &mut usize, scrollTo: usize, newScroll: &mut usize, fileStringText: &mut Vec <Span>) {
+        let mut valid = true;
+        for i in 0..scopes.len() {
+            let slice = scopes.get(0..(scopes.len() - i));
+            if slice.unwrap_or(&[]) != *scopeIndex {  continue;  }
+            valid = false;
+            break;
+        }
+        if !valid || scopeIndex.is_empty() {  return;  }
+        scopes.clear();
+
+        {
+            let scopesWrite = &mut self.codeTabs.tabs[self.lastTab].scopes.write();
+            for index in scopeIndex {
+                scopes.push(*index);
+                if *index >= scopesWrite.children.len() {  continue;  }
+                **scopesWrite = scopesWrite.children[*index].clone();
+            }  // the write is naturally dropped
+        }
+
+        *scrolled += 1;
+        self.HandleScrolled(*scrolled, newScroll, scopeIndex);
+
+        if *scrolled < scrollTo { return; }
+        self.GetFilebrowserOutline(fileStringText, scopeIndex, &self.codeTabs.tabs[self.lastTab].scopes);
     }
 
     // ============================================= files =============================================
@@ -1634,7 +1639,7 @@ impl <'a> App <'a> {
         } else {
             //let mut allFiles = vec!();
             for (index, file) in self.fileBrowser.files.iter().enumerate() {
-                fileText.push(TermRender::Span::FromTokens(vec![
+                fileText.push(Span::FromTokens(vec![
                     {
                         if index == self.fileBrowser.fileCursor {
                             color![file, BrightWhite, Underline]
@@ -1721,7 +1726,7 @@ impl <'a> App <'a> {
         let baseToken = tokenSet[tokenSet.len() - 1].clone();
         let mut currentElement = OutlineKeyword::TryFindKeyword(
             &self.codeTabs.tabs[self.lastTab].outlineKeywords,
-            tokenSet.pop().unwrap_or(String::new()),
+            tokenSet.pop().unwrap_or_default(),
         );
         if let Some(set) = &currentElement {
             let newScope = self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
@@ -1817,13 +1822,13 @@ impl <'a> App <'a> {
         self.UpdateRenderErrorBar();
 
         let errorText = vec![
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color![format!(": {}", self.suggested), Italic]
-                    .Colorize(self.colorMode.colorBindings.suggestion.clone()),
+                    .Colorize(self.colorMode.colorBindings.suggestion),
             ]),
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color![format!("Debug: {}", self.debugInfo), Bold]
-                    .Colorize(self.colorMode.colorBindings.errorCol.clone()),
+                    .Colorize(self.colorMode.colorBindings.errorCol),
                 //format!(" ; {:?}", scope).white()
             ]),
         ];
@@ -1845,7 +1850,7 @@ impl <'a> App <'a> {
         // ============================================= Color Settings =============================================
         // the color mode setting
         let settingsText = vec![
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color!["Color Mode: [", BrightWhite],
                 {
                     if matches!(self.colorMode.colorType, ColorTypes::Basic) {
@@ -1874,7 +1879,7 @@ impl <'a> App <'a> {
                 },
                 color!["]", BrightWhite],
             ]),
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color![" * Not all terminals accept all color modes. If the colors are messed up, try lowering this",
                     White, Dim, Italic]
             ]),
@@ -1893,7 +1898,7 @@ impl <'a> App <'a> {
         // ============================================= Key Settings =============================================
         // the color mode setting
         let settingsText = vec![
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color!["Preferred Modifier Key: [", BrightWhite],
                 {
                     if matches!(self.preferredCommandKeybind, KeyModifiers::Command) {
@@ -1913,7 +1918,7 @@ impl <'a> App <'a> {
                 },
                 color!["]", BrightWhite],
             ]),
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color![" * The preferred modifier key for things like ctrl/cmd 'c'", BrightWhite, Dim, Italic]
             ]),
         ];
@@ -1951,50 +1956,50 @@ impl <'a> App <'a> {
                     let window = app.GetWindowReferenceMut(String::from("Welcome"));
 
                     let welcomeText = vec![
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color!["\\\\            //   .==  ||      _===_    _===_   ||\\    /||   .==  ||",
                             Red, Bold],//.red().bold(),
                         ]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color![" \\\\          //   ||    ||     //   \\\\  //   \\\\  ||\\\\  //||  //    ||",
                             Red, Bold],//.red().bold(),
                         ]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color!["  \\\\  //\\\\  //    ||--  ||     ||       ||   ||  || \\\\// ||  ||--    ",
                             Red, Bold],//.red().bold(),
                         ]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color!["   \\\\//  \\\\//     \\\\==  ||===  \\\\__=//  \\\\___//  ||      ||  \\\\==  []",
                             Red, Bold],//.red().bold(),
                         ]),  // 71, 15   35.5
-                        TermRender::Span::FromTokens(vec![]),
-                        TermRender::Span::FromTokens(vec![]),
-                        TermRender::Span::FromTokens(vec![  // 43/2 = 35.5 - 21.5 = 14
+                        Span::FromTokens(vec![]),
+                        Span::FromTokens(vec![]),
+                        Span::FromTokens(vec![  // 43/2 = 35.5 - 21.5 = 14
                             color!["              The command prompt is bellow (Bottom Left):",
                             White, Bold],//.white().bold()
                         ]),
-                        TermRender::Span::FromTokens(vec![]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![]),
+                        Span::FromTokens(vec![
                             color!["                Press: <", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["q", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color!["> followed by <", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["return", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color!["> to quit", BrightWhite, Bold, Dim],//.white().bold().dim(),    39/2 = 35.5 - 19.5 = 16
                         ]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color!["           Type ", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["\"open\"", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color![" followed by the path to the directory", BrightWhite, Bold, Dim],//.white().bold().dim(),
                         ]),  // 49 / 2= 35.5 - 24.5 = 11
-                        TermRender::Span::FromTokens(vec![]),
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![]),
+                        Span::FromTokens(vec![
                             color!["          Type ", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["\"settings\"", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().underlined().italic(),
                             color![" to open settings ( <", BrightWhite, Bold, Dim],//.white().bold().dim(),
                             color!["esc", BrightWhite, Bold, Dim, Italic, Underline],//.white().bold().dim().italic().underlined(),
                             color!["> to leave )", BrightWhite, Bold, Dim],//.white().bold().dim(),
                         ]),  // 51 / 2 = 35.5 - 25.5 = 10
-                        TermRender::Span::FromTokens(vec![
+                        Span::FromTokens(vec![
                             color![" *If you see this, type -light to enter light mode; -dark to return*", Black, Italic],//.white().bold().dim(),
                         ]),
                         //Line::from(vec![
@@ -2220,7 +2225,7 @@ impl <'a> App <'a> {
         // rendering the command line is necessary for all states
         // ============================================= Commandline =============================================
         let commandText =
-            TermRender::Span::FromTokens(vec![
+            Span::FromTokens(vec![
                 color!["/", BrightWhite, Bold],//.to_string().white().bold(),
                 color![self.currentCommand, BrightWhite, Italic],//.clone().white().italic(),
                 {

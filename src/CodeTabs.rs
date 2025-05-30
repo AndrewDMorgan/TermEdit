@@ -45,7 +45,7 @@ pub mod Edits {
         tab.cursor = end;
     }
 
-    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &String, luaSyntaxHighlightScripts: &LuaScripts) {
+    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &str, luaSyntaxHighlightScripts: &LuaScripts) {
         let splitText = text.split('\n');
         //let splitLength = splitText.clone().count() - 1;
         for (i, line) in splitText.enumerate() {
@@ -554,8 +554,8 @@ impl CodeTab {
     }
     
     pub fn MoveCursorLeft (&mut self, amount: usize, highlight: bool) {
-        if self.highlighting && !highlight && self.cursor.0 > self.cursorEnd.0 ||
-            self.cursor.1 > self.cursorEnd.1 && !highlight && self.highlighting
+        if !(!self.highlighting || highlight || self.cursor.0 <= self.cursorEnd.0 &&
+            self.cursor.1 <= self.cursorEnd.1)
         {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
@@ -701,8 +701,8 @@ impl CodeTab {
     }
 
     pub fn CursorUp (&mut self, highlight: bool) {
-        if self.highlighting && !highlight && self.cursor.0 > self.cursorEnd.0 ||
-            self.cursor.1 > self.cursorEnd.1 && !highlight && self.highlighting
+        if !(!self.highlighting || highlight || self.cursor.0 <= self.cursorEnd.0 &&
+            self.cursor.1 <= self.cursorEnd.1)
         {
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             self.highlighting = false;
@@ -1114,12 +1114,12 @@ impl CodeTab {
         drop(lineTokenFlagsRead);
         self.lineTokens.write()[lineNumber].clear();
 
-        let ending = self.fileName.split('.').last().unwrap_or("");
+        let ending = self.fileName.split('.').next_back().unwrap_or("");
         let newTokens = GenerateTokens(
                     self.lines[lineNumber].clone(),
-                    ending, &mut self.lineTokenFlags,
+                    ending, &self.lineTokenFlags,
                     lineNumber,
-                    &mut self.outlineKeywords,
+                    &self.outlineKeywords,
                     luaSyntaxHighlightScripts
         ).await;
         // not being given up? crashing here
@@ -1134,7 +1134,7 @@ impl CodeTab {
         let empty = currentFlags.is_empty();
         if (lineNumber < self.lines.len() - 1 && !empty &&
                 previousEnding != currentFlags ||
-                empty && previousEnding.len() > 0) &&
+                empty && !previousEnding.is_empty()) &&
             (
                 recursed < 250 && (
                     containedComment || currentFlags.contains(&LineTokenFlags::Comment)
@@ -1153,164 +1153,146 @@ impl CodeTab {
         match token {
             TokenType::Bracket => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::SquirlyBracket => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Parentheses => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Variable => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Member => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Object => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Function => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Method => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Italic]  // works for now ig
             },
             TokenType::Number => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Logic => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Math => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Assignment => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Endl => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Macro => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Italic, Bold, Underline]
             },
             TokenType::Const => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Italic]
             },
             TokenType::Barrow => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Italic]
             },
             TokenType::Lifetime => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Underline, Bold]
             },
             TokenType::String => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                     )
             },
             TokenType::Comment | TokenType::CommentLong => {
@@ -1318,57 +1300,51 @@ impl CodeTab {
                     text == "error" || text == "condition" ||
                     text == "conditions" || text == "fix" {
                     color![text.Colorize(
-                            colorMode.colorBindings
+                            *colorMode.colorBindings
                                 .syntaxHighlighting
-                                .get(&(&token, &colorMode.colorType))
+                                .get(&(token, &colorMode.colorType))
                                 .expect("Error.... no color found")
-                                .clone()
                         ), Underline]
                 }  // basic but it kinda does stuff idk
                 else {
                     text.Colorize(
-                        colorMode.colorBindings
+                        *colorMode.colorBindings
                             .syntaxHighlighting
-                            .get(&(&token, &colorMode.colorType))
+                            .get(&(token, &colorMode.colorType))
                             .expect("Error.... no color found")
-                            .clone()
                     )
                 }
             },
             TokenType::Null => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Primitive => {
                 text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 )
             },
             TokenType::Keyword => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Bold, Underline]
             },
             TokenType::Unsafe => {
                 color![text.Colorize(
-                    colorMode.colorBindings
+                    *colorMode.colorBindings
                         .syntaxHighlighting
-                        .get(&(&token, &colorMode.colorType))
+                        .get(&(token, &colorMode.colorType))
                         .expect("Error.... no color found")
-                        .clone()
                 ), Italic, Underline, Bold]  // bright black is dark gray? white is gray, bright white is pure white?
             },
             TokenType::Grayed => {
@@ -1414,7 +1390,7 @@ impl CodeTab {
     pub fn GetScrolledText (&mut self, area: &Rect,
                                     editingCode: bool,
                                     colorMode: &Colors::ColorMode,
-                                    suggested: &String,  // the suggested auto-complete (for inline rendering)
+                                    suggested: &str,  // the suggested auto-complete (for inline rendering)
                                     padding: u16,
     ) -> Vec <Span> {
         self.UpdateScrollingRender(area);
@@ -1438,7 +1414,7 @@ impl CodeTab {
         for lineNumber in scroll..(scroll + area.height as usize - 11) {
             if lineNumber >= self.lines.len() {
                 let mut text = " ".repeat(maxLineNumberSize - 2);
-                text.push_str("~");
+                text.push('~');
                 tabRender.push(Span::FromTokens(vec![
                     color![text, Bold, Blue]
                 ]));
@@ -1478,7 +1454,15 @@ impl CodeTab {
         } tabRender
     }
 
-    fn RenderSlice (&self, charIndex: &mut usize, lineText: &mut Vec <Colored>, lineNumber: usize, colorMode: &Colors::ColorMode, editingCode: bool, width: usize, suggested: &String) {
+    fn RenderSlice (&self,
+                    charIndex: &mut usize,
+                    lineText: &mut Vec <Colored>,
+                    lineNumber: usize,
+                    colorMode: &Colors::ColorMode,
+                    editingCode: bool,
+                    width: usize,
+                    suggested: &str
+    ) {
         let highlighted = self.CheckHighlight(lineNumber);
         let tokensRead = self.lineTokens.read();
         for token in &tokensRead[lineNumber] {
@@ -1737,13 +1721,13 @@ impl CodeTabs {
         (area.width as usize - paddingLeft) / total
     }
 
-    pub fn GetScrolledText <'a> (&mut self,
-                                 area: &Rect,
-                                 editingCode: bool,
-                                 colorMode: &Colors::ColorMode,
-                                 suggested: &'a String,
-                                 tabIndex: usize,
-                                 padding: u16,
+    pub fn GetScrolledText (&mut self,
+                            area: &Rect,
+                            editingCode: bool,
+                            colorMode: &Colors::ColorMode,
+                            suggested: &str,
+                            tabIndex: usize,
+                            padding: u16,
     ) -> Vec <Span> {
         self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested, padding)
     }
