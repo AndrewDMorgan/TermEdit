@@ -159,6 +159,21 @@ use crate::App as MainApp;
 use crate::CodeTabs::CodeTab;
 use crate::eventHandler::{KeyParser, MouseEvent};
 
+static VALID_EXTENSIONS: [&str; 10] = [
+    "txt",
+    "rs",
+    "py",
+    "cpp",
+    "hpp",
+    "c",
+    "h",
+    "lua",
+    "toml",
+    "json",
+];
+
+static MAX_FILE_EMBEDDING_DEPTH: usize = 4usize;
+
 
 // implementing the main rendering logic for the filebrowser and scopes in this file
 impl <'a> MainApp <'a> {
@@ -372,6 +387,7 @@ impl <'a> MainApp <'a> {
         tab.name = fileInfo.name.clone();
 
         tab.fileName = fileInfo.name.clone();
+        tab.path = fileInfo.path.clone();
 
         tab.lineTokens.write().clear();
         let ending = tab.fileName.split('.').next_back().unwrap_or("");
@@ -520,20 +536,6 @@ impl Default for FileBrowser {
     }
 }
 
-static VALID_EXTENSIONS: [&str; 9] = [
-    "txt",
-    "rs",
-    "py",
-    "cpp",
-    "hpp",
-    "c",
-    "h",
-    "lua",
-    "toml",
-];
-
-static MAX_FILE_EMBEDDING_DEPTH: usize = 4usize;
-
 // manages the files for a given project
 // provides an outline and means for loading files
 impl FileBrowser {
@@ -609,40 +611,39 @@ impl FileBrowser {
 
     pub fn LoadFilePathToTree (pathNode: &mut FilePathNode, pathInput: &str, depth: usize) -> io::Result <()> {
         if depth > MAX_FILE_EMBEDDING_DEPTH {  return Ok(());  }
-        if let Ok(paths) = std::fs::read_dir(pathInput) {
-            pathNode.pathName = pathInput.to_owned();
-            for pathResult in paths {
-                let path = pathResult?;
-                let metaData = path.file_type()?;
-                if metaData.is_file() {
-                    let name = path.file_name().to_str().unwrap_or("").to_string();
-
-                    // so it doesn't try and load invalid files
-                    if !VALID_EXTENSIONS.contains(&name.split(".").last().unwrap_or("")) {  continue;  }
-
-                    pathNode.dirFiles.push(name.clone());
-                    pathNode.allItems.push((name, FileType::File));
-                    continue;
-                } else if !metaData.is_dir() {  continue;  }
-
+        let paths = std::fs::read_dir(pathInput)?;
+        pathNode.pathName = pathInput.to_owned();
+        for pathResult in paths {
+            let path = pathResult?;
+            let metaData = path.file_type()?;
+            if metaData.is_file() {
                 let name = path.file_name().to_str().unwrap_or("").to_string();
-                let newPath =
-                    if depth == 0 {  format!("{}{}", pathInput, name)  }
-                    else {  format!("{}/{}", pathInput, name)  };
-                // generating the new path
-                let mut newPathNode = FilePathNode::default();
-                FileBrowser::LoadFilePathToTree(
-                    &mut newPathNode,
-                    &newPath,
-                    depth + 1
-                )?;
-                pathNode.paths.push(newPathNode);
 
-                // adding the directory
-                pathNode.allItems.push((name, FileType::Directory));
-            } return Ok(());
-        }
-        Err(io::Error::new(io::ErrorKind::NotFound, "Failed to find directory"))
+                // so it doesn't try and load invalid files
+                if !VALID_EXTENSIONS.contains(&name.split(".").last().unwrap_or("")) {  continue;  }
+
+                pathNode.dirFiles.push(name.clone());
+                pathNode.allItems.push((name, FileType::File));
+                continue;
+            } else if !metaData.is_dir() {  continue;  }
+
+            let name = path.file_name().to_str().unwrap_or("").to_string();
+            let newPath =
+                if depth == 0 {  format!("{}{}", pathInput, name)  }
+                else {  format!("{}/{}", pathInput, name)  };
+            // generating the new path
+            let mut newPathNode = FilePathNode::default();
+            if name == *"src" {  newPathNode.collapsed = false;  }
+            FileBrowser::LoadFilePathToTree(
+                &mut newPathNode,
+                &newPath,
+                depth + 1
+            )?;
+            pathNode.paths.push(newPathNode);
+
+            // adding the directory
+            pathNode.allItems.push((name, FileType::Directory));
+        } Ok(())
     }
 
     pub fn MoveCursorDown (&mut self, outline: &[Vec<usize>], _rootNode: &ScopeNode) {

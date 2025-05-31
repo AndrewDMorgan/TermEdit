@@ -234,6 +234,9 @@ pub struct CodeTab {
     pub lineTokenFlags: std::sync::Arc <parking_lot::RwLock <Vec <Vec < Vec <LineTokenFlags>>>>>,
 
     pub scopeGenerationHandles: Vec <(ScopeHandle, crossbeam::channel::Receiver <bool>)>,
+
+    pub saved: bool,
+    pub path: String,
 }
 
 impl CodeTab {
@@ -434,15 +437,16 @@ impl CodeTab {
         }
     }
 
-    pub fn Save (&self) {
+    pub fn Save (&mut self) {
+        self.saved = true;
         let mut fileContents = String::new();
         for line in &self.lines {
             fileContents.push_str(line.as_str());
             fileContents.push('\n');
         }
         fileContents.pop();  // popping the final \n so it doesn't gradually expand over time
-        
-        std::fs::write(&self.fileName, fileContents).expect("Unable to write file");
+
+        std::fs::write(&self.path, fileContents).expect("Unable to write file");
     }
 
     pub fn MoveCursorLeftToken (&mut self) {
@@ -1101,6 +1105,7 @@ impl CodeTab {
                          recursed: usize,
                          luaSyntaxHighlightScripts: &LuaScripts
     ) {
+        self.saved = false;
         if lineNumber >= self.lines.len() {  return;  }
         let lineTokenFlagsRead = self.lineTokenFlags.read();
         let containedComment =
@@ -1353,8 +1358,8 @@ impl CodeTab {
         }
     }
 
-    pub fn CheckUnderline (mut text: Vec <Colored>, (lineNumber, cursor): (usize, usize)) -> Vec <Colored> {
-        if lineNumber != cursor {  return text;  }
+    pub fn CheckUnderline (mut text: Vec <Colored>, (lineNumber, cursor, editing): (usize, usize, bool)) -> Vec <Colored> {
+        if lineNumber != cursor || !editing {  return text;  }
         for token in text.iter_mut() {
             *token = color![token, Underline]
         } text
@@ -1364,7 +1369,7 @@ impl CodeTab {
                           charIndexStart: usize,
                           tokenCharCount: usize,
                           highlight: (usize, usize),
-                          lineInfo: (usize, usize)
+                          lineInfo: (usize, usize, bool)
     ) -> Vec <Colored> {
         // checking if the highlight range falls within the word
         if highlight.0 < charIndexStart+tokenCharCount && highlight.1 > charIndexStart {
@@ -1475,12 +1480,28 @@ impl CodeTab {
                self.cursor.1 < *charIndex+tokenCharCount
             {
                 let middle = self.cursor.1 - *charIndex;
-                let left = self.GenerateColor(&token.token, token.text[0..middle].to_string(), colorMode);
-                let right = self.GenerateColor(&token.token, token.text[middle..].to_string(), colorMode);
+                let left = self.GenerateColor(&token.token,
+                                                       token.text[0..middle].to_string(),
+                                                       colorMode
+                );
+                let right = self.GenerateColor(&token.token,
+                                                        token.text[middle..].to_string(),
+                                                        colorMode
+                );
 
-                lineText.append(&mut CodeTab::HighlightText(left, *charIndex, middle, highlighted, (lineNumber, self.cursor.0)));
+                lineText.append(&mut CodeTab::HighlightText(left,
+                                                            *charIndex,
+                                                            middle,
+                                                            highlighted,
+                                                            (lineNumber, self.cursor.0, editingCode)
+                ));
                 lineText.push(color!["|"]);
-                lineText.append(&mut CodeTab::HighlightText(right, *charIndex+middle, tokenCharCount-middle, highlighted, (lineNumber, self.cursor.0)));
+                lineText.append(&mut CodeTab::HighlightText(right,
+                                                            *charIndex+middle,
+                                                            tokenCharCount-middle,
+                                                            highlighted,
+                                                            (lineNumber, self.cursor.0, editingCode)
+                ));
                 *charIndex += 1;
             } else {
                 lineText.append(&mut CodeTab::HighlightText(
@@ -1488,7 +1509,7 @@ impl CodeTab {
                     *charIndex,
                     tokenCharCount,
                     highlighted,
-                    (lineNumber, self.cursor.0),
+                    (lineNumber, self.cursor.0, editingCode),
                 ));
             }
 
@@ -1653,6 +1674,8 @@ impl Default for CodeTab {
              outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
              lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
              scopeGenerationHandles: vec!(),
+             saved: true,
+             path: String::new(),
         }
     }
 }
@@ -1769,63 +1792,77 @@ impl CodeTabs {
         );
     }
 
+    fn GetSavedText (&self, index: usize) -> Colored {
+        if self.tabs[index].saved {
+            color![""]
+        } else {
+            color!["*", Red, Bold, Blink]
+        }
+    }
+
     pub fn GetColoredNames (&self, onTabs: bool) -> Vec <Colored> {
         let mut colored = vec!();
 
         if onTabs {
             for (index, tab) in self.tabFileNames.iter().enumerate() {
+                let savedText = self.GetSavedText(index);
                 if index == self.currentTab {
                     colored.push(
-                        color!(
+                        color![
                             format!(" ({}) ", index + 1),
                             BrightYellow,
                             Bold,
                             OnBlue,
                             Underline
-                        )
+                        ]
                     );
                     colored.push(
-                        color!(tab, White, Italic, OnBlue, Underline)
+                        color![tab, White, Italic, OnBlue, Underline]
                     );
+                    colored.push(color![savedText.clone(), OnBlue, Underline]);
                     colored.push(
-                        color!(" |", White, Bold, OnBlue, Underline)
+                        color![" |", White, Bold, OnBlue, Underline]
                     );
                     continue;
                 }
                 colored.push(
-                    color!(format!(" ({}) ", index + 1), BrightYellow, Bold, Underline)
+                    color![format!(" ({}) ", index + 1), BrightYellow, Bold, Underline]
                 );
                 colored.push(
-                    color!(tab, White, Italic, Underline)
+                    color![tab, White, Italic, Underline]
                 );
+                colored.push(color![savedText.clone(), Underline]);
                 colored.push(
-                    color!(" |", White, Bold, Underline)
+                    color![" |", White, Bold, Underline]
                 );
             }
             return colored;
         }
 
         for (index, tab) in self.tabFileNames.iter().enumerate() {
+            let savedText = self.GetSavedText(index);
             if index == self.currentTab {
                 colored.push(
-                    color!(format!(" ({}) ", index + 1), BrightYellow, Bold, OnBrightBlack)
+                    color![format!(" ({}) ", index + 1), BrightYellow, Bold, OnBrightBlack]
                 );
                 colored.push(
-                    color!(tab, White, Italic, OnBrightBlack)
+                    color![tab, White, Italic, OnBrightBlack]
                 );
+                colored.push(color![savedText.clone(), OnBrightBlack]);
                 colored.push(
-                    color!(" |", White, Bold, OnBrightBlack)
+                    color![" |", White, Bold, OnBrightBlack]
                 );
                 continue;
             }
             colored.push(
-                color!(format!(" ({}) ", index + 1), BrightYellow, Bold)
+                color![format!(" ({}) ", index + 1), BrightYellow, Bold]
             );
             colored.push(
-                color!(tab, White, Italic)
+                color![tab, White, Italic]
             );
+            colored.push(savedText.clone());
             colored.push(
-                color!(" |", White, Bold)
+                color![" |", White, Bold]
             );
         }
 
@@ -1868,6 +1905,8 @@ impl Default for CodeTabs {
                     outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
                     lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
                     scopeGenerationHandles: vec!(),
+                    saved: true,
+                    path: String::new(),
                 }
 
             ],  // put a tab here or something idk

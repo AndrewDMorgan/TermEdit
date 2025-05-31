@@ -129,6 +129,11 @@ impl <'a> App <'a> {
             Languages::Python,
             "assets/pythonSyntaxHighlighting.lua"
         );
+        load_lua_script!(
+            self.luaSyntaxHighlightScripts,
+            Languages::Toml,
+            "assets/tomlSyntaxHighlighting.lua"
+        );
 
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
@@ -157,8 +162,10 @@ impl <'a> App <'a> {
 
             buffer.write().fill(0);
 
+            self.codeTabs.CheckScopeThreads();  // no sure how this went missing....
+
             // rendering (will be more performant once the new framework is added)
-            let updates = self.RenderFrame(app);
+            let _updates = self.RenderFrame(app);
 
             let termSize = app.GetTerminalSize()?;
             self.area = TermRender::Rect {
@@ -352,6 +359,7 @@ impl <'a> App <'a> {
         let mut sizeCounted = 29usize;
         for (index, tab) in self.codeTabs.tabFileNames.iter().enumerate() {
             sizeCounted += 6 + (index + 1).to_string().len() + tab.len();
+            if !self.codeTabs.tabs[index].saved {  sizeCounted += 1;  }
             if sizeCounted >= event.position.0 as usize {
                 if events.ContainsMouseModifier(KeyModifiers::Shift) {
                     self.codeTabs.panes.push(index);
@@ -653,7 +661,7 @@ impl <'a> App <'a> {
             }
         }
     }
-    
+
     async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // making sure command + s or other commands aren't being pressed
         if !(keyEvents.ContainsModifier(&KeyModifiers::Command) ||
@@ -1421,6 +1429,7 @@ impl <'a> App <'a> {
 
     fn UpdateRenderErrorBar (&mut self) {
         if self.codeTabs.tabs.is_empty() {  return;  }
+        self.debugInfo = format!("Num jumps: {} | threads: {}", self.codeTabs.tabs[self.lastTab].scopeJumps.read().len(), self.codeTabs.tabs[self.lastTab].scopeGenerationHandles.len());
 
         self.suggested.clear();
         //let mut scope = self.codeTabs.tabs[self.lastTab].scopeJumps[
@@ -1431,9 +1440,6 @@ impl <'a> App <'a> {
         if tokenSet.is_empty() {  return;  }  // token set is correct it seems
 
         let token = tokenSet.remove(0);  // getting the item actively on the cursor
-        // self.debugInfo.push_str("{");
-        // self.debugInfo.push_str(&token);
-        // self.debugInfo.push_str("}");
         let mut currentScope =
             self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                 self.codeTabs.tabs[self.lastTab].cursor.0

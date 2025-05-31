@@ -21,16 +21,18 @@ pub enum Languages {
     Python,
     Null,
     Lua,
+    Toml,
 }
 
-static LANGS: [(Languages, &str); 7] = [
-    (Languages::Cpp , "cpp"),
-    (Languages::Cpp , "hpp"),
-    (Languages::Cpp , "c"),
-    (Languages::Cpp , "h"),
-    (Languages::Rust, "rs" ),
-    (Languages::Python, "py"),
-    (Languages::Lua, "lua"),
+static LANGS: [(Languages, &str); 8] = [
+    (Languages::Cpp   , "cpp" ),
+    (Languages::Cpp   , "hpp" ),
+    (Languages::Cpp   , "c"   ),
+    (Languages::Cpp   , "h"   ),
+    (Languages::Rust  , "rs"  ),
+    (Languages::Python, "py"  ),
+    (Languages::Lua   , "lua" ),
+    (Languages::Toml  , "toml"),
 ];
 
 
