@@ -1430,7 +1430,7 @@ impl CodeTab {
             lineText.push(lineNumberText.Colorizes(colors));
 
             let mut charIndex = 0;
-            let width = area.width - padding - 8;
+            let width = area.width - padding - 2 - maxLineNumberSize as u16;
             self.RenderSlice(&mut charIndex, &mut lineText, lineNumber, colorMode, editingCode, width as usize, suggested);
 
             // the edge

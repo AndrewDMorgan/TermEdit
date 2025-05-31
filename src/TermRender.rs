@@ -531,7 +531,7 @@ impl Colored {
         }
 
         text.push_str(&self.text);
-        (text, self.text.len())
+        (text, self.text.chars().count())
     }
 
     pub fn GetSize (&self) -> usize {
@@ -665,7 +665,7 @@ impl Window {
         self.title = (
             Span::FromTokens(
             vec![title.Colorizes(vec![])]),
-            title.len()
+            title.chars().count()
         );
         self.wasUpdated = false;
         self.updated[0] = false;

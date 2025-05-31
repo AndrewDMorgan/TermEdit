@@ -1,5 +1,152 @@
+/*
+//// the returned file data!!!
+FilePathNode
+{
+    pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/", paths: [FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/proc_macros", paths: [FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/proc_macros/src", paths: [], dirFiles: ["lib.rs"], allItems: [("lib.rs", File)], collapsed: true
+            }
+            ], dirFiles: ["Cargo.toml"], allItems: [("Cargo.toml", File), ("src", Directory)], collapsed: true
+        },
+        FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/target", paths: [FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/target/release", paths: [FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNod
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                }],
+                dirFiles: [], allItems: [(".fingerprint", Directory), ("incremental", Directory), ("examples", Directory), ("deps", Directory), ("build", Directory)], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/target/criterion", paths: [FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                }
+                ], dirFiles: [], allItems: [("reports", Directory)], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/target/debug", paths: [FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                }
+                ], dirFiles: [], allItems: [(".fingerprint", Directory), ("incremental", Directory), ("examples", Directory), ("deps", Directory), ("build", Directory)], collapsed: true
+            }], dirFiles: [], allItems: [("release", Directory), ("criterion", Directory), ("debug", Directory)], collapsed: true
+        }, FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.git", paths: [FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.git/objects", paths: [FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                }],
+                dirFiles: [], allItems: [("pack", Directory), ("info", Directory)], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.git/info", paths: [], dirFiles: [], allItems: [], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.git/hooks", paths: [], dirFiles: [], allItems: [], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.git/refs", paths: [FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                },
+                FilePathNode
+                {
+                    pathName: "", paths: [], dirFiles: [], allItems: [], collapsed: true
+                }],
+                dirFiles: [], allItems: [("heads", Directory), ("tags", Directory)], collapsed: true
+            }],
+            dirFiles: [], allItems: [("objects", Directory), ("info", Directory), ("hooks", Directory), ("refs", Directory)], collapsed: true
+        },
+        FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.vscode", paths: [], dirFiles: [], allItems: [], collapsed: true
+        },
+        FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/assets", paths: [],
+            dirFiles: ["nullSyntaxHighlighting.lua",
+            "luaSyntaxHighlighting.lua", "rustSyntaxHighlighting.lua", "cppSyntaxHighlighting.lua",
+            "pythonSyntaxHighlighting.lua"],
+            allItems: [("nullSyntaxHighlighting.lua", File),
+            ("luaSyntaxHighlighting.lua", File), ("rustSyntaxHighlighting.lua", File),
+            ("cppSyntaxHighlighting.lua", File), ("pythonSyntaxHighlighting.lua", File)], collapsed: true
+        },
+        FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.idea", paths: [FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.idea/codeStyles", paths: [], dirFiles: [], allItems: [], collapsed: true
+            },
+            FilePathNode
+            {
+                pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/.idea/dictionaries", paths: [], dirFiles: [], allItems: [], collapsed: true
+            }],
+            dirFiles: [], allItems: [("codeStyles", Directory), ("dictionaries", Directory)], collapsed: true
+        },
+        FilePathNode
+        {
+            pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/src", paths: [],
+            dirFiles: ["StringPatternMatching.rs", "Tokens.rs", "eventHandler.rs",
+            "Colors.rs", "TermRender.rs", "FileManager.rs", "main.rs", "CodeTabs.rs"],
+            allItems: [("StringPatternMatching.rs", File), ("Tokens.rs", File), ("eventHandler.rs", File),
+            ("Colors.rs", File), ("TermRender.rs", File), ("FileManager.rs", File), ("main.rs", File),
+            ("CodeTabs.rs", File)], collapsed: true
+        }],
+        dirFiles: ["Cargo.toml"], allItems: [("Cargo.toml", File),
+        ("proc_macros", Directory), ("target", Directory), (".git", Directory), (".vscode", Directory),
+        ("assets", Directory), (".idea", Directory), ("src", Directory)], collapsed: true
+}
+*/
+
 use crate::{CodeTabs, FileTabs};
-use crate::Tokens::ScopeNode;
+use crate::Tokens::{GenerateTokens, ScopeNode};
 use crate::TermRender::*;
 use std::path::PathBuf;
 use dirs::home_dir;
@@ -9,6 +156,9 @@ use crate::TermRender::{ColorType, Span};
 
 use crate::{AppState, TabState};
 use crate::App as MainApp;
+use crate::CodeTabs::CodeTab;
+use crate::eventHandler::{KeyParser, MouseEvent};
+
 
 // implementing the main rendering logic for the filebrowser and scopes in this file
 impl <'a> MainApp <'a> {
@@ -51,7 +201,7 @@ impl <'a> MainApp <'a> {
                     color![self.RenderOutlinePartOne(scopeIndex), BrightWhite]
                 },
                 {
-                    // this is a mess... (ya.......)
+                    // this is a mess... (ya.......).....not even gonna try to figure this mess out
                     if *scopeIndex ==
                         self.codeTabs.tabs[self.lastTab]
                             .scopeJumps.read()[self.codeTabs.tabs[self.lastTab].cursor.0] &&
@@ -134,21 +284,14 @@ impl <'a> MainApp <'a> {
             fileText = self.RenderFilebrowserOutline(app.GetWindowArea());
         } else {
             //let mut allFiles = vec!();
-            for (index, file) in self.fileBrowser.files.iter().enumerate() {
-                fileText.push(Span::FromTokens(vec![
-                    {
-                        if index == self.fileBrowser.fileCursor {
-                            color![file, BrightWhite, Underline]
-                        } else {
-                            color![file, BrightWhite]
-                        }
-                    }
-                ]));
+            for (index, itemsInfo) in self.allFiles.iter().enumerate() {
+                fileText.push(MainApp::RenderFile(
+                    app, index == self.fileBrowser.fileCursor, itemsInfo
+                ));
             }
-            //fileText = Text::from(allFiles);
         }
 
-        {
+        {  // in its own block to ensure the mutable reference gets dropped (wouldn't really matter anyways though....)
             let window = app.GetWindowReferenceMut(String::from("Files"));
 
             if self.appState == AppState::CommandPrompt && self.tabState == TabState::Files {
@@ -160,21 +303,144 @@ impl <'a> MainApp <'a> {
             window.TryUpdateLines(fileText);
         }
     }
+
+    pub fn RenderFile (app: &mut App, onCursor: bool, itemsInfo: &FileInfo) -> Span {
+        Span::FromTokens(vec![
+            {
+                let padding = "  ".repeat(itemsInfo.depth);
+                let dirSymbol =
+                    if itemsInfo.fileType == FileType::Directory {
+                        if itemsInfo.collapsed {  "> "  }
+                        else {  "v "  }
+                    } else {  ""  };
+                if onCursor {
+                    color![format!("{}{}{}", padding, dirSymbol, itemsInfo.name), BrightWhite, Underline]
+                } else {
+                    color![format!("{}{}{}", padding, dirSymbol, itemsInfo.name), BrightWhite]
+                }
+            }
+        ])
+    }
+
+    pub(crate) async fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
+        let height = event.position.1.saturating_sub(2) as usize;
+
+        // making sure it's not out of range
+        if self.allFiles.len() <= height {  return;  }
+
+        // getting the file, and checking if it's a directory or not
+        let fileInfo = &self.allFiles[height];
+        if fileInfo.fileType == FileType::Directory {
+            // opening the pathway
+            let nthElement = self.fileBrowser.GetNthElement(height);
+            if let Some(filePath) = nthElement {
+                self.debugInfo = format!("file path: {:?}   {}", filePath, height);
+                let file = self.fileBrowser.fileTree.GetLeaf(filePath);
+                if let Some(file) = file {
+                    self.debugInfo = format!("file: {:?}", file);
+                    file.collapsed = !file.collapsed;
+                    self.RecalcAllFiles();
+                } else {
+                    //self.debugInfo = String::from("Failed....");
+                }
+            }
+
+            return;  // no files need opening
+        }
+        // loading the file's contents
+        self.codeTabs.currentTab = self.codeTabs.tabs.len();  // the next future element should be this file
+
+        //let name = &self.fileBrowser.files[height];
+
+        let mut lines: Vec <String> = vec!();
+
+        //let fullPath = &self.fileBrowser.filePaths[height];
+
+        let msg = fileInfo.path.as_str().trim();  // temporary for debugging (ya sure.... very temporary--5/30/25)
+        let contents = std::fs::read_to_string(&fileInfo.path).expect(msg);
+        let mut current = String::new();
+        for chr in contents.chars() {
+            if chr == '\n' {
+                lines.push(current.clone());
+                current.clear();
+            } else {
+                current.push(chr);
+            }
+        }
+        lines.push(current);
+
+        let mut tab = CodeTab {
+            lines,
+            ..Default::default()
+        };
+        tab.name = fileInfo.name.clone();
+
+        tab.fileName = fileInfo.name.clone();
+
+        tab.lineTokens.write().clear();
+        let ending = tab.fileName.split('.').next_back().unwrap_or("");
+        for (lineNumber, line) in tab.lines.iter().enumerate() {
+            let value =
+                GenerateTokens(line.clone(),
+                               ending,
+                               &tab.lineTokenFlags,
+                               lineNumber,
+                               &tab.outlineKeywords,
+                               &self.luaSyntaxHighlightScripts
+                ).await;
+            tab.lineTokenFlags.write().push(vec!());
+            tab.lineTokens.write().push(value);
+        }
+        tab.CreateScopeThread();
+        //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
+
+        self.codeTabs.tabs.push(tab);
+        self.codeTabs.tabFileNames.push(fileInfo.name.clone());
+    }
+
+    /// Recalculates the cumulative file structure; if a directory is collapsed or expanded, this has to be recalculated.
+    pub(crate) fn RecalcAllFiles (&mut self) {
+        self.allFiles = self.fileBrowser.fileTree.CollectAllItems(0);
+    }
 }
 
 
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
+// stores the information for the flattened files vector (there were wayyyy to many args....)
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileInfo {
+    pub name: String,
+    pub fileType: FileType,
+    pub depth: usize,
+    pub collapsed: bool,
+    pub path: String,
+}
+
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Copy)]
 pub enum FileType {
     #[default] File,
     Directory,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct FilePathNode {
     pub pathName: String,
     pub paths: Vec <FilePathNode>,  // the following embedded paths
     pub dirFiles: Vec <String>,  // the files in the current directory
     pub allItems: Vec <(String, FileType)>,  // includes files and further directories
+    pub collapsed: bool,
+}
+
+impl Default for FilePathNode {
+    fn default() -> FilePathNode {
+        FilePathNode {
+            pathName: String::default(),
+            paths: Vec::default(),
+            dirFiles: Vec::default(),
+            allItems: Vec::default(),
+            collapsed: true,
+        }
+    }
 }
 
 impl FilePathNode {
@@ -186,33 +452,76 @@ impl FilePathNode {
         } None
     }
 
-    pub fn GetLeaf (&self, mut pathNames: Vec <String>) -> Option <FilePathNode> {
-        let pathName = pathNames.pop().unwrap_or_default();
-        if self.paths.is_empty() {
-            for file in &self.dirFiles {
-                if *file == pathName {
-                    return Some(self.clone());
-                }
-            }
-        }
-        for path in &self.paths {
-            if path.pathName == pathName {
-                return path.GetLeaf(pathNames);
+    // given a set of node (aka files) names, this method will return the base leaf node
+    pub fn GetLeaf (&mut self, mut pathNames: Vec <String>) -> Option <&mut FilePathNode> {
+        let pathName = pathNames.remove(0);
+        let mut dirCount = 0;
+        for file in self.allItems.clone() {
+            if file.1 == FileType::Directory {  dirCount += 1;  }
+            if file.0 == pathName {
+                if file.1 == FileType::Directory {
+                    return
+                        if !pathNames.is_empty() {  self.paths[dirCount - 1].GetLeaf(pathNames)  }
+                        else {  Some(&mut self.paths[dirCount - 1])  };
+                } return Some(self);
             }
         } None
     }
+
+    pub fn CollectAllItems (&self, depth: usize) -> Vec <FileInfo> {
+        let mut dirIndex = 0;
+        // name?, fileType, depth, if it's collapsed or not (for rendering and stuff), file path
+        let mut allFiles = vec![];
+        for (file, fileType) in &self.allItems {
+            if *fileType == FileType::Directory {
+                allFiles.push(FileInfo {
+                    name: file.clone(),
+                    fileType: *fileType,
+                    depth,
+                    collapsed: self.paths[dirIndex].collapsed,
+                    // I think the '/' seperator is needed (and not already in the path or name)
+                    path: format!("{}/{}", self.pathName, file)  // the path to the file (not just the dir it's in)
+                });
+                if !self.paths[dirIndex].collapsed {
+                    let mut embedded = self.paths[dirIndex].CollectAllItems(depth + 1);
+                    allFiles.append(&mut embedded);
+                }
+                dirIndex += 1;
+            } else {
+                allFiles.push(FileInfo {
+                    name: file.clone(),
+                    fileType: *fileType,
+                    depth,
+                    collapsed: false,
+                    // I think the '/' seperator is needed (and not already in the path or name)
+                    path: format!("{}/{}", self.pathName, file)  // the path to the file (not just the dir it's in)
+                });
+            }
+        }
+        allFiles
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileBrowser {
-    pub files: Vec <String>,  // stores the names
-    pub filePaths: Vec <String>,  // these two are here until the rest of the code is updated (temporary, to allow it to function)
-
     // this one would be the 0th element
     pub fileTree: FilePathNode,
     pub fileTab: FileTabs,
     pub fileCursor: usize,
     pub outlineCursor: usize,
+}
+
+impl Default for FileBrowser {
+    fn default() -> FileBrowser {
+        let mut node = FilePathNode::default();
+        node.collapsed = false;
+        FileBrowser {
+            fileTree: node,
+            fileTab: FileTabs::default(),
+            fileCursor: usize::default(),
+            outlineCursor: usize::default(),
+        }
+    }
 }
 
 static VALID_EXTENSIONS: [&str; 9] = [
@@ -227,21 +536,24 @@ static VALID_EXTENSIONS: [&str; 9] = [
     "toml",
 ];
 
+static MAX_FILE_EMBEDDING_DEPTH: usize = 3usize;
+
 // manages the files for a given project
 // provides an outline and means for loading files
 impl FileBrowser {
     /// returns the file path to get to the file of the nth element (which could be a file or folder/branch/path)
     pub fn GetNthElement (&self, index: usize) -> Option <Vec <String>> {
-        FileBrowser::SearchFiletree(&self.fileTree, &mut 0, index)
+        FileBrowser::SearchFiletree(&self.fileTree, &mut 0, index, 0)
     }
 
-    fn SearchFiletree (path: &FilePathNode, i: &mut usize, index: usize) -> Option <Vec <String>> {
+    fn SearchFiletree (path: &FilePathNode, i: &mut usize, index: usize, depth: usize) -> Option <Vec <String>> {
+        if path.collapsed && depth > 0 {  return None;  }  // i shouldn't need to be incremented, right?
         let mut dirCount = 0;
         for (item, itemType) in &path.allItems {
             if *i == index {  return Some(vec![item.clone()]);  }
             *i += 1;
             if *itemType == FileType::Directory {
-                let searchResults = FileBrowser::SearchFiletree(&path.paths[dirCount], i, index);
+                let searchResults = FileBrowser::SearchFiletree(&path.paths[dirCount], i, index, depth + 1);
                 if searchResults.is_some() {
                     let mut output = searchResults.unwrap();
                     output.insert(0, item.clone());
@@ -283,30 +595,58 @@ impl FileBrowser {
         indirectPathInput: &str,
         codeTabs: &mut CodeTabs::CodeTabs
     ) -> io::Result <()> {
-        self.files.clear();
+        // self.files.clear();
+        self.fileTree = FilePathNode::default();
+        self.fileTab = FileTabs::default();
+        self.fileCursor = 0;
+        self.outlineCursor = 0;
         codeTabs.tabs.clear();
         let pathInput = home_dir()
             .unwrap_or(PathBuf::from("/"))
             .join(indirectPathInput)
             .to_string_lossy()
             .into_owned();
-        if let Ok(paths) = std::fs::read_dir(pathInput.clone()) {
-            for path in paths.flatten() {
-                if std::fs::FileType::is_file(&path.file_type()?) {
+        FileBrowser::LoadFilePathToTree(&mut self.fileTree, &pathInput, 0)
+        //panic!("{:?}", self.fileTree);
+        //Ok(())
+    }
+
+    pub fn LoadFilePathToTree (pathNode: &mut FilePathNode, pathInput: &str, depth: usize) -> io::Result <()> {
+        if depth > MAX_FILE_EMBEDDING_DEPTH {  return Ok(());  }
+        if let Ok(paths) = std::fs::read_dir(pathInput) {
+            pathNode.pathName = pathInput.to_owned();
+            for pathResult in paths {
+                let path = pathResult?;
+                let metaData = path.file_type()?;
+                if metaData.is_file() {
                     let name = path.file_name().to_str().unwrap_or("").to_string();
 
                     // so it doesn't try and load invalid files
                     if !VALID_EXTENSIONS.contains(&name.split(".").last().unwrap_or("")) {  continue;  }
 
-                    self.files.push(name.clone());
-                    let mut fullPath = pathInput.clone();
-                    fullPath.push_str(&name);
-                    self.filePaths.push(fullPath);
-                }
-            } Ok(())
-        } else {
-            Err(io::Error::new(io::ErrorKind::NotFound, "Failed to find directory"))
+                    pathNode.dirFiles.push(name.clone());
+                    pathNode.allItems.push((name, FileType::File));
+                    continue;
+                } else if !metaData.is_dir() {  continue;  }
+
+                let name = path.file_name().to_str().unwrap_or("").to_string();
+                let newPath =
+                    if depth == 0 {  format!("{}{}", pathInput, name)  }
+                    else {  format!("{}/{}", pathInput, name)  };
+                // generating the new path
+                let mut newPathNode = FilePathNode::default();
+                FileBrowser::LoadFilePathToTree(
+                    &mut newPathNode,
+                    &newPath,
+                    depth + 1
+                )?;
+                pathNode.paths.push(newPathNode);
+
+                // adding the directory
+                pathNode.allItems.push((name, FileType::Directory));
+            } return Ok(());
         }
+        Err(io::Error::new(io::ErrorKind::NotFound, "Failed to find directory"))
     }
 
     pub fn MoveCursorDown (&mut self, outline: &[Vec<usize>], _rootNode: &ScopeNode) {

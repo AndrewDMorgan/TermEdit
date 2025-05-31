@@ -35,7 +35,6 @@ pub enum FileTabs {
     #[default] Files,
 }
 
-
 #[derive(Debug, Default, PartialEq, Eq)]
 pub enum TabState {
     #[default] Code,
@@ -89,6 +88,8 @@ pub struct App <'a> {
     mainThreadHandles: Vec <std::thread::JoinHandle<()>>,
 
     dtScalar: f64,
+
+    allFiles: Vec <FileInfo>,
 }
 
 impl <'a> App <'a> {
@@ -177,10 +178,10 @@ impl <'a> App <'a> {
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
             self.dtScalar = 1.0 / (FPS_AIM / (elapsedTime + difference));  // for dt scaling
             tokio::time::sleep(tokio::time::Duration::from_secs_f64(difference)).await;
-            self.debugInfo = format!("redraws: {}  |  elapsedTime: {}  |  waited: {}",
+            /*self.debugInfo = format!("redraws: {}  |  elapsedTime: {}  |  waited: {}",
                  updates,
                  (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
-                difference);
+                difference);*/
         }
 
         // joining the threads (they should have exited already and thus should be done)
@@ -360,61 +361,6 @@ impl <'a> App <'a> {
                 }
                 break;
             }
-        }
-    }
-
-    async fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
-        let height = event.position.1.saturating_sub(2) as usize;
-        if self.fileBrowser.files.len() > height {
-            // loading the file's contents
-            self.codeTabs.currentTab = self.codeTabs.tabs.len();
-
-            let name = &self.fileBrowser.files[height];
-
-            let mut lines: Vec <String> = vec!();
-
-            let fullPath = &self.fileBrowser.filePaths[height];
-
-            let msg = fullPath.as_str().trim();  // temporary for debugging
-            let contents = std::fs::read_to_string(fullPath).expect(msg);
-            let mut current = String::new();
-            for chr in contents.chars() {
-                if chr == '\n' {
-                    lines.push(current.clone());
-                    current.clear();
-                } else {
-                    current.push(chr);
-                }
-            }
-            lines.push(current);
-
-            let mut tab = CodeTab {
-                lines,
-                ..Default::default()
-            };
-            tab.name = name.clone();
-
-            tab.fileName = fullPath.clone();
-
-            tab.lineTokens.write().clear();
-            let ending = tab.fileName.split('.').next_back().unwrap_or("");
-            for (lineNumber, line) in tab.lines.iter().enumerate() {
-                let value =
-                    GenerateTokens(line.clone(),
-                                   ending,
-                                   &tab.lineTokenFlags,
-                                   lineNumber,
-                                   &tab.outlineKeywords,
-                                   &self.luaSyntaxHighlightScripts
-                    ).await;
-                tab.lineTokenFlags.write().push(vec!());
-                tab.lineTokens.write().push(value);
-            }
-            tab.CreateScopeThread();
-            //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
-
-            self.codeTabs.tabs.push(tab);
-            self.codeTabs.tabFileNames.push(name.clone());
         }
     }
 
@@ -967,7 +913,6 @@ impl <'a> App <'a> {
 
         if lastDst.0 < usize::MAX {
             tab.searchIndex = lastDst.1;
-            //self.debugInfo = lastDst.1.to_string();
         }
     }
 
@@ -1094,6 +1039,8 @@ impl <'a> App <'a> {
                         self.codeTabs.currentTab = 0;
 
                         self.appState = AppState::CommandPrompt;
+
+                        self.allFiles.clear(); self.RecalcAllFiles();
                     }
                 },
                 "-light" => {  TermRender::ColorMode::ToLight();  },
@@ -1385,7 +1332,6 @@ impl <'a> App <'a> {
             baseToken
         );
         //let size = baseKeywords.len();
-        //self.debugInfo = String::new();
         for keyword in baseKeywords {
             // getting the base type
             if keyword.typedType.is_none() {  continue;  }
