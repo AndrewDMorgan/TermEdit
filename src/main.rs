@@ -645,15 +645,15 @@ impl <'a> App <'a> {
             self.appState = AppState::Tabs;
             self.tabState = TabState::Code;
         } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-            self.codeTabs.tabs.remove(self.lastTab);
+            self.codeTabs.tabs.remove(self.codeTabs.currentTab);
             self.codeTabs.tabFileNames.remove(self.codeTabs.currentTab);
             self.codeTabs.currentTab = self.codeTabs.currentTab.saturating_sub(1);
             if self.lastTab >= self.codeTabs.tabs.len() {
-                self.lastTab = self.codeTabs.tabs.len() - 1;
+                self.lastTab = self.codeTabs.tabs.len().saturating_sub(1);
             }
         }
     }
-
+    
     async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
         // making sure command + s or other commands aren't being pressed
         if !(keyEvents.ContainsModifier(&KeyModifiers::Command) ||
@@ -1701,15 +1701,38 @@ impl <'a> App <'a> {
         }
     }
 
+    // prunes any code tabs that are no longer open (there was a small, probably never noticable memory leak before)
+    fn PruneBadCodeTabs (&mut self, app: &mut TermRender::App, toPrune: Vec <String>, names: &mut Vec <String>) {
+        for windowName in toPrune {
+            for i in 0..names.len() {
+                if names[i] == windowName {  // making sure no windows are left behind
+                    names.remove(i);
+                }
+            }
+            let _ = app.RemoveWindow(windowName);
+        }
+    }
+
     fn CheckCodeTabs (&mut self, app: &mut TermRender::App, terminalSize: (u16, u16)) {
         let mut names = app.GetWindowsByKeywordsNonRef(vec![
             String::from("CodeTab")
         ]);  // current active tabs
+        let mut toPrune = vec![];
         for name in &mut names {
             let size = name.len();
             let newName = name[9..size].to_string();
+            let mut valid = false;
+            for tab in &self.codeTabs.tabs {
+                if tab.name == *newName {
+                    valid = true;
+                    break;
+                }
+            } if !valid {  toPrune.push(name.clone());  }
             *name = newName;
         }
+
+        //self.debugInfo = format!("Number of code windows: {}", app.GetWindowsByKeywords(vec![String::from("CodeTab")]).len());
+        self.PruneBadCodeTabs(app, toPrune, &mut names);
 
         let (padding, shift);
         if self.appState == AppState::CommandPrompt {
@@ -1720,6 +1743,16 @@ impl <'a> App <'a> {
             (padding, shift) = (0, 0);
         }
 
+        self.UpdateCodeTabsWindows(app, terminalSize, names, padding, shift);
+    }
+
+    fn UpdateCodeTabsWindows(&mut self,
+                             app: &mut TermRender::App,
+                             terminalSize: (u16, u16),
+                             names: Vec <String>,
+                             padding: u16,
+                             shift: u16
+    ) {
         // going through all windows and making sure that window exists
         // deleting windows that are no longer open
         for tab in &self.codeTabs.tabs {
@@ -1734,7 +1767,7 @@ impl <'a> App <'a> {
             app.AddWindow(window,
                           format!("CodeBlock{}", tab.name),
                           vec![String::from("CodeTab"),
-                                        tab.name.clone()]
+                               tab.name.clone()]
             );
         }
 

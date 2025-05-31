@@ -1,5 +1,5 @@
 /*
-//// the returned file data!!!
+//// the returned file data!!! (for debugging; the returned data from the file tree)
 FilePathNode
 {
     pathName: "/Users/Andrew/Desktop/Programing/Rust/TermEdit/", paths: [FilePathNode
@@ -334,14 +334,10 @@ impl <'a> MainApp <'a> {
             // opening the pathway
             let nthElement = self.fileBrowser.GetNthElement(height);
             if let Some(filePath) = nthElement {
-                self.debugInfo = format!("file path: {:?}   {}", filePath, height);
                 let file = self.fileBrowser.fileTree.GetLeaf(filePath);
                 if let Some(file) = file {
-                    self.debugInfo = format!("file: {:?}", file);
                     file.collapsed = !file.collapsed;
                     self.RecalcAllFiles();
-                } else {
-                    //self.debugInfo = String::from("Failed....");
                 }
             }
 
@@ -536,7 +532,7 @@ static VALID_EXTENSIONS: [&str; 9] = [
     "toml",
 ];
 
-static MAX_FILE_EMBEDDING_DEPTH: usize = 3usize;
+static MAX_FILE_EMBEDDING_DEPTH: usize = 4usize;
 
 // manages the files for a given project
 // provides an outline and means for loading files
