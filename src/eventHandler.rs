@@ -25,9 +25,9 @@ pub enum KeyCode {
     Escape,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Default)]
 pub enum MouseEventType {
-    Null,
+    #[default] Null,
     Left,
     Right,
     Middle,
@@ -35,14 +35,15 @@ pub enum MouseEventType {
     Up,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Default)]
 pub enum MouseState {
     Release,
     Press,
     Hold,
-    Null,
+    #[default] Null,
 }
 
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct MouseEvent {
     pub eventType: MouseEventType,
     pub position: (u16, u16),
@@ -104,7 +105,7 @@ impl KeyParser {
         let mut avg = 0.0;
         for (otherTime, otherSign) in &self.scrollEvents {
             // 0.000001 is the conversion rate from micro seconds to seconds
-            let duration = time.duration_since(*otherTime).unwrap().as_secs_f64();
+            let duration = time.duration_since(*otherTime).unwrap_or_default().as_secs_f64();
             if duration < SCROLL_LOG_TIME {
                 avg += *otherSign as f64; valid.push((*otherTime, *otherSign));
             }
@@ -157,7 +158,7 @@ impl KeyParser {
         *self.keyEvents.get(&key).unwrap_or(&false)
     }
 
-    fn HandleMouseEscapeCodes (&mut self, numbers: &Vec <u16>, c: char) {
+    fn HandleMouseEscapeCodes (&mut self, numbers: &[u16], c: char) {
         if let Some([byte, x, y]) = numbers.get(0..3) {
             let button = byte & 0b11; // Mask lowest 2 bits (button type)
             //println!("button: {}, numbers: {:?}", button, numbers);
@@ -229,7 +230,7 @@ impl KeyParser {
         });
     }
 
-    fn HandleCustomEscapeCodes (&mut self, numbers: &Vec <u16>) {
+    fn HandleCustomEscapeCodes (&mut self, numbers: &[u16]) {
         match numbers[1] {
             2 => {
                 self.keyEvents.insert(KeyCode::Delete, true);
@@ -326,7 +327,7 @@ impl KeyParser {
         }
     }
 
-    fn HandleControlArrows (&mut self, _numbers: &Vec <u16>, c: char) {
+    fn HandleControlArrows (&mut self, _numbers: &[u16], c: char) {
         match c {
             'D' => {
                 self.keyModifiers.push(KeyModifiers::Control);

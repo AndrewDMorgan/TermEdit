@@ -1,8 +1,8 @@
-#[allow(dead_code)]
 
+#[allow(dead_code)]
 pub mod string_pattern_matching {
     // kinda bad but kinda actually works; at least it's really fast
-    pub fn byte_comparison (wordMain: &String, wordComp: &String) -> usize {
+    pub fn byte_comparison (wordMain: &str, wordComp: &str) -> usize {
         //if wordMain.is_empty() || wordComp.is_empty() {  return usize::MAX;  }
         let mut totalError = 0;
         let wordBytes = wordComp.as_bytes();

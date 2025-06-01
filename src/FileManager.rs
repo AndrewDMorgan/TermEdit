@@ -300,7 +300,7 @@ impl <'a> MainApp <'a> {
         } else {
             for (index, itemsInfo) in self.allFiles.iter().enumerate() {
                 fileText.push(MainApp::RenderFile(
-                    app, index == self.fileBrowser.fileCursor, itemsInfo
+                    index == self.fileBrowser.fileCursor, itemsInfo
                 ));
             }
         }
@@ -370,7 +370,7 @@ impl <'a> MainApp <'a> {
         }
     }
 
-    pub fn RenderFile (app: &mut App, onCursor: bool, itemsInfo: &FileInfo) -> Span {
+    pub fn RenderFile (onCursor: bool, itemsInfo: &FileInfo) -> Span {
         Span::FromTokens(vec![
             {
                 let padding = "  ".repeat(itemsInfo.depth);
@@ -389,7 +389,7 @@ impl <'a> MainApp <'a> {
     }
 
     fn HandlePressedOptions (&mut self, _events: &KeyParser, event: &MouseEvent) {
-        // updating the windows
+        // updating the windows; this is a match statement because there will eventually be more options
         match self.fileBrowser.fileOptions.selectedOptionsTab {
             OptionTabs::Files => {
                 self.HandleFileOptionsPressed(event);
@@ -425,7 +425,9 @@ impl <'a> MainApp <'a> {
         }
 
         if events.mouseEvent.is_none() {  return;  }
-        let event = events.mouseEvent.as_ref().unwrap();
+        let event = events.mouseEvent.as_ref();
+        if event.is_none() {  return;  }
+        let event = event.unwrap();
 
         // there aren't current any handlers that operate on other mouse events
         if event.eventType != MouseEventType::Left || event.state != MouseState::Press {  return;  }
@@ -572,13 +574,13 @@ impl Default for FilePathNode {
 }
 
 impl FilePathNode {
-    pub fn GetChild (&self, pathName: String) -> Option <FilePathNode> {
+    /*pub fn GetChild (&self, pathName: String) -> Option <FilePathNode> {
         for path in &self.paths {
             if path.pathName == pathName {
                 return Some(path.clone());
             }
         } None
-    }
+    }*/
 
     // given a set of node (aka files) names, this method will return the base leaf node
     pub fn GetLeaf (&mut self, mut pathNames: Vec <String>) -> Option <&mut FilePathNode> {
@@ -642,10 +644,11 @@ pub struct FileBrowser {
 
 impl Default for FileBrowser {
     fn default() -> FileBrowser {
-        let mut node = FilePathNode::default();
-        node.collapsed = false;
         FileBrowser {
-            fileTree: node,
+            fileTree: FilePathNode {
+                collapsed: false,
+                ..Default::default()
+            },
             fileTab: FileTabs::default(),
             fileCursor: usize::default(),
             outlineCursor: usize::default(),
@@ -671,7 +674,7 @@ impl FileBrowser {
             if *itemType == FileType::Directory {
                 let searchResults = FileBrowser::SearchFiletree(&path.paths[dirCount], i, index, depth + 1);
                 if searchResults.is_some() {
-                    let mut output = searchResults.unwrap();
+                    let mut output = searchResults.unwrap_or_default();
                     output.insert(0, item.clone());
                     return Some(output);
                 }

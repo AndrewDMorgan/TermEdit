@@ -227,7 +227,7 @@ pub struct CodeTab {
 
     pub changeBuffer: Vec <Vec <Edits::Edit>>,
     pub redoneBuffer: Vec <Vec <Edits::Edit>>,  // stores redo's (cleared if undone then edited)
-    pub pinedLines: Vec <usize>,  // todo figure out a way to have a color for the pinned points (maybe an enum?--or just a color....)
+    pub pinedLines: Vec <(usize, ColorType)>,  // todo figure out a way to have a color for the pinned points (maybe an enum?--or just a color....)
 
     pub outlineKeywords: std::sync::Arc <parking_lot::RwLock <Vec <OutlineKeyword>>>,
     // each line can have multiple flags depending on the depth (each line has a set for each token......)
@@ -302,7 +302,7 @@ impl CodeTab {
                 drop(writeGuard);
 
                 // sending a message to join the thread
-                sender.send(true).unwrap();
+                sender.send(true).unwrap();  // not sure what else to do but throw an error on disconnect
             }),
             receiver
         ));
@@ -340,24 +340,26 @@ impl CodeTab {
         let lineTokensRead = self.lineTokens.read();
         for (tokenIndex, token) in lineTokensRead[self.cursor.0].iter().enumerate() {
             // the cursor can be just right of it, in it, but not just left
-            if (accumulate + token.text.len()) >= self.cursor.1 && self.cursor.1 > accumulate {
-                tokenOutput.push(token.text.clone());
-                for index in (0..tokenIndex).rev() {
-                    if matches!(lineTokensRead[self.cursor.0][index].text.as_str(),
-                        " " | "," | "(" | ")" | ";")
-                        {  break;  }
-                    if index > 1 &&
-                        lineTokensRead[self.cursor.0][index].text == ":" &&
-                        lineTokensRead[self.cursor.0][index - 1].text == ":"
-                    {
-                        tokenOutput.push(lineTokensRead[self.cursor.0][index - 2].text.clone());
-                    } else if index > 0 && lineTokensRead[self.cursor.0][index].text == "." {
-                        tokenOutput.push(lineTokensRead[self.cursor.0][index - 1].text.clone());
-                    }
-                }
-                return;
+            if (accumulate + token.text.len()) < self.cursor.1 || self.cursor.1 <= accumulate {
+                accumulate += token.text.len();
+                continue;
             }
-            accumulate += token.text.len();
+
+            tokenOutput.push(token.text.clone());
+            for index in (0..tokenIndex).rev() {
+                if matches!(lineTokensRead[self.cursor.0][index].text.as_str(),
+                    " " | "," | "(" | ")" | ";")
+                    {  break;  }
+                else if index > 1 &&  // the else reduces the complexity score even though it makes no difference????????????? why?
+                    lineTokensRead[self.cursor.0][index].text == ":" &&
+                    lineTokensRead[self.cursor.0][index - 1].text == ":"
+                {
+                    tokenOutput.push(lineTokensRead[self.cursor.0][index - 2].text.clone());
+                } else if index > 0 && lineTokensRead[self.cursor.0][index].text == "." {
+                    tokenOutput.push(lineTokensRead[self.cursor.0][index - 1].text.clone());
+                }
+            }
+            return;
         } // lineTokensRead is dropped naturally
     }
 
@@ -836,142 +838,142 @@ impl CodeTab {
 
     pub async fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>, luaSyntaxHighlightScripts: &LuaScripts) -> bool {
         self.redoneBuffer.clear();
-        if self.highlighting && self.cursorEnd != self.cursor {
-            if self.cursorEnd.0 < self.cursor.0 ||
-                 self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1
-            {
-                if self.cursorEnd.0 == self.cursor.0 {
-                    changeBuff.push(Edits::Edit::Deletion(Edits::Deletion {
-                        start: self.cursor,
-                        end: self.cursorEnd,
-                        text: self.lines[self.cursorEnd.0]
-                            .get(self.cursorEnd.1..self.cursor.1)
-                            .unwrap_or("")
-                            .to_string()
-                    }));
+        if !self.highlighting || self.cursorEnd == self.cursor {  return false;  }
+        if self.cursorEnd.0 < self.cursor.0 ||
+             self.cursorEnd.0 == self.cursor.0 && self.cursorEnd.1 < self.cursor.1
+        {
+            if self.cursorEnd.0 == self.cursor.0 {
+                changeBuff.push(Edits::Edit::Deletion(Edits::Deletion {
+                    start: self.cursor,
+                    end: self.cursorEnd,
+                    text: self.lines[self.cursorEnd.0]
+                        .get(self.cursorEnd.1..self.cursor.1)
+                        .unwrap_or("")
+                        .to_string()
+                }));
+                self.lines[self.cursorEnd.0]
+                    .replace_range(self.cursorEnd.1..self.cursor.1, "");
+                self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
+            } else {
+                let mut accumulative = String::new();
+                accumulative.push_str(
                     self.lines[self.cursorEnd.0]
-                        .replace_range(self.cursorEnd.1..self.cursor.1, "");
-                    self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
-                } else {
-                    let mut accumulative = String::new();
+                        .get(self.cursorEnd.1..).unwrap_or("")
+                );
+                accumulative.push('\n');
+                self.lines[self.cursorEnd.0]
+                    .replace_range(self.cursorEnd.1.., "");
+                self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
+
+                // go through any inbetween lines and delete them. Also delete one extra line so there aren't to blanks?
+                let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
+                for _ in 0..numBetween {
                     accumulative.push_str(
-                        self.lines[self.cursorEnd.0]
-                            .get(self.cursorEnd.1..).unwrap_or("")
+                        self.lines[self.cursorEnd.0 + 1].clone().as_str()
                     );
                     accumulative.push('\n');
-                    self.lines[self.cursorEnd.0]
-                        .replace_range(self.cursorEnd.1.., "");
-                    self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
-
-                    // go through any inbetween lines and delete them. Also delete one extra line so there aren't to blanks?
-                    let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
-                    for _ in 0..numBetween {
-                        accumulative.push_str(
-                            self.lines[self.cursorEnd.0 + 1].clone().as_str()
-                        );
-                        accumulative.push('\n');
-                        self.lines.remove(self.cursorEnd.0 + 1);
-                        self.lineTokens.write().remove(self.cursorEnd.0 + 1);
-                        self.lineTokenFlags.write().remove(self.cursorEnd.0 + 1);
-                    }
-
-                    accumulative.push_str(
-                        self.lines[self.cursorEnd.0 + 1]
-                            .get(..self.cursor.1).unwrap_or("")
-                    );
-                    accumulative.push('\n');
-                    self.lines[self.cursorEnd.0 + 1]
-                        .replace_range(..self.cursor.1, "");
-                    self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
-                    // push the next line onto the first...
-                    let nextLine = self.lines[self.cursorEnd.0 + 1].clone();
-                    accumulative.push_str(
-                        nextLine.clone().as_str()
-                    );  // does a \n go right after this? Or is it not needed??????
-                    self.lines[self.cursorEnd.0].push_str(nextLine.as_str());
-                    self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
                     self.lines.remove(self.cursorEnd.0 + 1);
                     self.lineTokens.write().remove(self.cursorEnd.0 + 1);
                     self.lineTokenFlags.write().remove(self.cursorEnd.0 + 1);
-
-                    changeBuff.push(Edits::Edit::Deletion(Edits::Deletion {
-                        start: self.cursor,
-                        end: self.cursorEnd,
-                        text: accumulative
-                    }));
-                    // I have no clue if this is actually correct or not; mostly the cursor position stuff
-                    changeBuff.push(Edits::Edit::NewLine(Edits::NewLine {
-                        position: (
-                            self.cursor.0 + 1,
-                            0
-                        )
-                    }));
                 }
-                
-                self.highlighting = false;
-                self.cursor = self.cursorEnd;
-                self.CreateScopeThread();
-                //(self.scopes, self.scopeJumps, self.linearScopes) =
-                //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
-                return true;
-            } else {
-                // swapping the cursor and ending points so the other calculations work
-                (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
-                return Box::pin(async move {
-                    self.HandleHighlight(changeBuff, luaSyntaxHighlightScripts).await
-                }).await;
+
+                accumulative.push_str(
+                    self.lines[self.cursorEnd.0 + 1]
+                        .get(..self.cursor.1).unwrap_or("")
+                );
+                accumulative.push('\n');
+                self.lines[self.cursorEnd.0 + 1]
+                    .replace_range(..self.cursor.1, "");
+                self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
+                // push the next line onto the first...
+                let nextLine = self.lines[self.cursorEnd.0 + 1].clone();
+                accumulative.push_str(
+                    nextLine.clone().as_str()
+                );  // does a \n go right after this? Or is it not needed??????
+                self.lines[self.cursorEnd.0].push_str(nextLine.as_str());
+                self.RecalcTokens(self.cursorEnd.0, 0, luaSyntaxHighlightScripts).await;
+                self.lines.remove(self.cursorEnd.0 + 1);
+                self.lineTokens.write().remove(self.cursorEnd.0 + 1);
+                self.lineTokenFlags.write().remove(self.cursorEnd.0 + 1);
+
+                changeBuff.push(Edits::Edit::Deletion(Edits::Deletion {
+                    start: self.cursor,
+                    end: self.cursorEnd,
+                    text: accumulative
+                }));
+                // I have no clue if this is actually correct or not; mostly the cursor position stuff
+                changeBuff.push(Edits::Edit::NewLine(Edits::NewLine {
+                    position: (
+                        self.cursor.0 + 1,
+                        0
+                    )
+                }));
             }
-        } false
+
+            self.highlighting = false;
+            self.cursor = self.cursorEnd;
+            self.CreateScopeThread();
+            //(self.scopes, self.scopeJumps, self.linearScopes) =
+            //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
+            true
+        } else {
+            // swapping the cursor and ending points so the other calculations work
+            (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
+            Box::pin(async move {
+                self.HandleHighlight(changeBuff, luaSyntaxHighlightScripts).await
+            }).await
+        }
     }
 
     pub fn GetSelection (&self) -> String {
         let mut occumulation = String::new();
 
-        if self.highlighting && self.cursor != self.cursorEnd {
-            if self.cursorEnd.0 == self.cursor.0 {
-                if self.cursorEnd.1 < self.cursor.1 {  // cursor on the smae line
-                    let selection =
-                        &self.lines[self.cursor.0][self.cursorEnd.1..self.cursor.1];
-                    occumulation.push_str(selection);
-                } else {
-                    let selection =
-                        &self.lines[self.cursor.0][self.cursor.1..self.cursorEnd.1];
-                    occumulation.push_str(selection);
-                }
-            } else if self.cursor.0 > self.cursorEnd.0 {  // cursor highlighting downwards
-                let selection = &self.lines[self.cursorEnd.0][self.cursorEnd.1..];
-                occumulation.push_str(selection);
-                occumulation.push('\n');
-
-                // getting the center section
-                let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
-                for i in 0..numBetween {
-                    let selection = &self.lines[self.cursorEnd.0 + 1 + i];
-                    occumulation.push_str(selection.clone().as_str());
-                    occumulation.push('\n');
-                }
-
-                let selection = &self.lines[self.cursor.0][..self.cursor.1];
-                occumulation.push_str(selection);
-            } else {  // cursor highlighting upwards
-                let selection = &self.lines[self.cursor.0][self.cursor.1..];
-                occumulation.push_str(selection);
-                occumulation.push('\n');
-
-                // getting the center section
-                let numBetween = self.cursorEnd.0 - self.cursor.0 - 1;
-                for i in 0..numBetween {
-                    let selection = &self.lines[self.cursor.0 + 1 + i];
-                    occumulation.push_str(selection.clone().as_str());
-                    occumulation.push('\n');
-                }
-
-                let selection = &self.lines[self.cursorEnd.0][..self.cursorEnd.1];
-                occumulation.push_str(selection);
-            }
-        } else {
+        if !self.highlighting || self.cursor == self.cursorEnd {
             occumulation.push_str(self.lines[self.cursor.0].clone().as_str());
             occumulation.push('\n');  // fix this so that it always forces it to be pushed to a new line before
+            return occumulation;
+        }
+
+        if self.cursorEnd.0 == self.cursor.0 {
+            if self.cursorEnd.1 < self.cursor.1 {  // cursor on the same line
+                let selection =
+                    &self.lines[self.cursor.0][self.cursorEnd.1..self.cursor.1];
+                occumulation.push_str(selection);
+            } else {
+                let selection =
+                    &self.lines[self.cursor.0][self.cursor.1..self.cursorEnd.1];
+                occumulation.push_str(selection);
+            }
+        } else if self.cursor.0 > self.cursorEnd.0 {  // cursor highlighting downwards
+            let selection = &self.lines[self.cursorEnd.0][self.cursorEnd.1..];
+            occumulation.push_str(selection);
+            occumulation.push('\n');
+
+            // getting the center section
+            let numBetween = self.cursor.0 - self.cursorEnd.0 - 1;
+            for i in 0..numBetween {
+                let selection = &self.lines[self.cursorEnd.0 + 1 + i];
+                occumulation.push_str(selection.clone().as_str());
+                occumulation.push('\n');
+            }
+
+            let selection = &self.lines[self.cursor.0][..self.cursor.1];
+            occumulation.push_str(selection);
+        } else {  // cursor highlighting upwards
+            let selection = &self.lines[self.cursor.0][self.cursor.1..];
+            occumulation.push_str(selection);
+            occumulation.push('\n');
+
+            // getting the center section
+            let numBetween = self.cursorEnd.0 - self.cursor.0 - 1;
+            for i in 0..numBetween {
+                let selection = &self.lines[self.cursor.0 + 1 + i];
+                occumulation.push_str(selection.clone().as_str());
+                occumulation.push('\n');
+            }
+
+            let selection = &self.lines[self.cursorEnd.0][..self.cursorEnd.1];
+            occumulation.push_str(selection);
         }
 
         occumulation
@@ -1438,25 +1440,56 @@ impl CodeTab {
             let width = area.width - padding - 2 - maxLineNumberSize as u16;
             self.RenderSlice(&mut charIndex, &mut lineText, lineNumber, colorMode, editingCode, width as usize, suggested);
 
-            // the edge
-            let scrollPercent = f64::min(std::cmp::max(
-                self.scrolled as isize + self.mouseScrolled, 0
-            ) as f64 / self.lines.len() as f64 * (area.height as f64 - 10.0),
-                                         area.height as f64 - 12.0
-            ) as usize;
-
-            let borderSpace = width as usize - charIndex;
-            lineText.push(color![" ".repeat(borderSpace.saturating_sub(1))]);
-            if i == scrollPercent || i == scrollPercent.saturating_sub(1) || i == scrollPercent + 1 {
-                lineText.push(color![" ", OnBrightWhite]);
-            } else {
-                lineText.push(color![" ", OnBrightBlack]);
-            }
+            self.HandleScrollBar(&mut lineText, area, width, charIndex, i);
 
             // pushing the line
             tabRender.push(Span::FromTokens(lineText));
             i += 1;
         } tabRender
+    }
+
+    fn HandleScrollBar (&self, lineText: &mut Vec <Colored>, area: &Rect, width: u16, charIndex: usize, i: usize) {
+        // the edge
+        let scrollPercent = f64::min(std::cmp::max(
+            self.scrolled as isize + self.mouseScrolled, 0
+        ) as f64 / self.lines.len() as f64 * (area.height as f64 - 10.0),
+                                     area.height as f64 - 12.0
+        ) as usize;
+
+        let pinnedPercents = self.GetPinnedPercents(area);
+
+        let borderSpace = width as usize - charIndex;
+        lineText.push(color![" ".repeat(borderSpace.saturating_sub(1))]);
+
+        let pinned = self.IsPinned(&pinnedPercents, i);
+        lineText.push(
+            if pinned.0 {
+                " ".Colorize(pinned.1)
+            } else if i == scrollPercent || i == scrollPercent.saturating_sub(1) || i == scrollPercent + 1 {
+                color![" ", OnBrightWhite]
+            } else {
+                color![" ", OnBrightBlack]
+        });
+    }
+
+    fn IsPinned (&self, pinnedPoints: &Vec <(usize, ColorType)>, i: usize) -> (bool, ColorType) {
+        for pinned in pinnedPoints {
+            if pinned.0 == i {
+                return (true, pinned.1);
+            }
+        } (false, ColorType::Default)
+    }
+
+    fn GetPinnedPercents (&self, area: &Rect) -> Vec <(usize, ColorType)> {
+        let mut pinned = vec![];
+        for line in &self.pinedLines {
+            let scrollPercent = f64::min(std::cmp::max(
+                line.0, 0
+            ) as f64 / self.lines.len() as f64 * (area.height as f64 - 10.0),
+                                         area.height as f64 - 12.0
+            ) as usize;
+            pinned.push((scrollPercent, line.1));
+        } pinned
     }
 
     fn RenderSlice (&self,
@@ -1519,7 +1552,7 @@ impl CodeTab {
             let overShoot = *charIndex as isize - width as isize;
             if overShoot < 0 {  continue;  }
             while *charIndex >= width {
-                let token = lineText.pop().unwrap();
+                let token = lineText.pop().unwrap_or_default();
                 let tokenSize = token.GetSize();
                 *charIndex -= tokenSize;
             } break;
@@ -1670,7 +1703,7 @@ impl Default for CodeTab {
              searchTerm: String::new(),
              changeBuffer: vec!(),
              redoneBuffer: vec!(),
-             pinedLines: vec!(),
+             pinedLines: vec![],
              outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
              lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
              scopeGenerationHandles: vec!(),
@@ -1681,7 +1714,7 @@ impl Default for CodeTab {
 }
 
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CodeTabs {
     pub tabFileNames: Vec <String>,
     pub tabs: Vec <CodeTab>,
@@ -1718,10 +1751,10 @@ impl CodeTabs {
             .saturating_sub(offset)
     }
 
-    pub fn GetTab (&mut self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> &mut CodeTab {
+    /*pub fn GetTab (&mut self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> &mut CodeTab {
         let tab = self.GetTabNumber(area, paddingLeft, positionX, lastTab);
         &mut self.tabs[tab]
-    }
+    }*/
 
     pub fn GetTabNumber (&self, area: &Rect, paddingLeft: usize, positionX: usize, lastTab: &mut usize) -> usize {
         let total = self.panes.len() + 1;
@@ -1755,13 +1788,13 @@ impl CodeTabs {
         self.tabs[tabIndex].GetScrolledText(area, editingCode, colorMode, suggested, padding)
     }
 
-    pub fn CloseTab (&mut self) {
+    /*pub fn CloseTab (&mut self) {
         if self.tabs.len() > 1 {  // there needs to be at least one file open
             self.tabs.remove(self.currentTab);
             self.tabFileNames.remove(self.currentTab);
             self.currentTab = self.currentTab.saturating_sub(1);
         }
-    }
+    }*/
 
     pub fn MoveTabRight (&mut self) {
         if self.currentTab < self.tabFileNames.len() - 1 {
@@ -1869,51 +1902,3 @@ impl CodeTabs {
         colored
     }
 }
-
-impl Default for CodeTabs {
-    fn default() -> Self {
-        CodeTabs {
-            tabFileNames: vec![],
-            tabs: vec![
-                CodeTab {
-                    cursor: (0, 0),
-                    lines: vec!(),
-                    lineTokens: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
-                    scopeJumps: std::sync::Arc::new(parking_lot::RwLock::new(vec![])),
-                    scopes: std::sync::Arc::new(parking_lot::RwLock::new(ScopeNode {
-                        children: vec![],
-                        name: "Root".to_string(),
-                        start: 0,
-                        end: 2,
-                    })),
-                    linearScopes: std::sync::Arc::new(parking_lot::RwLock::new(vec![
-                        vec![0]
-                    ])),
-                    scrolled: 0,
-                    mouseScrolled: 0,
-                    mouseScrolledFlt: 0.0,
-                    name: "main.rs".to_string(),
-                    fileName: "".to_string(),
-                    cursorEnd: (0, 0),
-                    highlighting: false,
-                    pauseScroll: 0,
-                    searchIndex: 0,
-                    searchTerm: String::new(),
-                    changeBuffer: vec!(),
-                    redoneBuffer: vec!(),
-                    pinedLines: vec!(),
-                    outlineKeywords: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
-                    lineTokenFlags: std::sync::Arc::new(parking_lot::RwLock::new(vec!())),
-                    scopeGenerationHandles: vec!(),
-                    saved: true,
-                    path: String::new(),
-                }
-
-            ],  // put a tab here or something idk
-            currentTab: 0,
-            panes: vec![],
-        }
-    }
-}
-
-

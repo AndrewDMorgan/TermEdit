@@ -37,7 +37,7 @@ static LANGS: [(Languages, &str); 8] = [
 
 
 // token / syntax highlighting stuff idk
-#[derive(Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Default)]
 pub enum TokenType {
     Bracket,
     SquirlyBracket,
@@ -58,7 +58,7 @@ pub enum TokenType {
     Lifetime,
     String,
     Comment,
-    Null,
+    #[default] Null,
     Primitive,
     Keyword,
     CommentLong,
@@ -66,7 +66,7 @@ pub enum TokenType {
     Grayed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LuaTuple {
     pub token: TokenType,
     pub text: String,
@@ -618,7 +618,7 @@ pub async fn GenerateTokens (
     }
 
     // calling the lua script (dealing with annoying async stuff)
-    let highlightingScript = luaSyntaxHighlightScripts.lock().unwrap();
+    let highlightingScript = luaSyntaxHighlightScripts.lock();
     let script: Arc <&mlua::Function> =
         if highlightingScript.contains_key(&language) {
             Arc::clone(&Arc::from(&highlightingScript[&language]))
@@ -630,15 +630,17 @@ pub async fn GenerateTokens (
     let mut tokens: Vec <LuaTuple> = vec!();
     let mut line: Vec <Vec <LineTokenFlags>> = vec!();  // all of these have to be pre-allocated (and initialized)
     let mut previousFlagSet: &Vec <LineTokenFlags> = &vec!();
-    thread::scope(|s| {
+    // ignoring errors (hopefully it'll just make everything a null token?)
+    let _ = thread::scope(|s| {
         let tokensWrapped: Arc<Mutex<Vec <LuaTuple>>> = Arc::new(Mutex::new(vec!()));
 
         let scriptClone = Arc::clone(&script);
         let tokensClone = Arc::clone(&tokensWrapped);
         let tokenStrsClone = Arc::clone(&tokenStrs);
         let handle = s.spawn(move |_| {
+            let numStrs = {  tokenStrsClone.lock().len()  };
             let result = scriptClone.call(tokenStrsClone.lock().clone());
-            *tokensClone.lock() = result.unwrap();
+            *tokensClone.lock() = result.unwrap_or(vec![LuaTuple::default(); numStrs]);
         });
 
 
@@ -669,7 +671,7 @@ pub async fn GenerateTokens (
         tokens = Arc::try_unwrap(tokensWrapped)
             .unwrap()
             .into_inner();
-    }).unwrap();
+    });
 
     // handling everything that requires the tokens to be calculated
     GenerateLineTokenFlags(lineTokenFlags,
@@ -700,7 +702,7 @@ fn RemoveLineFlag(currentFlags: &mut Vec<LineTokenFlags>, removeFlag: LineTokenF
 }
 
 // application stuff
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ScopeNode {
     pub children: Vec <ScopeNode>,
     pub name: String,
@@ -717,7 +719,9 @@ impl ScopeNode {
         }
 
         //  !!! *error* this crashed, figure it out at some point...... (ya........)
-        self.children[index.unwrap()].GetNode(scope)
+        let node = self.children.get(index.unwrap_or(usize::MAX));
+        if node.is_none() {  return self;  }  // would this work? at least to fix any crashes?
+        node.unwrap().GetNode(scope)
     }
 
     pub fn Push (&mut self, scope: &mut Vec <usize>, name: String, start: usize) -> usize {

@@ -2,7 +2,7 @@
 keywords = {"if", "for", "while", "in", "else", "break", "loop", "match",
             "return", "std", "const", "static", "dyn", "type", "continue",
             "use", "mod", "None", "Some", "Ok", "Err", "async", "await",
-            "default", "derive", "as", "?", "ref", "allow", "where", "trait"}
+            "default", "derive", "as", "?", "ref", "allow", "where", "trait", "move"}
 primitives = {"i32", "isize", "i16", "i8", "i128", "i64", "u32", "usize",
               "u16", "u8", "u128", "u64", "f16", "f32", "f64", "f128",
               "String", "str", "Vec", "bool", "char", "Result", "Option",

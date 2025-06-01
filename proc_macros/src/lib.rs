@@ -24,7 +24,7 @@ pub fn load_lua_script (input: TokenStream) -> TokenStream {
             std::fs::read_to_string(#path)?
         ).exec().unwrap();
 
-        #hashmap.lock().unwrap().insert(
+        #hashmap.lock().insert(
             #language,
                 lua.globals().get("GetTokens").unwrap()
         );
@@ -40,8 +40,8 @@ pub fn load_lua_script (input: TokenStream) -> TokenStream {
 /// - n ColorType variants (n: 0 - ∞)
 /// # Example
 /// ```
-/// color!("Hello World", White, Bold, Underline);
-/// color!("Hello World");  // converts to Colored without applying modifiers
+/// proc_macros::color!("Hello World", White, Bold, Underline);
+/// proc_macros::color!("Hello World");  // converts to Colored without applying modifiers
 /// ```
 #[proc_macro]
 pub fn color (input: TokenStream) -> TokenStream {

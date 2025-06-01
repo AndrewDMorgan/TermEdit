@@ -56,7 +56,7 @@ pub enum MenuState {
     Settings
 }
 
-type LuaScripts = std::sync::Arc<std::sync::Mutex<std::collections::HashMap <Languages, mlua::Function>>>;
+type LuaScripts = std::sync::Arc<parking_lot::Mutex<std::collections::HashMap <Languages, mlua::Function>>>;
 
 #[derive(Debug, Default)]
 pub struct App <'a> {
@@ -139,7 +139,7 @@ impl <'a> App <'a> {
         let mut stdout = std::io::stdout();
         crossterm::execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
         
-        let mut clipboard = Clipboard::new().unwrap();
+        let mut clipboard = Clipboard::new().expect("Failed to initialize clipboard");
 
         let parser = std::sync::Arc::new(parking_lot::RwLock::new(Parser::new()));
         let keyParser = std::sync::Arc::new(parking_lot::RwLock::new(KeyParser::new()));
@@ -729,7 +729,7 @@ impl <'a> App <'a> {
                 self.codeTabs.panes
                     .iter()
                     .position(|e| e == &self.lastTab)
-                    .unwrap()
+                    .unwrap()  // the if block ensures the element exists
             );
         }
     }
@@ -2110,8 +2110,8 @@ Add a polling delay for when sampling events to hopefully reduce unnecessary com
 maybe look at using jit for the lua interfacing.
 */
 
-
-#[tokio::main]
+// 10 worker threads does seem to be faster? (it uses maybe 1% less cpu? very minor)
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> io::Result<()> {
     let mut termApp = TermRender::App::new();
 

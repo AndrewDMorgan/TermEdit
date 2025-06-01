@@ -20,9 +20,9 @@ use std::io::Write;
 // https://notes.burke.libbey.me/ansi-escape-codes/
 // https://stackoverflow.com/questions/4842424/list-of-ansi-color-escape-sequences
 // /033[... doesn't work; use /x1b[...
-pub static CLEAR: &'static str = "\x1b[0m";
-pub static SHOW_CURSOR: &'static str = "\x1b[?25h";
-pub static HIDE_CURSOR: &'static str = "\x1b[?25l";
+pub static CLEAR: &str = "\x1b[0m";
+pub static SHOW_CURSOR: &str = "\x1b[?25h";
+pub static HIDE_CURSOR: &str = "\x1b[?25l";
 
 // * color, modifiers, is_background
 pub static EMPTY_MODIFIER_REFERENCE: &[&str] = &[];  // making a default static type is annoying
@@ -1056,7 +1056,8 @@ impl Drop for App {
         print!("\x1B[2K\x1B[E");
         print!("\x1Bc");
 
-        std::io::stdout().flush().unwrap();
+        // I don't really care if an error is thrown at this point
+        let _ = std::io::stdout().flush();
     }
 }
 
@@ -1125,7 +1126,8 @@ impl App {
         if !self.windowReferences.contains_key(&name) {
             return Err(format!("No window named '{}' found", name));
         }
-        let index = *self.windowReferences.get(&name).unwrap();
+        // the None case would produce a value too large, so it should throw the expected error
+        let index = *self.windowReferences.get(&name).unwrap_or(&usize::MAX);
         if index >= self.activeWindows.len() {
             return Err(format!(
                 "Invalid index; Accessed at {}, but the size is {}",
@@ -1136,12 +1138,13 @@ impl App {
         // updating the references list
         self.windowReferences.remove(&name);
         let mut keysToModify = vec![];
-        for key in self.windowReferences.keys() {
-            if self.windowReferences.get(key).unwrap() > &index {
-                keysToModify.push(key.clone());
+        for key in self.windowReferences.iter() {
+            if *key.1 > index {
+                keysToModify.push(key.0.clone());
             }
         }
         for key in keysToModify {
+            // all the keys should still exist
             *self.windowReferences.get_mut(&key).unwrap() -= 1;
         }
 
@@ -1184,8 +1187,9 @@ impl App {
     }
 
     fn HandleRenderWindowChanges (&mut self, size: &(u16, u16)) {
-        if self.renderHandle.is_some() {
-            let handle = self.renderHandle.take().unwrap();
+        let handle = self.renderHandle.take();
+        if let Some(handle) = handle {
+            // if an error was thrown, I don't care anymore
             let _ = handle.join();
         }
 
@@ -1231,7 +1235,7 @@ impl App {
         // sorting the windows based on the horizontal position (replaced by the sorting on the background thread)
 
         // stores the draw calls
-        let mut drawCalls: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
+        let mut drawCalls = vec![];
 
         // going through the sorted windows
         for window in &mut self.activeWindows {
@@ -1299,7 +1303,7 @@ impl App {
         //println!("[{}, {}; {:?}]", value, i, reserved);
         for index in (0..=i).rev() {
             //println!("({:?}, {})", char::from_digit(reserved[index], 10), reserved[index]);
-            buffer.push(char::from_digit(reserved[index], 10).unwrap());
+            buffer.push(char::from_digit(reserved[index], 10).unwrap_or_default());
         }
     }
 
