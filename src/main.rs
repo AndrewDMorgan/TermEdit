@@ -28,6 +28,7 @@ use CodeTabs::CodeTab;
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 use crate::TermRender::{Colorize, Span};
 use crate::FileManager::*;
+use crate::TermRender::ColorType::OnBrightBlack;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FileTabs {
@@ -177,6 +178,7 @@ impl <'a> App <'a> {
             // processing the events
             self.HandleKeyEvents(&keyParser.read(), &mut clipboard).await;
             self.HandleMouseEvents(&keyParser.read()).await;  // not sure if this will be delayed, but I think it should work? idk
+            self.HandleMixedEvents(&keyParser.read()).await;
             keyParser.write().ClearEvents();
 
             let end = std::time::SystemTime::now();
@@ -197,6 +199,10 @@ impl <'a> App <'a> {
         }
 
         Ok(())
+    }
+
+    async fn HandleMixedEvents (&mut self, keyEvents: &KeyParser) {
+        self.PressedLoadFile(keyEvents).await;
     }
 
     fn GetEventHandlerHandle (&mut self,
@@ -383,7 +389,8 @@ impl <'a> App <'a> {
         event.position.0 <= 29 &&
             event.position.1 < self.area.height - 10 &&
             self.fileBrowser.fileTab == FileTabs::Outline &&
-            !self.codeTabs.tabs.is_empty()
+            !self.codeTabs.tabs.is_empty() &&
+            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null
         {
             self.PressedScopeJump(events, event);
         } else if
@@ -392,14 +399,6 @@ impl <'a> App <'a> {
             !self.codeTabs.tabs.is_empty()
         {
             self.PressedNewCodeTab(events, event);
-        } else if  // selecting files to open
-            event.position.0 > 1 &&
-            event.position.0 < 30 && //height - 8, width 30
-            event.position.1 < self.area.height - 8 &&
-            event.position.1 > 1 &&
-            self.appState == AppState::CommandPrompt
-        {
-            self.PressedLoadFile(events, event).await;
         }
     }
 
@@ -1163,7 +1162,9 @@ impl <'a> App <'a> {
         }
         
         // handling escape (switching tabs)
-        if keyEvents.ContainsKeyCode(KeyCode::Escape) {
+        if keyEvents.ContainsKeyCode(KeyCode::Escape) &&
+            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null
+        {
             self.appState = match self.appState {
                 AppState::Tabs => {
                     self.tabState = TabState::Files;
@@ -1209,41 +1210,41 @@ impl <'a> App <'a> {
 
     // ============================================= code block here =============================================
     fn RenderCodeBlock (&mut self, app: &mut TermRender::App) {
-        if !self.codeTabs.tabs.is_empty() {
-            let leftPadding =
-                if self.appState == AppState::CommandPrompt {  29  }
-                else {  0  };
-            let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), leftPadding);
+        if self.codeTabs.tabs.is_empty() {  return;  }
 
-            for tabIndex in 0..=self.codeTabs.panes.len() {
-                //let area = app.GetWindowArea();
-                self.RenderCodeTab(app, tabIndex, tabSize);
-            }
+        let leftPadding =
+            if self.appState == AppState::CommandPrompt {  29  }
+            else {  0  };
+        let tabSize = self.codeTabs.GetTabSize(app.GetWindowArea(), leftPadding);
 
-            // rendering the info on the cursor's position
-            let tab = &self.codeTabs.tabs[self.lastTab];
-            let text = Span::FromTokens(vec![
-                if tab.highlighting {
-                    let (start, end) = (
-                        std::cmp::min(tab.cursor.0, tab.cursorEnd.0),
-                        std::cmp::max(tab.cursor.0, tab.cursorEnd.0)
-                    );
-                    color![format!("Line: {} - {} ({} lines)", start, end, end - start + 1), BrightBlack, Italic]
-                } else {
-                    let charCount = tab.lines[tab.cursor.0].chars().count();
-                    let charCursor = std::cmp::min(tab.cursor.1 + 1, charCount);
-                    color![format!("Line: {}/{} ({}%)   Char: {}/{} ({}%)",
-                            tab.cursor.0 + 1,
-                            std::cmp::min(tab.lines.len(), charCount),
-                            ((tab.cursor.0 as f64 + 1.0) / tab.lines.len() as f64 * 100.0) as usize,
-                            charCursor,
-                            charCount,
-                            (charCursor as f64 / charCount as f64 * 100.0) as usize
-                    ), BrightBlack, Italic]
-            }]);
-            let window = app.GetWindowReferenceMut(String::from("CursorInfo"));
-            window.TryUpdateLines(vec![text]);
+        for tabIndex in 0..=self.codeTabs.panes.len() {
+            //let area = app.GetWindowArea();
+            self.RenderCodeTab(app, tabIndex, tabSize);
         }
+
+        // rendering the info on the cursor's position
+        let tab = &self.codeTabs.tabs[self.lastTab];
+        let text = Span::FromTokens(vec![
+            if tab.highlighting {
+                let (start, end) = (
+                    std::cmp::min(tab.cursor.0, tab.cursorEnd.0),
+                    std::cmp::max(tab.cursor.0, tab.cursorEnd.0)
+                );
+                color![format!("Line: {} - {} ({} lines)", start, end, end - start + 1), BrightBlack, Italic]
+            } else {
+                let charCount = tab.lines[tab.cursor.0].chars().count();
+                let charCursor = std::cmp::min(tab.cursor.1 + 1, charCount);
+                color![format!("Line: {}/{} ({}%)   Char: {}/{} ({}%)",
+                        tab.cursor.0 + 1,
+                        std::cmp::min(tab.lines.len(), charCount),
+                        ((tab.cursor.0 as f64 + 1.0) / tab.lines.len() as f64 * 100.0) as usize,
+                        charCursor,
+                        charCount,
+                        (charCursor as f64 / charCount as f64 * 100.0) as usize
+                ), BrightBlack, Italic]
+        }]);
+        let window = app.GetWindowReferenceMut(String::from("CursorInfo"));
+        window.TryUpdateLines(vec![text]);
     }
 
     fn RenderCodeTab(&mut self, app: &mut TermRender::App, tabIndex: usize, tabSize: usize) {
@@ -1277,32 +1278,30 @@ impl <'a> App <'a> {
                 padding.saturating_sub(1),
         );
 
-        {
-            let height = self.area.height;
-            let window = app.GetWindowReferenceMut(format!("CodeBlock{name}"));
+        let height = self.area.height;
+        let window = app.GetWindowReferenceMut(format!("CodeBlock{name}"));
 
-            // updating the sizing (incase it was changed to a pane)
-            window.Move((
-                (tabIndex * tabSize) as u16 + padding, 2
-            ));
-            window.Resize((
-                tabSize as u16,
-                height - 9
-            ));
+        // updating the sizing (incase it was changed to a pane)
+        window.Move((
+            (tabIndex * tabSize) as u16 + padding, 2
+        ));
+        window.Resize((
+            tabSize as u16,
+            height - 9
+        ));
 
-            if self.appState == AppState::CommandPrompt && self.tabState == TabState::Code {
-                window.TryColorize(ColorType::BrightBlue);
-            } else {
-                window.ClearColors();
-            }
-
-            if !window.HasTitle() {
-                window.TitledColored(codeBlockTitle);
-            }
-
-            window.TryUpdateLines(codeText);
-            //window.FromLines(codeText);
+        if self.appState == AppState::CommandPrompt && self.tabState == TabState::Code {
+            window.TryColorize(ColorType::BrightBlue);
+        } else {
+            window.ClearColors();
         }
+
+        if !window.HasTitle() {
+            window.TitledColored(codeBlockTitle);
+        }
+
+        window.TryUpdateLines(codeText);
+        //window.FromLines(codeText);
     }
 
     // this method is a mess..... but it works so whatever
@@ -1429,7 +1428,6 @@ impl <'a> App <'a> {
 
     fn UpdateRenderErrorBar (&mut self) {
         if self.codeTabs.tabs.is_empty() {  return;  }
-        self.debugInfo = format!("Num jumps: {} | threads: {}", self.codeTabs.tabs[self.lastTab].scopeJumps.read().len(), self.codeTabs.tabs[self.lastTab].scopeGenerationHandles.len());
 
         self.suggested.clear();
         //let mut scope = self.codeTabs.tabs[self.lastTab].scopeJumps[
@@ -1476,7 +1474,7 @@ impl <'a> App <'a> {
         }
     }
 
-    fn RenderProject (&mut self, app: &mut TermRender::App) {//(&mut self, area: Rect, buf: &mut Buffer) {
+    fn RenderProject (&mut self, app: &mut TermRender::App) {  // (&mut self, area: Rect, buf: &mut Buffer) {
         self.RenderFileBlock(app);
         self.RenderFiles(app);
         self.RenderErrorBar(app);
@@ -1678,7 +1676,6 @@ impl <'a> App <'a> {
             );
             window.Bordered();
             app.AddWindow(window, String::from("ErrorBar"), vec![String::from("Project")]);
-            //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
         }
 
         if app.ContainsWindow(String::from("Files")) {
@@ -1694,8 +1691,40 @@ impl <'a> App <'a> {
             );
             window.Bordered();
             app.AddWindow(window, String::from("Files"), vec![String::from("Project")]);
-            //app.UpdateWindowLayoutOrder();  // resized windows will be moved but still ordered the same
         }
+
+        if app.ContainsWindow(String::from("FileOptions")) {
+            let window = app.GetWindowReferenceMut(String::from("FileOptions"));
+            window.Move((1, 0));
+            window.Resize((30, 1));
+        } else {
+            let window = TermRender::Window::new(
+                (1, 0), 1,
+                (30, 1)
+            );
+            app.AddWindow(window, String::from("FileOptions"), vec![String::from("FileOptions")]);
+        }
+
+        //*
+        if app.ContainsWindow(String::from("FileOptionsDrop")) {
+            let window = app.GetWindowReferenceMut(String::from("FileOptionsDrop"));
+            window.Move((1, 2));
+            window.Resize((15, 8));
+        } else {
+            let mut window = TermRender::Window::new(
+                (1, 2), 1,
+                (15, 8)
+            );
+            window.Bordered();
+            window.Colorize(OnBrightBlack);
+            window.Hide();  // the error is somewhere in all of this :((((
+            window.SupressUpdates();
+            app.AddWindow(window, String::from("FileOptionsDrop"), vec![
+                String::from("FileOptions"),
+                String::from("FileDropDown"),
+                String::from("FileDrop1")
+            ]);
+        }  // */
 
         // dealing with the annoying code tabs
         self.CheckCodeTabs(app, (self.area.width, self.area.height));
@@ -1742,10 +1771,12 @@ impl <'a> App <'a> {
 
         let (padding, shift);
         if self.appState == AppState::CommandPrompt {
-            app.GetWindowReferenceMut(String::from("Files")).Show();
+            let changed = app.GetWindowReferenceMut(String::from("Files")).Show();
+            if changed {  app.GetWindowReferenceMut(String::from("FileOptions")).UpdateAll();  }
             (padding, shift) = (30, 29);
         } else {
-            app.GetWindowReferenceMut(String::from("Files")).Hide();
+            let changed = app.GetWindowReferenceMut(String::from("Files")).Hide();
+            if changed {  app.GetWindowReferenceMut(String::from("FileOptions")).UpdateAll();  }
             (padding, shift) = (0, 0);
         }
 

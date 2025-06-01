@@ -595,8 +595,10 @@ pub struct Window {
     bordered: bool,
     title: (Span, usize),
     color: Colored,
-    hidden: bool,
+    pub hidden: bool,
 }
+
+type RenderClosure = Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)>;
 
 impl Window {
     pub fn new (position: (u16, u16), depth: u16, size: (u16, u16)) -> Self {
@@ -614,16 +616,18 @@ impl Window {
         }
     }
 
-    pub fn Hide (&mut self) {
-        if self.hidden {  return;  }
+    pub fn Hide (&mut self) -> bool {
+        if self.hidden {  return false;  }
         self.hidden = true;
         self.UpdateAll();
+        true
     }
 
-    pub fn Show(&mut self) {
-        if !self.hidden {  return;  }
+    pub fn Show(&mut self) -> bool {
+        if !self.hidden {  return false;  }
         self.hidden = false;
         self.UpdateAll();
+        true
     }
 
     pub fn Move (&mut self, newPosition: (u16, u16)) {
@@ -643,16 +647,18 @@ impl Window {
         self.UpdateAll();
     }
 
-    pub fn TryColorize (&mut self, color: ColorType) {
-        if self.color.Contains(&color) {  return;  }
+    pub fn TryColorize (&mut self, color: ColorType) -> bool {
+        if self.color.Contains(&color) {  return false;  }
         self.color.AddColor(color);
         self.UpdateAll();
+        true
     }
 
-    pub fn ClearColors (&mut self) {
-        if self.color.IsUncolored() { return; }
+    pub fn ClearColors (&mut self) -> bool {
+        if self.color.IsUncolored() { return false; }
         self.color = Colored::new(String::new());
         self.UpdateAll();
+        true
     }
 
     // Adds a border around the window/block
@@ -753,20 +759,25 @@ impl Window {
         } text
     }
 
-    pub fn GetRenderClosure (&mut self) -> Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> {
-        // by rendering, the window is being updated
-        let mut renderClosures: Vec <(Box <dyn FnOnce () -> String + Send>, u16, u16, u16)> = vec![];
+    fn HandleHiddenClosure (&mut self, mut renderClosures: RenderClosure) -> RenderClosure {
+        self.wasUpdated = true;
+        for i in 0..self.updated.len() {
+            if self.updated[i] {  continue;  }
+            self.updated[i] = true;
+            let width = self.size.0;
+            renderClosures.push((Box::new(move || {
+                " ".repeat(width as usize)
+            }), self.position.0, self.position.1 + i as u16, 0));  // the depth is 0, right?
+        }
+        renderClosures
+    }
 
-        if self.hidden && !self.wasUpdated {
-            self.wasUpdated = true;
-            for i in 0..self.updated.len() {
-                self.updated[i] = true;
-                let width = self.size.0;
-                renderClosures.push((Box::new(move || {
-                    " ".repeat(width as usize)
-                }), self.position.0, self.position.1 + i as u16, self.depth));
-            }
-            return renderClosures;
+    pub fn GetRenderClosure (&mut self) -> RenderClosure {
+        if self.wasUpdated {  return vec![];  }  // no re-rendering is needed
+
+        let mut renderClosures: RenderClosure = vec![];
+        if self.hidden {
+            return self.HandleHiddenClosure(renderClosures);
         }
 
         // these will need to be sorted by row, and the cursor movement is handled externally (the u16 pair)
@@ -992,6 +1003,13 @@ impl Window {
         }
         self.wasUpdated = false;
     }
+
+    pub fn SupressUpdates (&mut self) {
+        for line in self.updated.iter_mut() {
+            *line = true;
+        }
+        self.wasUpdated = true;
+    }
 }
 
 
@@ -1075,7 +1093,7 @@ impl App {
 
     // Adds a new active window
     pub fn AddWindow (&mut self, window: Window, name: String, keywords: Vec <String>) {
-        self.changeWindowLayout = true;
+        if !window.hidden {  self.changeWindowLayout = true;  }  // if the window is hidden, it shouldn't change anything
         self.windowReferences.insert(name, self.windowReferences.len());
         self.activeWindows.push((window, keywords));
         //self.updated = true;
@@ -1149,16 +1167,11 @@ impl App {
         } slice
     }
 
-    // Renders all the active windows to the consol
-    // It also clears the screen from previous writing
-    pub fn Render (&mut self) -> usize {
-        //let start = std::time::Instant::now();
+    fn HandleRenderWindowChanges (&mut self, size: &(u16, u16)) {
         if self.renderHandle.is_some() {
             let handle = self.renderHandle.take().unwrap();
             let _ = handle.join();
         }
-
-        let size = self.GetTerminalSize().unwrap();
 
         self.buffer.write().clear();
         if size.0 != self.area.width || size.1 != self.area.height || self.resetWindows {
@@ -1168,12 +1181,21 @@ impl App {
             // making sure the windows get updated
             //self.updated = true;
             for window in &mut self.activeWindows {
+                if window.0.hidden {  continue;  }  // hidden windows don't need re-rendering
                 window.0.UpdateAll();
             }
 
             // replace with an actual clear..... this doesn't work (it just shifts the screen)
             print!("\x1b[2J\x1b[H");  // re-clearing the screen (everything will need to update....)
         }
+    }
+
+    // Renders all the active windows to the consol
+    // It also clears the screen from previous writing
+    pub fn Render (&mut self) -> usize {
+        let size = self.GetTerminalSize().unwrap();
+
+        self.HandleRenderWindowChanges(&size);
 
         self.area = Rect {
             width: size.0,

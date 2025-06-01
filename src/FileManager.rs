@@ -157,7 +157,7 @@ use crate::TermRender::{ColorType, Span};
 use crate::{AppState, TabState};
 use crate::App as MainApp;
 use crate::CodeTabs::CodeTab;
-use crate::eventHandler::{KeyParser, MouseEvent};
+use crate::eventHandler::{KeyCode, KeyParser, MouseEvent, MouseEventType, MouseState};
 
 static VALID_EXTENSIONS: [&str; 10] = [
     "txt",
@@ -298,7 +298,6 @@ impl <'a> MainApp <'a> {
         if self.fileBrowser.fileTab == FileTabs::Outline {
             fileText = self.RenderFilebrowserOutline(app.GetWindowArea());
         } else {
-            //let mut allFiles = vec!();
             for (index, itemsInfo) in self.allFiles.iter().enumerate() {
                 fileText.push(MainApp::RenderFile(
                     app, index == self.fileBrowser.fileCursor, itemsInfo
@@ -306,16 +305,68 @@ impl <'a> MainApp <'a> {
             }
         }
 
-        {  // in its own block to ensure the mutable reference gets dropped (wouldn't really matter anyways though....)
-            let window = app.GetWindowReferenceMut(String::from("Files"));
-
+        let window = app.GetWindowReferenceMut(String::from("Files"));
+        let changed =
             if self.appState == AppState::CommandPrompt && self.tabState == TabState::Files {
-                window.TryColorize(ColorType::BrightBlue);
+                window.TryColorize(ColorType::BrightBlue)
             } else {
-                window.ClearColors();
-            }
+                window.ClearColors()
+        };
+        window.TryUpdateLines(fileText);
 
-            window.TryUpdateLines(fileText);
+        if changed {  app.GetWindowReferenceMut(String::from("FileOptions")).UpdateAll();  }
+
+        self.RenderFileOptions(app);
+    }
+
+    fn RenderFileOptions (&mut self, app: &mut App) {
+        let mut filesText = color!["| Files |", Underline, White];
+        if self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Files {
+            filesText = color![filesText, OnBlue];
+        }
+
+        let window = app.GetWindowReferenceMut(String::from("FileOptions"));
+        window.TryUpdateLines(vec![Span::FromTokens(vec![
+            filesText,
+        ])]);
+
+        let window = app.GetWindowReferenceMut(String::from("FileOptionsDrop"));
+        let hidden =
+            if self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Files {
+                window.Show();
+                window.TryUpdateLines(vec![Span::FromTokens(vec![
+                    color!["  ", White, OnBrightBlack],
+                    color!["New File", BrightWhite, Underline, OnBrightBlack],
+                    color!["   ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color!["              ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color!["              ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color!["              ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color!["              ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color!["              ", White, OnBrightBlack],
+                ])]);
+                true
+            } else {
+                let hidden = window.hidden;
+                window.Hide(); window.SupressUpdates();  // the file browser should cover it over
+                hidden
+        };
+
+        if !hidden {
+            let window = app.GetWindowReferenceMut(String::from("Files"));
+            window.UpdateAll();  // making sure it doesn't get covered over
+            if self.codeTabs.tabs.is_empty() {  return;  }
+            // updating all code tabs
+            for tabIndex in &self.codeTabs.panes {
+                let name = self.codeTabs.tabs[*tabIndex].name.clone();
+                app.GetWindowReferenceMut(format!("CodeBlock{name}")).UpdateAll();
+            }
+            let name = self.codeTabs.tabs[self.codeTabs.currentTab].name.clone();
+            app.GetWindowReferenceMut(format!("CodeBlock{name}")).UpdateAll();
         }
     }
 
@@ -337,12 +388,66 @@ impl <'a> MainApp <'a> {
         ])
     }
 
-    pub(crate) async fn PressedLoadFile (&mut self, _events: &KeyParser, event: &MouseEvent) {
+    fn HandlePressedOptions (&mut self, _events: &KeyParser, event: &MouseEvent) {
+        // updating the windows
+        match self.fileBrowser.fileOptions.selectedOptionsTab {
+            OptionTabs::Files => {
+                self.HandleFileOptionsPressed(event);
+                return;
+            }
+            _ => {}
+        }
+
+        if event.position.1 == 1 {
+            if event.position.0 >= 1 && event.position.0 < 9 {
+                self.fileBrowser.fileOptions.selectedOptionsTab = OptionTabs::Files;
+            } else {
+                self.fileBrowser.fileOptions.selectedOptionsTab = OptionTabs::Null;
+            }
+        }
+    }
+
+    fn HandleFileOptionsPressed (&mut self, event: &MouseEvent) {
+        if event.position.0 > 15 || event.position.1 <= 1 || event.position.1 > 30 {
+            self.fileBrowser.fileOptions.selectedOptionsTab = OptionTabs::Null;
+        }
+    }
+
+    fn HandleOptionsKeycodes (&mut self, events: &KeyParser) {
+        if events.ContainsKeyCode(KeyCode::Escape) {
+            self.fileBrowser.fileOptions.selectedOptionsTab = OptionTabs::Null;
+        }
+    }
+
+    pub(crate) async fn PressedLoadFile (&mut self, events: &KeyParser) {
+        if self.fileBrowser.fileOptions.selectedOptionsTab != OptionTabs::Null {
+            self.HandleOptionsKeycodes(events);
+        }
+
+        if events.mouseEvent.is_none() {  return;  }
+        let event = events.mouseEvent.as_ref().unwrap();
+
+        // there aren't current any handlers that operate on other mouse events
+        if event.eventType != MouseEventType::Left || event.state != MouseState::Press {  return;  }
+
+        if event.position.1 <= 1 || self.fileBrowser.fileOptions.selectedOptionsTab != OptionTabs::Null {
+            self.HandlePressedOptions(events, event);
+            return;
+        }
+
         let height = event.position.1.saturating_sub(2) as usize;
-
+        let onFiles =
+            event.position.0 < 30 && //height - 8, width 30
+            event.position.1 > 1 &&
+            self.appState == AppState::CommandPrompt &&
+            self.allFiles.len() > height;
         // making sure it's not out of range
-        if self.allFiles.len() <= height {  return;  }
+        if !onFiles {  return;  }
 
+        self.HandleFilesMousePress(event, height).await;
+    }
+
+    async fn HandleFilesMousePress (&mut self, _event: &MouseEvent, height: usize) {
         // getting the file, and checking if it's a directory or not
         let fileInfo = &self.allFiles[height];
         if fileInfo.fileType == FileType::Directory {
@@ -414,6 +519,17 @@ impl <'a> MainApp <'a> {
     pub(crate) fn RecalcAllFiles (&mut self) {
         self.allFiles = self.fileBrowser.fileTree.CollectAllItems(0);
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OptionTabs {
+    #[default] Null,
+    Files,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileOptionManager {
+    pub selectedOptionsTab: OptionTabs,
 }
 
 
@@ -521,6 +637,7 @@ pub struct FileBrowser {
     pub fileTab: FileTabs,
     pub fileCursor: usize,
     pub outlineCursor: usize,
+    pub fileOptions: FileOptionManager,
 }
 
 impl Default for FileBrowser {
@@ -532,6 +649,7 @@ impl Default for FileBrowser {
             fileTab: FileTabs::default(),
             fileCursor: usize::default(),
             outlineCursor: usize::default(),
+            fileOptions: FileOptionManager::default(),
         }
     }
 }
