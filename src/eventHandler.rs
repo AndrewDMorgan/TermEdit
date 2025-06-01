@@ -406,7 +406,7 @@ impl KeyParser {
 
 pub async fn enableMouseCapture() {
     let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h").await;
+    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h\"").await;
     let _ = stdout.write_all(b"\x1B[?1000h").await; // Enable basic mouse mode
     let _ = stdout.write_all(b"\x1B[?1003h").await; // Enable all motion events
     std::mem::drop(stdout);

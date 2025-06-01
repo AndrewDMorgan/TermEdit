@@ -4,7 +4,7 @@
 use tokio::io::{self, AsyncReadExt};
 use vte::Parser;
 
-use crossterm::terminal::enable_raw_mode;
+use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
 use arboard::Clipboard;  // auto gets the starting file path
 
 use proc_macros::{color, load_lua_script};
@@ -197,6 +197,8 @@ impl <'a> App <'a> {
         while let Some(handle) = self.mainThreadHandles.pop() {
             let _ = handle.join();
         }
+
+        disable_raw_mode()?;
 
         Ok(())
     }

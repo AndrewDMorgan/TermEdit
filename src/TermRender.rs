@@ -1035,6 +1035,16 @@ pub struct App {
     resetWindows: bool,
 }
 
+/*
+resetting the terminal is a mess...... (I think I got it working?)
+fn reset_terminal() {
+    match std::process::Command::new("reset").status() {
+        Ok(status) if status.success() => println!("Terminal reset successfully."),
+        Ok(status) => eprintln!("Reset command failed with code: {}", status),
+        Err(e) => eprintln!("Failed to run reset: {}", e),
+    }
+}*/
+
 impl Drop for App {
     fn drop (&mut self) {
         print!("{SHOW_CURSOR}");  // showing the cursor
@@ -1043,13 +1053,19 @@ impl Drop for App {
         //print!("\x1B[2J\x1B[H\x1b");
         print!("\x1B[0m");
         print!("\x1B[?1049l");
+        print!("\x1B[2K\x1B[E");
+        print!("\x1Bc");
+
+        std::io::stdout().flush().unwrap();
     }
 }
 
 impl App {
     pub fn new () -> Self {  // 1049h
+        print!("\x1B7");
         print!("\x1B[?1049h");
-        print!("\x1b[?25l");
+        print!("\x1B[?25l");
+        //print!("\x1B[2J");
         //print!("\x1B[2J\x1B[H");  // clearing the screen and hiding the cursor
         App {
             area: Rect::default(),
