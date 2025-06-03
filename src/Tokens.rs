@@ -22,9 +22,10 @@ pub enum Languages {
     Null,
     Lua,
     Toml,
+    Json,
 }
 
-static LANGS: [(Languages, &str); 8] = [
+pub static LANGS: [(Languages, &str); 9] = [
     (Languages::Cpp   , "cpp" ),
     (Languages::Cpp   , "hpp" ),
     (Languages::Cpp   , "c"   ),
@@ -33,6 +34,7 @@ static LANGS: [(Languages, &str); 8] = [
     (Languages::Python, "py"  ),
     (Languages::Lua   , "lua" ),
     (Languages::Toml  , "toml"),
+    (Languages::Json  , "json"),
 ];
 
 
@@ -639,7 +641,8 @@ pub async fn GenerateTokens (
         let tokenStrsClone = Arc::clone(&tokenStrs);
         let handle = s.spawn(move |_| {
             let numStrs = {  tokenStrsClone.lock().len()  };
-            let result = scriptClone.call(tokenStrsClone.lock().clone());
+            let input = tokenStrsClone.lock().clone();
+            let result = scriptClone.call(input);
             *tokensClone.lock() = result.unwrap_or(vec![LuaTuple::default(); numStrs]);
         });
 

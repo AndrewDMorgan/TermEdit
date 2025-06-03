@@ -339,15 +339,27 @@ impl <'a> MainApp <'a> {
                     color!["New File", BrightWhite, Underline, OnBrightBlack],
                     color!["   ", White, OnBrightBlack],
                 ]), Span::FromTokens(vec![
-                    color!["              ", White, OnBrightBlack],
+                    color![" ", White, OnBrightBlack],
+                    color!["Delete File", BrightWhite, OnBrightBlack, Underline],
+                    color![" ", White, OnBrightBlack],
                 ]), Span::FromTokens(vec![
-                    color!["              ", White, OnBrightBlack],
+                    color![" ", White, OnBrightBlack],
+                    color!["Rename File", BrightWhite, OnBrightBlack, Underline],
+                    color![" ", White, OnBrightBlack],
                 ]), Span::FromTokens(vec![
-                    color!["              ", White, OnBrightBlack],
+                    color!["New Directory", BrightWhite, OnBrightBlack, Underline],
                 ]), Span::FromTokens(vec![
-                    color!["              ", White, OnBrightBlack],
+                    color!["  ", White, OnBrightBlack],
+                    color!["Move File", BrightWhite, OnBrightBlack, Underline],
+                    color!["  ", White, OnBrightBlack],
                 ]), Span::FromTokens(vec![
-                    color!["              ", White, OnBrightBlack],
+                    color!["  ", White, OnBrightBlack],
+                    color!["Copy File", BrightWhite, OnBrightBlack, Underline],
+                    color!["  ", White, OnBrightBlack],
+                ]), Span::FromTokens(vec![
+                    color![" ", White, OnBrightBlack],
+                    color!["Paste  File", BrightWhite, OnBrightBlack, Underline],
+                    color![" ", White, OnBrightBlack],
                 ])]);
                 true
             } else {
@@ -408,7 +420,7 @@ impl <'a> MainApp <'a> {
     }
 
     fn HandleFileOptionsPressed (&mut self, event: &MouseEvent) {
-        if event.position.0 > 15 || event.position.1 <= 1 || event.position.1 > 30 {
+        if event.position.0 > 15 || event.position.1 <= 1 || event.position.1 > 9 {
             self.fileBrowser.fileOptions.selectedOptionsTab = OptionTabs::Null;
         }
     }

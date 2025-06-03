@@ -90,7 +90,7 @@ function Unchecked (token)
     if token == "unsafe" or token == "from_raw" then
         return "Unsafe"
     end
-
+    
     local splitText = {}
     for str in string.gmatch(token, '([^_]+)') do
         table.insert(splitText, str)

@@ -1,11 +1,12 @@
 // snake case is just bad
 #![allow(non_snake_case)]
 
-use tokio::io::{self, AsyncReadExt};
+use std::io::Read;
+use tokio::io;
 use vte::Parser;
 
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
-use arboard::Clipboard;  // auto gets the starting file path
+use arboard::Clipboard;
 
 use proc_macros::{color, load_lua_script};
 
@@ -16,9 +17,10 @@ mod CodeTabs;
 mod Tokens;
 mod Colors;
 mod FileManager;
+mod DataManager;
+mod RuntimeScheduler;
 
 use StringPatternMatching::*;
-use TermRender::ColorType;
 use Colors::*;
 use eventHandler::*;
 use Tokens::*;
@@ -26,9 +28,10 @@ use Tokens::*;
 use CodeTabs::CodeTab;
 
 use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
-use crate::TermRender::{Colorize, Span};
-use crate::FileManager::*;
-use crate::TermRender::ColorType::OnBrightBlack;
+use TermRender::{Colorize, Span, ColorType};
+use FileManager::*;
+
+use RuntimeScheduler::*;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FileTabs {
@@ -86,7 +89,8 @@ pub struct App <'a> {
 
     luaSyntaxHighlightScripts: LuaScripts,
 
-    mainThreadHandles: Vec <std::thread::JoinHandle<()>>,
+    // no longer needed. All operations that happened here are now running on threads inside the runtime manager
+    //mainThreadHandles: Vec <std::thread::JoinHandle<()>>,
 
     dtScalar: f64,
 
@@ -95,7 +99,7 @@ pub struct App <'a> {
 
 impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
-    pub async fn run (&mut self, app: &mut TermRender::App) -> io::Result<()> {
+    pub async fn run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> io::Result<()> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         let terminalSize = app.GetTerminalSize()?;
@@ -144,9 +148,10 @@ impl <'a> App <'a> {
         let parser = std::sync::Arc::new(parking_lot::RwLock::new(Parser::new()));
         let keyParser = std::sync::Arc::new(parking_lot::RwLock::new(KeyParser::new()));
         let buffer = std::sync::Arc::new(parking_lot::RwLock::new([0; 128]));  // [0; 10]; not sure how much the larger buffer is actually helping
-        let stdin = std::sync::Arc::new(parking_lot::RwLock::new(tokio::io::stdin()));
+        let stdin = std::sync::Arc::new(parking_lot::RwLock::new(std::io::stdin()));
 
         self.HandleMainLoop(
+            runtime,
             buffer.clone(),
             keyParser.clone(),
             stdin.clone(),
@@ -186,17 +191,18 @@ impl <'a> App <'a> {
             const FPS_AIM: f64 = 1f64 / 60f64;  // the target fps (forces it to stall to this to ensure low CPU usage)
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
             self.dtScalar = 1.0 / (FPS_AIM / (elapsedTime + difference));  // for dt scaling
-            tokio::time::sleep(tokio::time::Duration::from_secs_f64(difference)).await;
+            std::thread::sleep(std::time::Duration::from_secs_f64(difference));
             /*self.debugInfo = format!("redraws: {}  |  elapsedTime: {}  |  waited: {}",
                  updates,
                  (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
                 difference);*/
         }
 
+        // the threads have been moved to the runtime manager
         // joining the threads (they should have exited already and thus should be done)
-        while let Some(handle) = self.mainThreadHandles.pop() {
-            let _ = handle.join();
-        }
+        //while let Some(handle) = self.mainThreadHandles.pop() {
+        //    let _ = handle.join();
+        //}
 
         disable_raw_mode()?;
 
@@ -208,30 +214,35 @@ impl <'a> App <'a> {
     }
 
     fn GetEventHandlerHandle (&mut self,
+                              runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>,
                               buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
                               keyParser: std::sync::Arc <parking_lot::RwLock <KeyParser>>,
-                              stdin: std::sync::Arc <parking_lot::RwLock <io::Stdin>>,
+                              stdin: std::sync::Arc <parking_lot::RwLock <std::io::Stdin>>,
                               parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
                               exit: std::sync::Arc <parking_lot::RwLock<bool >>,
-    ) -> std::thread::JoinHandle <()> {
-        std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+    ) {
+        //std::thread::spawn(move || {
+        let buffer = buffer.clone();
+        let keyParser = keyParser.clone();
+        let parser = parser.clone();
+        let stdin = stdin.clone();
+
+        let future = async move {
+            //let rt = tokio::runtime::Runtime::new().unwrap();
             loop {
                 if *exit.read() {
                     break;
                 }
-                let buffer = buffer.clone();
-                let keyParser = keyParser.clone();
-                let parser = parser.clone();
-                let stdin = stdin.clone();
-                rt.block_on(async move {
+                //rt.block_on(async move {
                     let mut localBuffer = [0; 128];
                     // should cancel after 0.5 seconds? (incase an early exit or something)
                     let mut stdWrite = stdin.write();
-                    let result = tokio::time::timeout(
-                        tokio::time::Duration::from_secs_f64(0.25), stdWrite.read(&mut localBuffer)
-                    ).await; drop(stdWrite);
-                    if let Ok(Ok(n)) = result {
+                    //let result = tokio::time::timeout(
+                        //tokio::time::Duration::from_secs_f64(0.25), stdWrite.read(&mut localBuffer)
+                    //).await; drop(stdWrite);
+                    let result = stdWrite.read(&mut localBuffer);
+                    drop(stdWrite);
+                    if let Ok(n) = result {
                         *buffer.write() = localBuffer;
                         keyParser.write().bytes = n;
 
@@ -241,26 +252,29 @@ impl <'a> App <'a> {
                             parser.write().advance(&mut *keyParser.write(), &buffer.read()[..n]);
                         }
                     }
-                })
-            } rt.shutdown_background();
-        })
+                //})
+            } //rt.shutdown_background();
+        };//)
+        runtime.write().AddTask(Box::pin(future));
     }
 
     async fn HandleMainLoop (&mut self,
+                             runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>,
                              buffer: std::sync::Arc <parking_lot::RwLock <[u8; 128]>>,
                              keyParser: std::sync::Arc <parking_lot::RwLock <KeyParser>>,
-                             stdin: std::sync::Arc <parking_lot::RwLock <io::Stdin>>,
+                             stdin: std::sync::Arc <parking_lot::RwLock <std::io::Stdin>>,
                              parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
     ) -> Result <(), io::Error> {
         let exit = self.exit.clone();
-        let eventThreadHandler = self.GetEventHandlerHandle(
+        self.GetEventHandlerHandle(
+            runtime,
             buffer,
             keyParser,
             stdin,
             parser,
             exit,
         );
-        self.mainThreadHandles.push(eventThreadHandler);
+        //self.mainThreadHandles.push(eventThreadHandler);
 
         Ok(())
     }
@@ -538,10 +552,11 @@ impl <'a> App <'a> {
         }
 
         self.HandleTabViewTabPress(keyEvents);
+        self.HandleCodeTabviewKeyEvents(keyEvents);
 
         match self.tabState {
             TabState::Code => {
-                self.HandleCodeTabviewKeyEvents(keyEvents);
+                // nothing so far ig
             },
             TabState::Files => {
                 self.HandleFilebrowserKeyEvents(keyEvents);
@@ -608,14 +623,14 @@ impl <'a> App <'a> {
     }
 
     fn HandleCodeTabviewKeyEvents (&mut self, keyEvents: &KeyParser) {
-        if keyEvents.ContainsKeyCode(KeyCode::Return) {
+        if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() && !self.codeTabs.tabs.is_empty() {
             self.appState = AppState::Tabs;
         }
     }
 
     fn HandleFilebrowserKeyEvents (&mut self, keyEvents: &KeyParser) {
         if self.fileBrowser.fileTab == FileTabs::Outline {
-            if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() {
+            if keyEvents.ContainsKeyCode(KeyCode::Return) && self.currentCommand.is_empty() && !self.codeTabs.tabs.is_empty() {
                 let mut nodePath = self.codeTabs.tabs[self.lastTab].linearScopes.read()[
                     self.fileBrowser.outlineCursor].clone();
                 nodePath.reverse();
@@ -650,7 +665,7 @@ impl <'a> App <'a> {
             } else {
                 self.codeTabs.TabRight();
             }
-        } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
+        } else if keyEvents.ContainsKeyCode(KeyCode::Return) && !self.codeTabs.tabs.is_empty() {
             self.appState = AppState::Tabs;
             self.tabState = TabState::Code;
         } else if keyEvents.ContainsKeyCode(KeyCode::Delete) {
@@ -1150,11 +1165,11 @@ impl <'a> App <'a> {
                 self.HandleCommandPromptKeyEvents(keyEvents);
             },
             AppState::Tabs => {
-                match self.tabState {
-                    TabState::Code if !self.codeTabs.tabs.is_empty() => {
-                        self.HandleCodeKeyEvents(keyEvents, clipBoard).await;
-                    },
-                    _ => {}  // the other two shouldn't be accessible during the tab state (only during command-line)
+                if !self.codeTabs.tabs.is_empty() {
+                    self.HandleCodeKeyEvents(keyEvents, clipBoard).await;
+                }
+                if self.tabState != TabState::Code {
+                    self.tabState = TabState::Code
                 }
             },
             AppState::Menu => {
@@ -1165,7 +1180,8 @@ impl <'a> App <'a> {
         
         // handling escape (switching tabs)
         if keyEvents.ContainsKeyCode(KeyCode::Escape) &&
-            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null
+            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null &&
+            !self.codeTabs.tabs.is_empty()
         {
             self.appState = match self.appState {
                 AppState::Tabs => {
@@ -1238,7 +1254,7 @@ impl <'a> App <'a> {
                 let charCursor = std::cmp::min(tab.cursor.1 + 1, charCount);
                 color![format!("Line: {}/{} ({}%)   Char: {}/{} ({}%)",
                         tab.cursor.0 + 1,
-                        std::cmp::min(tab.lines.len(), charCount),
+                        tab.lines.len(),
                         ((tab.cursor.0 as f64 + 1.0) / tab.lines.len() as f64 * 100.0) as usize,
                         charCursor,
                         charCount,
@@ -1407,7 +1423,8 @@ impl <'a> App <'a> {
 
         let mut closest = (usize::MAX, vec!["".to_string()], 0usize);
         for (i, var) in validKeywords.iter().enumerate() {
-            let value = string_pattern_matching::byte_comparison(&token, &var.keyword);  // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
+            let value = string_pattern_matching::byte_comparison(&token, &var.keyword);
+            // StringPatternMatching::levenshtein_distance(&token, &var.keyword); (too slow)
             if value < closest.0 {
                 closest = (value, vec![var.keyword.clone()], i);
             } else if value == closest.0 {
@@ -1711,14 +1728,14 @@ impl <'a> App <'a> {
         if app.ContainsWindow(String::from("FileOptionsDrop")) {
             let window = app.GetWindowReferenceMut(String::from("FileOptionsDrop"));
             window.Move((1, 2));
-            window.Resize((15, 8));
+            window.Resize((15, 9));
         } else {
             let mut window = TermRender::Window::new(
                 (1, 2), 1,
-                (15, 8)
+                (15, 9)
             );
             window.Bordered();
-            window.Colorize(OnBrightBlack);
+            window.Colorize(ColorType::OnBrightBlack);
             window.Hide();  // the error is somewhere in all of this :((((
             window.SupressUpdates();
             app.AddWindow(window, String::from("FileOptionsDrop"), vec![
@@ -1768,7 +1785,6 @@ impl <'a> App <'a> {
             *name = newName;
         }
 
-        //self.debugInfo = format!("Number of code windows: {}", app.GetWindowsByKeywords(vec![String::from("CodeTab")]).len());
         self.PruneBadCodeTabs(app, toPrune, &mut names);
 
         let (padding, shift);
@@ -2051,7 +2067,7 @@ Warnings underlined in yellow
     parse Clippy's output into the proper warning or errors
     display the error or warning at the bottom (where code completion suggestions go)
 
-Suggestions appear on the very bottom as to not obstruct the code being written
+Suggestions appear on the very bottom as to not obstruct the code being written (and a basic inline greyed text)
 
 
 maybe show the outline moving while scrolling?
@@ -2060,8 +2076,6 @@ make it so when indenting/unindenting it does it for the entire selection if hig
 make it so when pressing return, it auto sets to the correct indent level
     same thing for various other actions being set to the correct indent level
 
-Fix the highlighting bug when selecting text above and only partially covering a token; It's not rendering the full token and does weird things...
-    It has something to do with the end and starting cursor char positions being aligned on the separate lines
 Add double-clicking to highlight a token or line
 make it so that highlighting than typing () or {} or [] encloses the text rather than replacing it
 
@@ -2103,21 +2117,32 @@ multi-line parameters on functions/methods aren't correctly read
 multi-line comments aren't updated properly when just pressing return (on empty lines)
     it may not be storing anything on empty lines?
 
-todo!! make it so when too many tabs are open it doesn't just crash and die... (does the new rendering framework fix this?)
-
 Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage?
+    -- not necessary? The call is a blocking task so it should wait until an event or the elapsed time
 
 maybe look at using jit for the lua interfacing.
 */
 
-// 10 worker threads does seem to be faster? (it uses maybe 1% less cpu? very minor)
-#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
-async fn main() -> io::Result<()> {
-    let mut termApp = TermRender::App::new();
 
-    enableMouseCapture().await;
-    let app_result = App::default().run(&mut termApp).await;
-    disableMouseCapture().await;
-    app_result
+// yay! managed to manually create a runtime which seems to lower CPU usage by a bit compared to tokio.
+fn main() {
+    let runtime = std::sync::Arc::new(parking_lot::RwLock::new(Runtime::default()));
+    let cloned = runtime.clone();
+    let future = async {
+        let mut termApp = TermRender::App::new();
+
+        enableMouseCapture().await;
+        let app_result = App::default().run(&mut termApp, cloned).await;
+        app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
+        disableMouseCapture().await;
+    };
+    runtime.write().AddTask(Box::pin(future));
+    loop {
+        let completed = runtime.write().Poll();
+        if completed || runtime.read().is_empty() {  break;  }
+        // waiting to reduce cpu usage (this doesn't directly poll the futures; it polls the threads to check if they can be cleaned up)
+        // this won't prevent anything from running. It will only cause a slight delay in when threads get joined.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
 }
 

@@ -1,4 +1,4 @@
-use tokio::io::AsyncWriteExt;
+use std::io::Write;
 use vte::Perform;
 
 // constants for tracking mouse scrolling
@@ -406,18 +406,18 @@ impl KeyParser {
 }
 
 pub async fn enableMouseCapture() {
-    let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h\"").await;
-    let _ = stdout.write_all(b"\x1B[?1000h").await; // Enable basic mouse mode
-    let _ = stdout.write_all(b"\x1B[?1003h").await; // Enable all motion events
-    std::mem::drop(stdout);
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(b"echo -e \"\x1B[?1006h\"");
+    let _ = stdout.write_all(b"\x1B[?1000h"); // Enable basic mouse mode
+    let _ = stdout.write_all(b"\x1B[?1003h"); // Enable all motion events
+    drop(stdout);
 }
 
 pub async fn disableMouseCapture() {
-    let mut stdout = tokio::io::stdout();
-    let _ = stdout.write_all(b"\x1B[?1000l").await; // Disable mouse mode
-    let _ = stdout.write_all(b"\x1B[?1003l").await; // Disable motion events
-    std::mem::drop(stdout);
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(b"\x1B[?1000l"); // Disable mouse mode
+    let _ = stdout.write_all(b"\x1B[?1003l"); // Disable motion events
+    drop(stdout);
 }
 
 impl KeyParser {
