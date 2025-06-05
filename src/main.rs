@@ -2,13 +2,12 @@
 #![allow(non_snake_case)]
 
 use std::io::Read;
-use tokio::io;
 use vte::Parser;
 
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
 use arboard::Clipboard;
 
-use proc_macros::{color, load_lua_script};
+use proc_macros::{color, load_lua_script, load_lua_scripts};
 
 mod StringPatternMatching;
 mod eventHandler;
@@ -31,7 +30,7 @@ use eventHandler::{KeyCode, KeyModifiers, KeyParser, MouseEventType};
 use TermRender::{Colorize, Span, ColorType};
 use FileManager::*;
 
-use RuntimeScheduler::*;
+use RuntimeScheduler::Runtime;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FileTabs {
@@ -99,7 +98,7 @@ pub struct App <'a> {
 
 impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
-    pub async fn run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> io::Result<()> {
+    pub async fn run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         let terminalSize = app.GetTerminalSize()?;
@@ -108,36 +107,15 @@ impl <'a> App <'a> {
             height: terminalSize.1
         };
 
-        // loading the lua syntax highlighting scripts (using proc_macros)
         load_lua_script!(
             self.luaSyntaxHighlightScripts,
             Languages::Null,
-            "assets/nullSyntaxHighlighting.lua"
+            "assets/nullSyntaxHighlighting.lua",
         );
-        load_lua_script!(
+
+        load_lua_scripts!(
             self.luaSyntaxHighlightScripts,
-            Languages::Rust,
-            "assets/rustSyntaxHighlighting.lua"
-        );
-        load_lua_script!(
-            self.luaSyntaxHighlightScripts,
-            Languages::Lua,
-            "assets/luaSyntaxHighlighting.lua"
-        );
-        load_lua_script!(
-            self.luaSyntaxHighlightScripts,
-            Languages::Cpp,
-            "assets/cppSyntaxHighlighting.lua"
-        );
-        load_lua_script!(
-            self.luaSyntaxHighlightScripts,
-            Languages::Python,
-            "assets/pythonSyntaxHighlighting.lua"
-        );
-        load_lua_script!(
-            self.luaSyntaxHighlightScripts,
-            Languages::Toml,
-            "assets/tomlSyntaxHighlighting.lua"
+            "data/syntaxHighlighting.json",
         );
 
         let mut stdout = std::io::stdout();
@@ -191,18 +169,13 @@ impl <'a> App <'a> {
             const FPS_AIM: f64 = 1f64 / 60f64;  // the target fps (forces it to stall to this to ensure low CPU usage)
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
             self.dtScalar = 1.0 / (FPS_AIM / (elapsedTime + difference));  // for dt scaling
-            std::thread::sleep(std::time::Duration::from_secs_f64(difference));
-            /*self.debugInfo = format!("redraws: {}  |  elapsedTime: {}  |  waited: {}",
-                 updates,
-                 (1f64 / (std::time::SystemTime::now().duration_since(start).unwrap().as_micros() as f64 * 0.000001)).round(),
-                difference);*/
-        }
 
-        // the threads have been moved to the runtime manager
-        // joining the threads (they should have exited already and thus should be done)
-        //while let Some(handle) = self.mainThreadHandles.pop() {
-        //    let _ = handle.join();
-        //}
+            // this usage is an ok exception to the standard/usual restrictions.
+            // The custom async runtime manager assigns a unique thread to each async task,
+            // so regardless of the sleep function, a blocking or non-blocking sleep call
+            // won't impact the executor's ability to poll other futures.
+            std::thread::sleep(std::time::Duration::from_secs_f64(difference));
+        }
 
         disable_raw_mode()?;
 
@@ -221,41 +194,28 @@ impl <'a> App <'a> {
                               parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
                               exit: std::sync::Arc <parking_lot::RwLock<bool >>,
     ) {
-        //std::thread::spawn(move || {
         let buffer = buffer.clone();
         let keyParser = keyParser.clone();
         let parser = parser.clone();
         let stdin = stdin.clone();
 
-        let future = async move {
-            //let rt = tokio::runtime::Runtime::new().unwrap();
+        runtime.write().AddTask(Box::pin(async move {
             loop {
-                if *exit.read() {
-                    break;
-                }
-                //rt.block_on(async move {
-                    let mut localBuffer = [0; 128];
-                    // should cancel after 0.5 seconds? (incase an early exit or something)
-                    let mut stdWrite = stdin.write();
-                    //let result = tokio::time::timeout(
-                        //tokio::time::Duration::from_secs_f64(0.25), stdWrite.read(&mut localBuffer)
-                    //).await; drop(stdWrite);
-                    let result = stdWrite.read(&mut localBuffer);
-                    drop(stdWrite);
-                    if let Ok(n) = result {
-                        *buffer.write() = localBuffer;
-                        keyParser.write().bytes = n;
+                if *exit.read() {  break;  }
+                let mut localBuffer = [0; 128];
+                let result = stdin.write().read(&mut localBuffer);
+                if let Ok(n) = result {
+                    *buffer.write() = localBuffer;
+                    keyParser.write().bytes = n;
 
-                        if n == 1 && buffer.read()[0] == 0x1B {
-                            keyParser.write().keyEvents.insert(KeyCode::Escape, true);
-                        } else {
-                            parser.write().advance(&mut *keyParser.write(), &buffer.read()[..n]);
-                        }
+                    if n == 1 && buffer.read()[0] == 0x1B {
+                        keyParser.write().keyEvents.insert(KeyCode::Escape, true);
+                    } else {
+                        parser.write().advance(&mut *keyParser.write(), &buffer.read()[..n]);
                     }
-                //})
-            } //rt.shutdown_background();
-        };//)
-        runtime.write().AddTask(Box::pin(future));
+                }
+            }
+        }));
     }
 
     async fn HandleMainLoop (&mut self,
@@ -264,7 +224,7 @@ impl <'a> App <'a> {
                              keyParser: std::sync::Arc <parking_lot::RwLock <KeyParser>>,
                              stdin: std::sync::Arc <parking_lot::RwLock <std::io::Stdin>>,
                              parser: std::sync::Arc <parking_lot::RwLock <Parser>>,
-    ) -> Result <(), io::Error> {
+    ) -> Result <(), std::io::Error> {
         let exit = self.exit.clone();
         self.GetEventHandlerHandle(
             runtime,
@@ -2123,20 +2083,18 @@ Add a polling delay for when sampling events to hopefully reduce unnecessary com
 maybe look at using jit for the lua interfacing.
 */
 
-
 // yay! managed to manually create a runtime which seems to lower CPU usage by a bit compared to tokio.
 fn main() {
     let runtime = std::sync::Arc::new(parking_lot::RwLock::new(Runtime::default()));
     let cloned = runtime.clone();
-    let future = async {
+    runtime.write().AddTask(Box::pin(async {
         let mut termApp = TermRender::App::new();
 
         enableMouseCapture().await;
         let app_result = App::default().run(&mut termApp, cloned).await;
         app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
         disableMouseCapture().await;
-    };
-    runtime.write().AddTask(Box::pin(future));
+    }));
     loop {
         let completed = runtime.write().Poll();
         if completed || runtime.read().is_empty() {  break;  }

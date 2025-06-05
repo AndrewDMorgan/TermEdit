@@ -7,14 +7,18 @@
 #![allow(unused_assignments)]
 
 use mlua::{Error, FromLua, Lua, Value};
+use proc_macros::load_language_types;
 use crate::LuaScripts;
 
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use crossbeam::thread;
 
+
+load_language_types!("data/syntaxHighlighting.json");
+
 // language file types for syntax highlighting
-#[derive(Clone, Hash, PartialEq, Eq, Debug)]
+/*#[derive(Clone, Hash, PartialEq, Eq, Debug, Copy)]
 pub enum Languages {
     Rust,
     Cpp,
@@ -35,7 +39,7 @@ pub static LANGS: [(Languages, &str); 9] = [
     (Languages::Lua   , "lua" ),
     (Languages::Toml  , "toml"),
     (Languages::Json  , "json"),
-];
+];*/
 
 
 // token / syntax highlighting stuff idk

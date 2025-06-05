@@ -1014,7 +1014,6 @@ impl Window {
 
 
 // the main window/application that handles all the windows
-// honestly this could be removed.... the x and y fields are never used
 #[derive(Clone, Debug, Eq, PartialEq, Default, Hash)]
 pub struct Rect {
     pub width: u16,
@@ -1034,16 +1033,6 @@ pub struct App {
     buffer: std::sync::Arc <parking_lot::RwLock <String>>,
     resetWindows: bool,
 }
-
-/*
-resetting the terminal is a mess...... (I think I got it working?)
-fn reset_terminal() {
-    match std::process::Command::new("reset").status() {
-        Ok(status) if status.success() => println!("Terminal reset successfully."),
-        Ok(status) => eprintln!("Reset command failed with code: {}", status),
-        Err(e) => eprintln!("Failed to run reset: {}", e),
-    }
-}*/
 
 impl Drop for App {
     fn drop (&mut self) {
@@ -1066,8 +1055,6 @@ impl App {
         print!("\x1B7");
         print!("\x1B[?1049h");
         print!("\x1B[?25l");
-        //print!("\x1B[2J");
-        //print!("\x1B[2J\x1B[H");  // clearing the screen and hiding the cursor
         App {
             area: Rect::default(),
             activeWindows: vec![],

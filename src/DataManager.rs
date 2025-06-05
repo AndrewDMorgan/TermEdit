@@ -1,12 +1,7 @@
 use serde_json::Value;
 use std::io::Read;
-use tokio::io;
 
-use proc_macros::load_lua_script;
-use crate::{App, LuaScripts};
-use crate::Tokens::*;
-
-pub fn LoadJson (fileName: &str) -> Result <Value, io::Error> {
+pub fn LoadJson (fileName: &str) -> Result <Value, std::io::Error> {
     let mut file = std::fs::File::open(fileName)?;  // Open the file
     let mut fileContent = String::new();
     file.read_to_string(&mut fileContent)?;  // Read content into a string
@@ -14,42 +9,6 @@ pub fn LoadJson (fileName: &str) -> Result <Value, io::Error> {
     let json =
         serde_json::from_str( &fileContent )?;
     Ok(json)
-}
-
-fn FindLanguage (languageEnding: &str) -> Option<Languages> {
-    for language in LANGS.iter() {
-        if languageEnding == language.1 {
-            return Some(language.0.clone());
-        }
-    } None
-}
-
-pub fn LoadSyntaxScripts(fileName: &str, syntaxHighlighting: &mut LuaScripts) -> io::Result<()> {
-    // gathering the data
-    let content = LoadJson(fileName)?;
-
-    let (scripts, endings) = (
-        content.get("scripts"),
-        content.get("file_ending")
-    );
-    if scripts.is_none() || endings.is_none() { return Ok(()); }
-    let (scripts, endings) = (scripts.unwrap().as_array(), endings.unwrap().as_array());
-    if scripts.is_none() || endings.is_none() { return Ok(()); }
-    let (scripts, endings) = (scripts.unwrap(), endings.unwrap());
-
-    // loading the scripts
-    for (i, script) in scripts.iter().enumerate() {
-        let script = script.as_str().unwrap().to_string();  // is this right?
-        let language = FindLanguage(endings[i].as_str().unwrap());
-        if let Some(lang) = language {
-            println!("Loading script \"{}\", {:?}", script, lang);
-            load_lua_script!(
-                syntaxHighlighting,
-                lang,
-                script
-            );
-        }
-    } Ok(())
 }
 
 

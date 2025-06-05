@@ -1650,6 +1650,10 @@ impl CodeTab {
         } else {
             self.scrolled = self.cursor.0.saturating_sub(SCROLL_BOUNDS);
             if self.highlighting {  // making sure the highlighting doesn't scroll at light speed
+                // even though this is all embedded into async stuff (earlier in the call stack/depth)
+                // it's fine as the async-manager uses unique threads for every async tasks.
+                // The executor can deal with other futures regardless of if this current task is
+                // being blocked.
                 std::thread::sleep(std::time::Duration::from_millis(25));
             }
         }

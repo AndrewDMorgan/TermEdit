@@ -410,14 +410,12 @@ pub async fn enableMouseCapture() {
     let _ = stdout.write_all(b"echo -e \"\x1B[?1006h\"");
     let _ = stdout.write_all(b"\x1B[?1000h"); // Enable basic mouse mode
     let _ = stdout.write_all(b"\x1B[?1003h"); // Enable all motion events
-    drop(stdout);
 }
 
 pub async fn disableMouseCapture() {
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(b"\x1B[?1000l"); // Disable mouse mode
     let _ = stdout.write_all(b"\x1B[?1003l"); // Disable motion events
-    drop(stdout);
 }
 
 impl KeyParser {

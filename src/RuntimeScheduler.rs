@@ -7,6 +7,7 @@ fn noop(_data: *const ()) {}
 static VTABLE: RawWakerVTable =
     RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), wake, wake, noop);
 
+/// Manages a pool of runtimes that can handle futures from synchronous and/or asynchronous code.
 #[derive(Debug, Default)]
 pub struct Runtime {
     // sender is for indicating a required exit; receiver is for checking if completed
@@ -16,10 +17,15 @@ pub struct Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         // does nothing, lets the os clean up the threads so nothing is blocked
+        // unfortunately threads can't be manually killed so no manual clean up
+        // is possible
     }
 }
 
 impl Runtime {
+    /// does a soft shutdown. This will only conclude once all future tasks return as pending. A
+    /// blocking operation like std::time::sleep(...) will block this operation until concluded. A
+    /// soft blocking operation like .await will not block the shutdown.
     pub fn Shutdown (&mut self) {
         for _ in 0..self.threadPool.len() {
             let (thread, sender, _receiver) = self.threadPool.remove(0);
@@ -42,6 +48,7 @@ impl Runtime {
         } removed > 0
     }
 
+    /// checks and returns if or if not the thread pool is empty.
     pub fn is_empty (&self) -> bool {
         self.threadPool.is_empty()
     }
@@ -78,3 +85,4 @@ impl Runtime {
         })
     }
 }
+

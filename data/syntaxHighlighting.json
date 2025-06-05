@@ -1,16 +1,16 @@
 {
-  "scripts": [
-    "assets/rustSyntaxHighlighting.lua",
-    "assets/luaSyntaxHighlighting.lua",
-    "assets/cppSyntaxHighlighting.lua",
-    "assets/pythonSyntaxHighlighting.lua",
-    "assets/tomlSyntaxHighlighting.lua"
-  ],
-  "file_ending": [
-    "rs",
-    "lua",
-    "cpp",
-    "py",
-    "toml"
-  ]
+    "scripts": [
+        "assets/rustSyntaxHighlighting.lua",
+        "assets/luaSyntaxHighlighting.lua",
+        "assets/cppSyntaxHighlighting.lua",
+        "assets/pythonSyntaxHighlighting.lua",
+        "assets/tomlSyntaxHighlighting.lua"
+    ],
+    "file_endings": [
+        [["rs"], "Rust"],
+        [["lua"], "Lua"],
+        [["cpp", "c", "hpp", "h"], "Cpp"],
+        [["py"], "Python"],
+        [["toml"], "Toml"]
+    ]
 }
