@@ -1,8 +1,9 @@
 
-use crate::Colors;
 use crate::TermRender::*;
+use crate::TokenInfo::*;
 use crate::LuaScripts;
 use crate::Tokens::*;
+use crate::Colors;
 
 use crate::color;
 
@@ -270,12 +271,15 @@ impl CodeTab {
         let lineTokensClone = std::sync::Arc::clone(&self.lineTokens);
         let lineFlagsClone = std::sync::Arc::clone(&self.lineTokenFlags);
         let outlineClone = std::sync::Arc::clone(&self.outlineKeywords);
+
+        let ending = self.fileName.split('.').next_back().unwrap_or("").to_string();
+
         self.scopeGenerationHandles.push((
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(timeOffset));
 
                 let (newScopes, newJumps, newLinear) =
-                    GenerateScopes(&lineTokensClone, &lineFlagsClone, &outlineClone);
+                    Linters::GenerateScopes(&lineTokensClone, &lineFlagsClone, &outlineClone, &ending);
 
                 // waiting for a free spot to let it write (and immediately dropping it)
                 let mut writeGuard = scopeClone.write();

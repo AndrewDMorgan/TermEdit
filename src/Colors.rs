@@ -1,7 +1,6 @@
 
 use crate::TermRender::*;
-use crate::Tokens::*;
-//use ratatui::style::Color;
+use crate::TokenInfo::*;
 
 // the types of color modes (some aren't supported by certain terminals...)
 #[derive(Debug, Default, PartialEq, Eq, Hash)]

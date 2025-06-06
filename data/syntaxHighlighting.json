@@ -12,5 +12,8 @@
         [["cpp", "c", "hpp", "h"], "Cpp"],
         [["py"], "Python"],
         [["toml"], "Toml"]
+    ],
+    "linters": [
+        ["../Linters/Rust.rs", "Rust"]
     ]
 }

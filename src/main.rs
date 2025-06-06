@@ -18,11 +18,13 @@ mod Colors;
 mod FileManager;
 mod DataManager;
 mod RuntimeScheduler;
+mod TokenInfo;
 
 use StringPatternMatching::*;
 use Colors::*;
 use eventHandler::*;
-use Tokens::*;
+
+use crate::TokenInfo::*;
 
 use CodeTabs::CodeTab;
 

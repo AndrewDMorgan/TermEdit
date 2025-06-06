@@ -9,6 +9,7 @@ use quote::quote;
 use syn::{parse_macro_input, Expr, Token};
 use syn::punctuated::Punctuated;
 
+
 // loads a lua script for syntax highlighting into the hash-map
 #[proc_macro]
 pub fn load_lua_script (input: TokenStream) -> TokenStream {
@@ -32,7 +33,7 @@ pub fn load_lua_script (input: TokenStream) -> TokenStream {
 }
 
 fn load_json (file_name: &str) -> Value {
-    let mut file = std::fs::File::open(file_name).unwrap();  // Open the file
+    let mut file = std::fs::File::open(file_name).expect("Failed to open JSON file for macro");  // Open the file
     let mut file_content = String::new();
     file.read_to_string(&mut file_content).unwrap();  // Read content into a string
     serde_json::from_str( &file_content ).unwrap()
@@ -73,9 +74,7 @@ pub fn load_lua_scripts (input: TokenStream) -> TokenStream {
                 #script
             );
         };
-    }
-    //println!("{}", language_scripts.to_string());
-    TokenStream::from(language_scripts)
+    } TokenStream::from(language_scripts)
 }
 
 
@@ -124,6 +123,47 @@ pub fn load_language_types (input: TokenStream) -> TokenStream {
             #lang_enum
         }
         pub static LANGS: [(Languages, &str); #size] = [#langs];
+    })
+}
+
+/// Statically links external rust programs into the main codebase to allow zero-cost integration with custom
+/// linters and lsp's.
+#[proc_macro]
+pub fn link_linters (input: TokenStream) -> TokenStream {
+    let args: Punctuated<Expr, Token![,]> = parse_macro_input!(input with Punctuated::parse_terminated);
+    let path = &args[0];
+    let path_str = match path {
+        Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(lit_str), .. }) => lit_str.value(),
+        _ => panic!("Expected a string literal as input, like \"file.json\""),
+    };
+    let content = load_json(&path_str);
+    let endings = content.get("linters");
+    let endings = endings.unwrap().as_array().unwrap();
+
+    let mut size = 0usize;
+    let mut langs = quote! {};
+    let mut lang_links = quote! {};
+    for lang in endings {
+        let lang_info = lang.as_array().unwrap();
+        let script_path = lang_info[0].as_str().unwrap();
+        let language = syn::parse_str::<Expr>(lang_info[1].as_str().unwrap()).unwrap();
+        if size == 0 {
+            langs = quote! {  (Languages::#language, #language::#language::GenerateScopes)  };
+        } else {
+            langs = quote! {
+                #langs, (Languages::#language, #language::#language::GenerateScopes)
+            };
+        } size += 1;
+        lang_links = quote! {
+            #lang_links
+            mod #language {
+                include!(#script_path);
+            }
+        };
+    }
+    TokenStream::from(quote! {
+        #lang_links
+        pub static LANG_LINTERS: [(Languages, TraitSignature); #size] = [#langs];
     })
 }
 

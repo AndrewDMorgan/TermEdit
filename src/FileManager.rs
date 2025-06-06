@@ -146,7 +146,8 @@ FilePathNode
 */
 
 use crate::{CodeTabs, FileTabs};
-use crate::Tokens::{GenerateTokens, ScopeNode};
+use crate::Tokens::GenerateTokens;
+use crate::TokenInfo::ScopeNode;
 use crate::TermRender::*;
 use std::path::PathBuf;
 use dirs::home_dir;
