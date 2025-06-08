@@ -506,7 +506,7 @@ impl <'a> MainApp <'a> {
         let mut tab = CodeTab {
             lines,
             ..Default::default()
-        };
+        };// tab.ClearRenderCache();
         tab.name = fileInfo.name.clone();
 
         tab.fileName = fileInfo.name.clone();

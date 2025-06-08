@@ -689,7 +689,7 @@ impl Window {
         self.updated[0] = false;
     }
 
-    pub fn Resize <'a> (&mut self, changed: (u16, u16)) -> bool {
+    pub fn Resize (&mut self, changed: (u16, u16)) -> bool {
         if self.size == changed {  return false;  }
         self.size = (
             std::cmp::max(changed.0, 0),

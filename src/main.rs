@@ -96,6 +96,8 @@ pub struct App <'a> {
     dtScalar: f64,
 
     allFiles: Vec <FileInfo>,
+
+    lastTabName: String,
 }
 
 impl <'a> App <'a> {
@@ -178,7 +180,7 @@ impl <'a> App <'a> {
             // won't impact the executor's ability to poll other futures.
             std::thread::sleep(std::time::Duration::from_secs_f64(difference));
             if self.codeTabs.tabs.is_empty() {  continue;  }
-            self.debugInfo = format!("{} | {} | {}", self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
+            self.debugInfo = format!("{}; {} | {} | {}", _updates, self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
         }
 
         disable_raw_mode()?;
@@ -1230,8 +1232,8 @@ impl <'a> App <'a> {
     }
 
     fn RenderCodeTab(&mut self, app: &mut TermRender::App, tabIndex: usize, tabSize: usize) {
-        let tabIndex = if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] };
-        let name = self.codeTabs.tabs[tabIndex].name.clone();
+        let trueTabIndex = if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] };
+        let name = self.codeTabs.tabs[trueTabIndex].name.clone();
         let codeBlockTitle = Span::FromTokens(vec![
             color![" ", BrightWhite],
             color![name, Bold],
@@ -1251,12 +1253,14 @@ impl <'a> App <'a> {
                     self.tabState == TabState::Code,
                 &self.colorMode,
                 &self.suggested,
-                tabIndex,
+                trueTabIndex,
                 padding.saturating_sub(1),
         );
 
         let height = self.area.height;
         let window = app.GetWindowReferenceMut(format!("CodeBlock{name}"));
+        if name != self.lastTabName && self.codeTabs.panes.is_empty() {  window.UpdateAll();  }
+        self.lastTabName = name;
 
         // updating the sizing (incase it was changed to a pane)
         window.Move((
@@ -1266,7 +1270,7 @@ impl <'a> App <'a> {
             tabSize as u16,
             height - 9
         )) {
-            self.codeTabs.tabs[tabIndex].ClearRenderCache();
+            self.codeTabs.tabs[trueTabIndex].ClearRenderCache();
         }
 
         if self.appState == AppState::CommandPrompt && self.tabState == TabState::Code {
@@ -1962,7 +1966,7 @@ Commands: √ <esc>
 
         * code editor:
             <cmd> + <1 - 9> -> switch to corresponding code tab
-            
+
             √ <left/right/up/down> -> movement in the open file
             √ <option> + <left/right> -> jump to next token
             √ <option> + <up/down> -> jump to end/start of current scope
@@ -1999,7 +2003,7 @@ Commands: √ <esc>
                 <up/down> -> move between settings
                 <enter> -> edit setting
                 <left> -> close menu
-            
+
             √ <shift> + <tab> -> cycle between pg outline and file browser
 
             outline:
@@ -2007,11 +2011,11 @@ Commands: √ <esc>
 
                 √ <enter> -> jumps the cursor to that section in the code
                 <shift> + <enter> -> jumps the cursor to the section and switches to code editing
-                
+
                 √ <down/up> -> moves down or up one
                 <option> + <down/up> -> moves up or down to the start/end of the current scope
                 <cmnd> + <down>/<up> -> moves to the top or bottom of the outline
-                
+
                 <ctrl> + <left> -> collapse the scope currently selected
                 <ctrl> + <right> -> uncollapse the scope
 
@@ -2093,8 +2097,8 @@ fn main() {
         let mut termApp = TermRender::App::new();
 
         enableMouseCapture().await;
-        let app_result = App::default().run(&mut termApp, cloned).await;
-        app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
+        let _app_result = App::default().run(&mut termApp, cloned).await;
+        //app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
         disableMouseCapture().await;
     }));
     loop {
