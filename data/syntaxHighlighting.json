@@ -4,14 +4,16 @@
         "assets/luaSyntaxHighlighting.lua",
         "assets/cppSyntaxHighlighting.lua",
         "assets/pythonSyntaxHighlighting.lua",
-        "assets/tomlSyntaxHighlighting.lua"
+        "assets/tomlSyntaxHighlighting.lua",
+        "assets/armAsmSyntaxHighlighting.lua"
     ],
     "file_endings": [
         [["rs"], "Rust"],
         [["lua"], "Lua"],
         [["cpp", "c", "hpp", "h"], "Cpp"],
         [["py"], "Python"],
-        [["toml"], "Toml"]
+        [["toml"], "Toml"],
+        [["s", "asm"], "ArmAsm"]
     ],
     "linters": [
         ["../Linters/Rust.rs", "Rust"]

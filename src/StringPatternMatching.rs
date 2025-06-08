@@ -3,6 +3,28 @@
 pub mod string_pattern_matching {
     // kinda bad but kinda actually works; at least it's really fast
     pub fn byte_comparison (wordMain: &str, wordComp: &str) -> usize {
+        /*let size1 = wordMain.len();
+        let size2 = wordComp.len();
+        let mut totalError = 0;
+        let dif =
+            if size1 < size2 {  size1  }
+            else {
+                totalError += ((size1 - size2) * 2) as u8;
+                size2
+        };
+        if dif == 0 {  return usize::MAX;  }
+        let mainPtr = wordMain.as_ptr();
+        let compPtr = wordComp.as_ptr();
+        for i in 0..dif {
+            let byteMain = unsafe {  *mainPtr.add(i)  };
+            let byteComp = unsafe {  *compPtr.add(i)  };
+            let dst =
+                if byteMain < byteComp {  byteComp - byteMain  }
+                else { byteMain - byteComp  };
+            totalError += dst;
+        }
+        return totalError as usize;*/
+
         //if wordMain.is_empty() || wordComp.is_empty() {  return usize::MAX;  }
         let mut totalError = 0;
         let wordBytes = wordComp.as_bytes();

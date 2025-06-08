@@ -177,6 +177,8 @@ impl <'a> App <'a> {
             // so regardless of the sleep function, a blocking or non-blocking sleep call
             // won't impact the executor's ability to poll other futures.
             std::thread::sleep(std::time::Duration::from_secs_f64(difference));
+            if self.codeTabs.tabs.is_empty() {  continue;  }
+            self.debugInfo = format!("{} | {} | {}", self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
         }
 
         disable_raw_mode()?;
@@ -1228,11 +1230,8 @@ impl <'a> App <'a> {
     }
 
     fn RenderCodeTab(&mut self, app: &mut TermRender::App, tabIndex: usize, tabSize: usize) {
-        let name = self.codeTabs.tabs[
-            {
-                if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
-            }
-        ].name.clone();
+        let tabIndex = if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] };
+        let name = self.codeTabs.tabs[tabIndex].name.clone();
         let codeBlockTitle = Span::FromTokens(vec![
             color![" ", BrightWhite],
             color![name, Bold],
@@ -1252,9 +1251,7 @@ impl <'a> App <'a> {
                     self.tabState == TabState::Code,
                 &self.colorMode,
                 &self.suggested,
-                {
-                    if tabIndex == 0 { self.codeTabs.currentTab } else { self.codeTabs.panes[tabIndex - 1] }
-                },
+                tabIndex,
                 padding.saturating_sub(1),
         );
 
@@ -1265,10 +1262,12 @@ impl <'a> App <'a> {
         window.Move((
             (tabIndex * tabSize) as u16 + padding, 2
         ));
-        window.Resize((
+        if window.Resize((
             tabSize as u16,
             height - 9
-        ));
+        )) {
+            self.codeTabs.tabs[tabIndex].ClearRenderCache();
+        }
 
         if self.appState == AppState::CommandPrompt && self.tabState == TabState::Code {
             window.TryColorize(ColorType::BrightBlue);
@@ -1419,10 +1418,11 @@ impl <'a> App <'a> {
         if tokenSet.is_empty() {  return;  }  // token set is correct it seems
 
         let token = tokenSet.remove(0);  // getting the item actively on the cursor
+        if self.codeTabs.tabs[self.lastTab].scopeJumps.read().len() <= self.codeTabs.tabs[self.lastTab].cursor.0 {  return;  }
         let mut currentScope =
             self.codeTabs.tabs[self.lastTab].scopeJumps.read()[
                 self.codeTabs.tabs[self.lastTab].cursor.0
-                ].clone();
+            ].clone();
         self.CalculateInnerScope(&mut currentScope, &mut tokenSet);
 
         //scope = currentScope.clone();

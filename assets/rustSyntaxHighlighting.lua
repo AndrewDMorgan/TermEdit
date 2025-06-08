@@ -164,13 +164,15 @@ function ParseTokenType (lastTokenType, lastToken, nextToken, nextNextToken, tok
     elseif token == ":" then
         return "Member"
     elseif lastToken == ":" or lastToken == "." then
-        return CalculateMember(lastTokenType, lastToken, nextToken, token)
+        local subToken = string.sub(token, 1, 1);
+        return CalculateMember(lastTokenType, lastToken, nextToken, token, subToken)
     else
-        return ComplexTokens(lastTokenType, lastToken, nextToken, nextNextToken, token)
+        local subToken = string.sub(token, 1, 1);
+        return ComplexTokens(lastTokenType, lastToken, nextToken, nextNextToken, token, subToken)
 end end
 
 -- calculating more complex tokens
-function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, token)
+function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, token, subToken)
     if token == "'" then
         if nextNextToken ~= "'" and lastTokenType ~= "String" then
             return "Lifetime"
@@ -183,7 +185,7 @@ function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, toke
         return "String"
     elseif string.upper(token) == token then
         return "Const"
-    elseif string.upper(string.sub(token, 1, 1)) == string.sub(token, 1, 1) then
+    elseif string.upper(subToken) == subToken then
         return "Function"
     end
 
@@ -191,12 +193,11 @@ function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, toke
 end
 
 -- calculating members/methods
-function CalculateMember (lastTokenType, lastToken, nextToken, token)
+function CalculateMember (lastTokenType, lastToken, nextToken, token, subToken)
     -- checking for a method
-    local startingCharacter = string.sub(token, 1, 1)
     if string.upper(token) == token then
         return "Const"
-    elseif string.upper(startingCharacter) == startingCharacter then
+    elseif string.upper(subToken) == subToken then
         return "Method"
     end
 

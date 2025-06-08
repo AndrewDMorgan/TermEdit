@@ -160,7 +160,7 @@ use crate::App as MainApp;
 use crate::CodeTabs::CodeTab;
 use crate::eventHandler::{KeyCode, KeyParser, MouseEvent, MouseEventType, MouseState};
 
-static VALID_EXTENSIONS: [&str; 10] = [
+static VALID_EXTENSIONS: [&str; 13] = [
     "txt",
     "rs",
     "py",
@@ -171,6 +171,9 @@ static VALID_EXTENSIONS: [&str; 10] = [
     "lua",
     "toml",
     "json",
+    "s",
+    "asm",
+    "sh"
 ];
 
 static MAX_FILE_EMBEDDING_DEPTH: usize = 4usize;

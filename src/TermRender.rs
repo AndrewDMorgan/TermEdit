@@ -689,15 +689,15 @@ impl Window {
         self.updated[0] = false;
     }
 
-    // Changes the size of the window
-    pub fn Resize (&mut self, changed: (u16, u16)) {
-        if self.size == changed {  return;  }
+    pub fn Resize <'a> (&mut self, changed: (u16, u16)) -> bool {
+        if self.size == changed {  return false;  }
         self.size = (
             std::cmp::max(changed.0, 0),
             std::cmp::max(changed.1, 0)
         );
         self.updated = vec![false; self.size.1 as usize];
         self.UpdateAll();
+        true
     }
     
     // Clamps a string to a maximum length of visible UTF-8 characters while preserving escape codes

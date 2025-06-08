@@ -16,7 +16,7 @@ use crate::TokenInfo::*;
 
 
 lazy_static::lazy_static! {
-    static ref LINE_BREAKS: [String; 26] = [
+    static ref LINE_BREAKS: [String; 27] = [
         " ".to_string(),
         "@".to_string(),
         "?".to_string(),
@@ -43,6 +43,7 @@ lazy_static::lazy_static! {
         "\"".to_string(),
         "<".to_string(),
         ">".to_string(),
+        "$".to_string(),
     ];
 }
 
@@ -151,7 +152,7 @@ pub async fn GenerateTokens (
     let mut language = Languages::Null;  // the default
     for (lang, extension) in LANGS.iter() {
         if *extension == fileType {
-            language = lang.clone();
+            language = *lang;
             break;
         }
     }
@@ -261,7 +262,7 @@ pub mod Linters {
         let mut language = Languages::Null;  // the default
         for (lang, extension) in LANGS.iter() {
             if *extension == fileType {
-                language = lang.clone();
+                language = *lang;
                 break;
             }
         }

@@ -1,10 +1,8 @@
-
 use crate::TermRender::*;
 use crate::TokenInfo::*;
 use crate::LuaScripts;
 use crate::Tokens::*;
 use crate::Colors;
-
 use crate::color;
 
 // the bounds from the screen edge at which the cursor will begin scrolling
@@ -238,6 +236,12 @@ pub struct CodeTab {
 
     pub saved: bool,
     pub path: String,
+
+    pub scrollCache: Vec <Span>,
+    pub resetCache: Vec <bool>,
+    pub shiftCache: i32,
+    pub lastScroll: usize,
+    pub lastMouse: (usize, usize, usize, usize)
 }
 
 impl CodeTab {
@@ -1113,6 +1117,12 @@ impl CodeTab {
     ) {
         self.saved = false;
         if lineNumber >= self.lines.len() {  return;  }
+
+        // proper error handling actually fixed it.... who could have imagined?
+        if let Some(cacheReset) = self.resetCache.get_mut(lineNumber.saturating_sub(self.lastScroll)) {
+            *cacheReset = true;
+        }
+
         let lineTokenFlagsRead = self.lineTokenFlags.read();
         let containedComment =
             lineTokenFlagsRead[lineNumber]
@@ -1414,6 +1424,8 @@ impl CodeTab {
             self.scrolled as isize + self.mouseScrolled,
             0
         ) as usize;
+        self.shiftCache = scroll as i32 - self.lastScroll as i32;
+        self.lastScroll = scroll;
 
         // the maximum number of digits for the line number
         let maxLineNumberSize = self.lines.len().to_string().len() + 2;  // number of digits + 2usize;
@@ -1422,11 +1434,33 @@ impl CodeTab {
         //    -- (maybe change this to a buffer that can be shifted as it's moved around)
         let mut i = 0;
         // the magic number of 11 is the size of the code-tab window (kinda ugly having it here but I'm too lazy to move it)
-        for lineNumber in scroll..(scroll + area.height as usize - 11) {
+        let windowHeight = area.height as usize - 11;
+        // checking the reset and scroll cache should fix any memory leaks from edge cases
+        let currentMouse = (self.cursor.0, self.cursor.1, self.cursorEnd.0, self.cursorEnd.1);
+        if self.resetCache.len() != windowHeight ||
+           self.scrollCache.len() != windowHeight ||
+           self.lastMouse != currentMouse
+        {
+            self.resetCache = vec![true; windowHeight];
+            self.scrollCache.clear();
+            self.shiftCache = 0;
+            self.lastMouse = currentMouse;
+        } else {
+            self.UpdateCache();
+        }
+        for lineNumber in scroll..(scroll + windowHeight) {
+            if !self.resetCache[lineNumber - scroll] {
+                tabRender.push(self.scrollCache[lineNumber - scroll].clone());
+                continue;
+            } self.resetCache[lineNumber - scroll] = false;
+
             if lineNumber >= self.lines.len() {
                 let mut text = " ".repeat(maxLineNumberSize - 2);
                 text.push('~');
                 tabRender.push(Span::FromTokens(vec![
+                    color![text, Bold, Blue]
+                ]));
+                self.scrollCache.push(Span::FromTokens(vec![
                     color![text, Bold, Blue]
                 ]));
                 continue;
@@ -1447,9 +1481,41 @@ impl CodeTab {
             self.HandleScrollBar(&mut lineText, area, width, charIndex, i);
 
             // pushing the line
-            tabRender.push(Span::FromTokens(lineText));
+            tabRender.push(Span::FromTokens(lineText.clone()));
+            self.scrollCache.push(Span::FromTokens(lineText));
             i += 1;
         } tabRender
+    }
+
+    pub fn ClearRenderCache (&mut self) {
+        self.resetCache = vec![true; self.scrollCache.len()];
+        self.scrollCache.clear();
+        self.shiftCache = 0;
+    }
+
+    fn UpdateCache (&mut self) {
+        if self.shiftCache.unsigned_abs() > self.scrollCache.len() as u32 {
+            self.ClearRenderCache();
+            return;
+        }
+        if self.shiftCache > 0 {
+            self.ClearRenderCache();
+            return;
+            for _ in 0..self.shiftCache as usize {
+                self.scrollCache.remove(0);
+                self.resetCache.remove(0);
+                self.resetCache.push(true);
+            }
+        } else if self.shiftCache < 0 {
+            self.ClearRenderCache();
+            return;
+            for _ in 0..(-self.shiftCache) as usize {
+                let size = self.scrollCache.len() - 1;
+                self.scrollCache.remove(size);
+                //self.resetCache.remove(size);
+                self.resetCache.insert(0, true);
+            }
+        }
     }
 
     fn HandleScrollBar (&self, lineText: &mut Vec <Colored>, area: &Rect, width: u16, charIndex: usize, i: usize) {
@@ -1717,6 +1783,11 @@ impl Default for CodeTab {
              scopeGenerationHandles: vec!(),
              saved: true,
              path: String::new(),
+             scrollCache: vec![],
+             resetCache: vec![],
+             shiftCache: 0,
+             lastScroll: 0,
+             lastMouse: (0, 0, 0, 0),
         }
     }
 }
