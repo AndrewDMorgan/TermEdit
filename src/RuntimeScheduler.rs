@@ -26,8 +26,8 @@ impl Runtime {
             let _ = sender.send(true);  // not sure what could cause this to throw an error....
 
             // checking if the thread understood
-            for _ in 0..10 {
-                std::thread::sleep(std::time::Duration::from_millis(15));
+            for _ in 0..12 {
+                std::thread::sleep(std::time::Duration::from_millis(5));  // about 60ms total (is that enough? too much?)
                 if receiver.try_recv().is_err() { continue; }  // the thread was unable to exit in time
                 let _ = thread.join();
                 break;
@@ -73,7 +73,7 @@ impl Runtime {
 
             loop {
                 if let Ok(_exitCode) = exitReceiver.try_recv() {
-                    completionSender.send(true).unwrap();
+                    let _ = completionSender.send(true);
                     break;  // does matter if the exit code is true or false
                 }
 

@@ -1184,16 +1184,17 @@ impl App {
                 window.0.UpdateAll();
             }
 
-            // replace with an actual clear..... this doesn't work (it just shifts the screen)
-            print!("\x1b[2J\x1b[H");  // re-clearing the screen (everything will need to update....)
+            // replace with an actual clear..... this doesn't work (it just shifts the screen--or does it???)
+            print!("\x1b[2J\x1b[H");  // re-clearing the screen (everything will need to update)
         }
     }
 
     // Renders all the active windows to the consol
     // It also clears the screen from previous writing
-    pub fn Render (&mut self) -> usize {
-        let size = self.GetTerminalSize().unwrap();
-
+    pub fn Render (&mut self, terminalSize: Option <(u16, u16)>) -> usize {
+        // incase the size is needed and thus calculated elsewhere (to prevent recalculation which is slow)
+        // (aka I'm too lazy to update the code I already made.....)
+        let size = terminalSize.unwrap_or(self.GetTerminalSize().unwrap());
         self.HandleRenderWindowChanges(&size);
 
         self.area = Rect {

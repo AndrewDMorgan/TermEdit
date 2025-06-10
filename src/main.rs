@@ -162,13 +162,12 @@ impl <'a> App <'a> {
                     rustAnalyzerInstance = self.CreateRustAnalyzerInterface(&runtime);
                 }
                 lastPolled = std::time::Instant::now();
-            }
+            }  // let t = rustAnalyzerInstance.as_mut().unwrap().write().PopResponse();
 
             buffer.write().fill(0);
 
             self.codeTabs.CheckScopeThreads();  // no sure how this went missing....
 
-            // rendering (will be more performant once the new framework is added)
             let _updates = self.RenderFrame(app);
 
             let termSize = app.GetTerminalSize()?;
@@ -259,7 +258,23 @@ impl <'a> App <'a> {
                         rustAnalyzerClone.write().NewEvent(languageServer::RustEvents::Synchronize);
                         iterationCount = 0;  // resetting the count
                     }
-                    rustAnalyzerClone.write().Poll().await;
+                    let status = rustAnalyzerClone.write().Poll().await;
+                    match status {
+                        languageServer::ExitStatus::ResponseTimeOut (event) => {
+                            // for now nothing is done.....
+                            // todo! eventually maybe add tracking for the occurrence rate
+                            //-- if the rate is too high than maybe figure out a way to try and
+                            // reestablish a connection or report the disconnection. Or maybe check
+                            // the type of event or something to try and diagnose or avoid the problem (
+                            // or provide feedback to the user on where the issue is occurring)
+
+                            // re-appending the event to ensure it will eventually be handled
+                            // the event is pushed to the back of the queue incase it continues to fail
+                            // so that hopefully it won't completely clog up the rest of the requests
+                            rustAnalyzerClone.write().NewEventBack(event);
+                        },
+                        _ => {}  // ignoring out responses (such as Valid)
+                    }
                     // the lsp will be updated every 1/10 of a second to avoid excessive cpu usage
                     // blocking the async task is safe using this runtime; it won't block other futures from executing
                     std::thread::sleep(std::time::Duration::from_millis(100));
@@ -2000,7 +2015,10 @@ impl <'a> App <'a> {
         window.TryUpdateLines(vec![commandText]);
 
         // rendering the updated app
-        app.Render()
+        app.Render(Some((
+            self.area.width,
+            self.area.height,
+        )))
     }
 }
 
@@ -2132,7 +2150,6 @@ multi-line comments aren't updated properly when just pressing return (on empty 
 
 */
 
-// yay! managed to manually create a runtime which seems to lower CPU usage by a bit compared to tokio.
 fn main() {
     let runtime = std::sync::Arc::new(parking_lot::RwLock::new(Runtime::default()));
     let clonedRuntime = runtime.clone();
@@ -2142,7 +2159,7 @@ fn main() {
         enableMouseCapture().await;
         let _app_result = App::default().run(&mut termApp, clonedRuntime).await;
         //app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
-        // (unwrapping stalls the thread; the result needs to be ignored to allow proper exiting)
+        // (unwrapping stalls the thread; the result needs to be ignored to allow proper exiting/exit handling)
         disableMouseCapture().await;
     }));
     loop {
@@ -2153,7 +2170,9 @@ fn main() {
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
 
-    // softly shutting down any non-blocked tasks (literally only being used to ensure rust-analyzer is correctly shutdown)
+    // softly shutting down any non-blocked tasks (literally only being used to ensure rust-analyzer
+    // is correctly shutdown; otherwise there would be memory leaks to extend well beyond the program's
+    // termination)
     runtime.write().SoftShutdown();
 }
 
