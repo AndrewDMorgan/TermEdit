@@ -1,5 +1,7 @@
 // snake case is just bad
 #![allow(non_snake_case)]
+use futures;
+
 
 use std::io::Read;
 use vte::Parser;
@@ -19,6 +21,7 @@ mod FileManager;
 mod DataManager;
 mod RuntimeScheduler;
 mod TokenInfo;
+mod languageServer;
 
 use StringPatternMatching::*;
 use Colors::*;
@@ -33,6 +36,7 @@ use TermRender::{Colorize, Span, ColorType};
 use FileManager::*;
 
 use RuntimeScheduler::Runtime;
+use crate::languageServer::RustAnalyzer;
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub enum FileTabs {
@@ -105,6 +109,9 @@ impl <'a> App <'a> {
     pub async fn run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
+        let mut lastPolled = std::time::Instant::now();
+        let mut rustAnalyzerInstance = self.CreateRustAnalyzerInterface(&runtime);
+
         let terminalSize = app.GetTerminalSize()?;
         self.area = TermRender::Rect {
             width: terminalSize.0,
@@ -133,7 +140,7 @@ impl <'a> App <'a> {
         let stdin = std::sync::Arc::new(parking_lot::RwLock::new(std::io::stdin()));
 
         self.HandleMainLoop(
-            runtime,
+            runtime.clone(),
             buffer.clone(),
             keyParser.clone(),
             stdin.clone(),
@@ -147,6 +154,15 @@ impl <'a> App <'a> {
 
             let exitRead = *exit.read();
             if exitRead {  break;  }
+
+            // trying to connect with the lsp (every 30 seconds)
+            if rustAnalyzerInstance.is_none() {
+                let currentTime = std::time::Instant::now();  // once connected this will no longer be called
+                if currentTime.duration_since(lastPolled).as_secs_f64() > 30.0 {
+                    rustAnalyzerInstance = self.CreateRustAnalyzerInterface(&runtime);
+                }
+                lastPolled = std::time::Instant::now();
+            }
 
             buffer.write().fill(0);
 
@@ -180,7 +196,7 @@ impl <'a> App <'a> {
             // won't impact the executor's ability to poll other futures.
             std::thread::sleep(std::time::Duration::from_secs_f64(difference));
             if self.codeTabs.tabs.is_empty() {  continue;  }
-            self.debugInfo = format!("{}; {} | {} | {}", _updates, self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
+            //self.debugInfo = format!("{}; {} | {} | {}", _updates, self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
         }
 
         disable_raw_mode()?;
@@ -220,8 +236,40 @@ impl <'a> App <'a> {
                         parser.write().advance(&mut *keyParser.write(), &buffer.read()[..n]);
                     }
                 }
+                futures::pending!();  // yielding to the executor
             }
         }));
+    }
+
+    fn CreateRustAnalyzerInterface (&mut self,
+                                    runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>
+    ) -> Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>> {
+        // only creating an instance if rust analyzer is found and able to be communicated with
+        let rustAnalyzer = RustAnalyzer::new();
+        if let Some(rustAnalyzer) = rustAnalyzer {
+            let rustAnalyzer = std::sync::Arc::new(parking_lot::RwLock::new(rustAnalyzer));
+            let rustAnalyzerClone = rustAnalyzer.clone();
+            // creating a unique runtime for the lsp (communication will be done through the Arc <rustAnalyzer>)
+            runtime.write().AddTask(Box::pin(async move {
+
+                // the runtime to manage/handle all lsp communication
+                let mut iterationCount = 0;
+                loop {
+                    if iterationCount > languageServer::SYNCHRONIZE_COUNT {
+                        rustAnalyzerClone.write().NewEvent(languageServer::RustEvents::Synchronize);
+                        iterationCount = 0;  // resetting the count
+                    }
+                    rustAnalyzerClone.write().Poll().await;
+                    // the lsp will be updated every 1/10 of a second to avoid excessive cpu usage
+                    // blocking the async task is safe using this runtime; it won't block other futures from executing
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    futures::pending!();  // should yield the task at some point...
+                    iterationCount += 1;
+                }
+
+            }));
+            return Some(rustAnalyzer);
+        } None
     }
 
     async fn HandleMainLoop (&mut self,
@@ -2077,28 +2125,24 @@ Todo! Add the undo-redo change thingy for the replacing chars stuff when auto-fi
 make the syntax highlighting use known variable/function syntax types once it's known (before use the single line context).
 make the larger context and recalculation of scopes & specific variables be calculated on a thread based on a queue and joined
     once a channel indicates completion. (maybe run this once every second if a change is detected).
-only update the terminal screen if a key input is detected.
 
 multi-line parameters on functions/methods aren't correctly read
 multi-line comments aren't updated properly when just pressing return (on empty lines)
     it may not be storing anything on empty lines?
 
-Add a polling delay for when sampling events to hopefully reduce unnecessary computation and cpu usage?
-    -- not necessary? The call is a blocking task so it should wait until an event or the elapsed time
-
-maybe look at using jit for the lua interfacing.
 */
 
 // yay! managed to manually create a runtime which seems to lower CPU usage by a bit compared to tokio.
 fn main() {
     let runtime = std::sync::Arc::new(parking_lot::RwLock::new(Runtime::default()));
-    let cloned = runtime.clone();
+    let clonedRuntime = runtime.clone();
     runtime.write().AddTask(Box::pin(async {
         let mut termApp = TermRender::App::new();
 
         enableMouseCapture().await;
-        let _app_result = App::default().run(&mut termApp, cloned).await;
+        let _app_result = App::default().run(&mut termApp, clonedRuntime).await;
         //app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
+        // (unwrapping stalls the thread; the result needs to be ignored to allow proper exiting)
         disableMouseCapture().await;
     }));
     loop {
@@ -2108,5 +2152,8 @@ fn main() {
         // this won't prevent anything from running. It will only cause a slight delay in when threads get joined.
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
+
+    // softly shutting down any non-blocked tasks (literally only being used to ensure rust-analyzer is correctly shutdown)
+    runtime.write().SoftShutdown();
 }
 

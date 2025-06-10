@@ -1,11 +1,5 @@
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use std::task::{Context, Poll};
 use std::pin::Pin;
-
-fn wake(_data: *const ()) {}
-fn noop(_data: *const ()) {}
-
-static VTABLE: RawWakerVTable =
-    RawWakerVTable::new(|data| RawWaker::new(data, &VTABLE), wake, wake, noop);
 
 /// Manages a pool of runtimes that can handle futures from synchronous and/or asynchronous code.
 #[derive(Debug, Default)]
@@ -26,26 +20,32 @@ impl Runtime {
     /// does a soft shutdown. This will only conclude once all future tasks return as pending. A
     /// blocking operation like std::time::sleep(...) will block this operation until concluded. A
     /// soft blocking operation like .await will not block the shutdown.
-    pub fn Shutdown (&mut self) {
+    pub fn SoftShutdown (&mut self) {
         for _ in 0..self.threadPool.len() {
-            let (thread, sender, _receiver) = self.threadPool.remove(0);
-            sender.send(true).unwrap();  // not sure what could cause this to throw an error....
-            let _ = thread.join();
+            let (thread, sender, receiver) = self.threadPool.remove(0);
+            let _ = sender.send(true);  // not sure what could cause this to throw an error....
+
+            // checking if the thread understood
+            for _ in 0..10 {
+                std::thread::sleep(std::time::Duration::from_millis(15));
+                if receiver.try_recv().is_err() { continue; }  // the thread was unable to exit in time
+                let _ = thread.join();
+                break;
+            }
         }
     }
 
     /// Does a non-blocking polling over every task in the runtime. In other words, Runtime::Poll prunes
     /// completed tasks from the thread-pool. Returns true if anything was pruned.
     pub fn Poll (&mut self) -> bool {
-        let mut removed = 0;
         for i in 0..self.threadPool.len() {
-            let (_thread, _sender, receiver) = &self.threadPool[i - removed];
+            let (_thread, _sender, receiver) = &self.threadPool[i];
             if let Ok(_completionCode) = receiver.try_recv() {  // doesn't matter if the code is true or false
-                let completed = self.threadPool.remove(i - removed);
+                let completed = self.threadPool.remove(i);
                 let _ = completed.0.join();
-                removed += 1;
+                return true;
             }
-        } removed > 0
+        } false
     }
 
     /// checks and returns if or if not the thread pool is empty.
@@ -68,12 +68,12 @@ impl Runtime {
                         mut task: Pin <Box<dyn Future <Output=()> + Send>>,
     ) -> std::thread::JoinHandle <()> {
         std::thread::spawn(move || {
-            let waker = RawWaker::new(std::ptr::null(), &VTABLE);
-            let waker = unsafe { Waker::from_raw(waker) };
+            let waker = futures::task::noop_waker();
             let mut cx = Context::from_waker(&waker);
 
             loop {
                 if let Ok(_exitCode) = exitReceiver.try_recv() {
+                    completionSender.send(true).unwrap();
                     break;  // does matter if the exit code is true or false
                 }
 

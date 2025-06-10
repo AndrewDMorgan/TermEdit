@@ -1,15 +1,7 @@
 // snake case is just bad
 #![allow(dead_code)]
 
-//use proc_macros::color;
 use std::io::Write;
-
-//* Add a check for updated in the GetRender method for windows
-//      -- (I think this is being done?)
-//* Make a proc macro for easier colorizing (Color![White, Dim, ...])
-//      -- expands to something like .Colorizes(vec![ColorType::White, ...])
-//      -- right now it's just very wordy (a bit annoying to type bc/ of that)
-//               ** done!!!!! **
 
 
 // static color/mod pairs for default ascii/ansi codes
