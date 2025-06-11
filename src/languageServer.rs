@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 
@@ -5,7 +6,8 @@ use std::process::{Command, Stdio};
 /// ensure proper synchronization of files (incase the differed
 /// caching and call limiting is off/miss-aligned)
 pub static SYNCHRONIZE_COUNT: usize = 600;  // about every minute (is this a good approach? hopefully it is)
-static TIMEOUT_SAMPLE_FREQUENCY: usize = 1000;
+// this should be less than the wait duration of within the runtime scheduler's soft shutdown sequence
+static TIMEOUT_SAMPLE_FREQUENCY: usize = 4;  // about 40 milliseconds
 static TIMEOUT: f64 = 15.0;  // in seconds
 
 // possible events for the lsp to respond to
@@ -50,13 +52,27 @@ pub enum ExitStatus {
     ResponseTimeOut (RustEvents),
 }
 
+type ResponseHandle = (std::thread::JoinHandle <()>,
+                       crossbeam::channel::Sender <bool>,
+                       crossbeam::channel::Receiver <String>
+);
+type Reader = std::sync::Arc <parking_lot::RwLock <BufReader <std::process::ChildStdout>>>;
+
+#[derive(Debug, PartialEq, Eq)]
+enum ThreadStatus {
+    Busy,
+    Idle
+}
+
 #[derive(Debug)]
 pub struct RustAnalyzer {
     events: Vec <RustEvents>,
     stdin: std::process::ChildStdin,
-    reader: BufReader <std::process::ChildStdout>,
+    reader: Reader,
 
     responses: Vec <RustResponse>,
+    responseHandler: ResponseHandle,
+    backgroundThreadStatus: std::sync::Arc <parking_lot::RwLock <ThreadStatus>>,
 }
 
 impl Drop for RustAnalyzer {
@@ -64,14 +80,8 @@ impl Drop for RustAnalyzer {
     fn drop(&mut self) {
         // making sure to safely exit regardless of what caused the drop (either exiting the app or crash)
         self.PromptLsp(r#"{"jsonrpc":"2.0","id":2,"method":"shutdown","params":null}"#);
-
-        // Optionally, validate it contains `"id":1`
-        let response_str = self.GetResponse();
-        if !response_str.contains(r#""id":2"#) {
-            eprintln!("Unexpected shutdown response: {}", response_str);
-        }
-
-        // Now send the exit notification
+        let _ = self.GetResponse();
+        // Now sending the exit notification
         self.PromptLsp(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
     }
 }
@@ -87,21 +97,22 @@ impl RustAnalyzer {
         self.responses.pop()
     }
 
+    /// this should only be used before or after core execution.
     fn GetResponse (&mut self) -> std::borrow::Cow <str> {
         let mut line = String::new();
-        let mut content_length = 0;
+        let mut contentLength = 0;
         loop {
             line.clear();
-            self.reader.read_line(&mut line).unwrap();
+            self.reader.write().read_line(&mut line).unwrap();
             if line.trim().is_empty() {
                 break;
             }
             if let Some(length) = line.strip_prefix("Content-Length:") {
-                content_length = length.trim().parse::<usize>().unwrap_or(0);
+                contentLength = length.trim().parse::<usize>().unwrap_or(0);
             }
         }
-        let mut body = vec![0; content_length];
-        self.reader.read_exact(&mut body).unwrap();
+        let mut body = vec![0; contentLength];
+        self.reader.write().read_exact(&mut body).unwrap();
         String::from_utf8_lossy(&body).into_owned().into()
     }
 
@@ -111,6 +122,41 @@ impl RustAnalyzer {
         self.PromptLsp(r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params": {"capabilities": {},"rootUri": null}}"#);
         let _ = self.GetResponse();
         self.PromptLsp(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#);
+    }
+
+    fn GetBackgroundThread (taskReceiver: crossbeam::channel::Receiver <bool>,
+                            completionSender: crossbeam::channel::Sender <String>,
+                            reader: Reader,
+                            status: std::sync::Arc <parking_lot::RwLock <ThreadStatus>>,
+    ) -> std::thread::JoinHandle<()> {
+        // the os can clean the thread up after execution
+        std::thread::spawn(move || {
+            let Poll = || -> String {
+                let mut line = String::new();
+                let mut contentLength = 0;
+                loop {
+                    line.clear();
+                    reader.write().read_line(&mut line).unwrap();
+                    if line.trim().is_empty() {  break;  }
+                    if let Some(length) = line.strip_prefix("Content-Length:") {
+                        contentLength = length.trim().parse::<usize>().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; contentLength];
+                reader.write().read_exact(&mut body).unwrap();
+                String::from_utf8_lossy(&body).to_string()
+            };
+
+            loop {
+                // polling
+                std::thread::sleep(std::time::Duration::from_millis(25));
+                if taskReceiver.try_recv().is_err() {  continue;  }
+                *status.write() = ThreadStatus::Busy;
+                let response = Poll();
+                let _ = completionSender.send(response);
+                *status.write() = ThreadStatus::Idle;
+            }
+        })
     }
 
     pub fn new() -> Option <Self> {
@@ -124,15 +170,22 @@ impl RustAnalyzer {
             let stdin = child.stdin.take();
             let stdout = child.stdout.take();
             if stdin.is_none() || stdout.is_none() {  return None;  }
-            let mut stdin = stdin.unwrap();
+            let stdin = stdin.unwrap();
             let stdout = stdout.unwrap();
-            let mut reader = BufReader::new(stdout);
+            let reader = std::sync::Arc::new(parking_lot::RwLock::new(BufReader::new(stdout)));
+
+            let status = std::sync::Arc::new(parking_lot::RwLock::new(ThreadStatus::Idle));
+            let (taskSender, taskReceiver) = crossbeam::channel::bounded(1);
+            let (completionSender, completionReceiver) = crossbeam::channel::bounded(1);
+            let backgroundThread = Self::GetBackgroundThread(taskReceiver, completionSender, reader.clone(), status.clone());
 
             let mut instance = RustAnalyzer {
                 events: vec![],
                 stdin,
                 reader,
                 responses: Vec::new(),
+                responseHandler: (backgroundThread, taskSender, completionReceiver),
+                backgroundThreadStatus: status,
             };
             instance.Initialize();
             Some (instance)
@@ -167,7 +220,7 @@ impl RustAnalyzer {
     }
 
     // parses the response
-    fn ParseResponse (event: RustEvents, response: ()) -> Option <RustResponse> {
+    fn ParseResponse (event: RustEvents, response: String) -> Option <RustResponse> {
         match event {
             RustEvents::Workspace (filePath) => {
                 // todo!
@@ -201,12 +254,34 @@ impl RustAnalyzer {
     }
 
     // listens for a response from the lsp
-    async fn ListenForResponse (&mut self) -> Option <()> {
+    async fn ListenForResponse (&mut self) -> Option <String> {
+        // waiting for the background thread to be free
+        // this shouldn't ever be an issue unless there was a timeout
+        // this is non-blocking which ensures a safe exit is still possible
+        // the listener thread doesn't require a soft exit so blocking tasks there are safe
+        loop {
+            // waiting for the thread to be idle
+            if *self.backgroundThreadStatus.read() == ThreadStatus::Idle {
+                break;
+            }
+            futures::pending!();
+            // in this context this is safe because of the custom runtime manager/scheduler
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+
+        // requesting the background thread to begin gathering the response
+        self.responseHandler.1.send(true).unwrap();
+
         // listening for and responding to a response
+        let response;
         let mut iterationCount = 0;
         let start = std::time::Instant::now();
         loop {
-            // todo! actual listening stuff.....
+            // polling for a response
+            if let Ok(responseGathered) = self.responseHandler.2.try_recv() {
+                response = responseGathered;
+                break;
+            }
 
             iterationCount += 1;
             // only checking the time so often to prevent excessive cpu usage
@@ -216,10 +291,16 @@ impl RustAnalyzer {
                 futures::pending!();
                 iterationCount = 0;
                 if std::time::Instant::now().duration_since(start).as_secs_f64() > TIMEOUT {
+                    // the background thread will continue to process (it's status is busy until it finishes)
+                    // if the lsp got completely stuck, it's likely it won't be fixed
                     return None;  // incase the lsp fails to respond (preventing a complete lockup)
                 }
-            } break;  // temp for now   todo! actually listen to the response and exit when actually necessary
-        } Some(())
+            }
+
+            // waiting to reduce cpu usage
+            // the blocking context is safe while using the custom runtime
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        } Some(response)
     }
     
     // this is async just incase it's needed (ensures it can function so no future work would be necessary)

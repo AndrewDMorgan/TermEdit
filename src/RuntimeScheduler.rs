@@ -25,7 +25,7 @@ impl Runtime {
             let (thread, sender, receiver) = self.threadPool.remove(0);
             let _ = sender.send(true);  // not sure what could cause this to throw an error....
 
-            // checking if the thread understood
+            // checking if the thread received the change (and there isn't being blocked)
             for _ in 0..12 {
                 std::thread::sleep(std::time::Duration::from_millis(5));  // about 60ms total (is that enough? too much?)
                 if receiver.try_recv().is_err() { continue; }  // the thread was unable to exit in time

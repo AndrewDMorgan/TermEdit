@@ -185,7 +185,7 @@ function ComplexTokens (lastTokenType, lastToken, nextToken, nextNextToken, toke
         return "String"
     elseif string.upper(token) == token then
         return "Const"
-    elseif string.upper(subToken) == subToken then
+    elseif string.upper(subToken) == subToken or nextToken == "(" then
         return "Function"
     end
 
@@ -197,7 +197,7 @@ function CalculateMember (lastTokenType, lastToken, nextToken, token, subToken)
     -- checking for a method
     if string.upper(token) == token then
         return "Const"
-    elseif string.upper(subToken) == subToken then
+    elseif string.upper(subToken) == subToken or nextToken == "(" then
         return "Method"
     end
 

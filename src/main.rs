@@ -106,7 +106,7 @@ pub struct App <'a> {
 
 impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
-    pub async fn run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
+    pub async fn Run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         let mut lastPolled = std::time::Instant::now();
@@ -155,14 +155,7 @@ impl <'a> App <'a> {
             let exitRead = *exit.read();
             if exitRead {  break;  }
 
-            // trying to connect with the lsp (every 30 seconds)
-            if rustAnalyzerInstance.is_none() {
-                let currentTime = std::time::Instant::now();  // once connected this will no longer be called
-                if currentTime.duration_since(lastPolled).as_secs_f64() > 30.0 {
-                    rustAnalyzerInstance = self.CreateRustAnalyzerInterface(&runtime);
-                }
-                lastPolled = std::time::Instant::now();
-            }  // let t = rustAnalyzerInstance.as_mut().unwrap().write().PopResponse();
+            self.HandleRustAnalyzer(&mut rustAnalyzerInstance, &runtime, &mut lastPolled);
 
             buffer.write().fill(0);
 
@@ -201,6 +194,26 @@ impl <'a> App <'a> {
         disable_raw_mode()?;
 
         Ok(())
+    }
+
+    fn HandleRustAnalyzer (&mut self, rustAnalyzer: &mut Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
+                           runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>,
+                           lastPolled: &mut std::time::Instant
+    ) {
+        // trying to connect with the lsp (every 30 seconds)
+        if rustAnalyzer.is_none() {
+            let currentTime = std::time::Instant::now();  // once connected this will no longer be called
+            if currentTime.duration_since(*lastPolled).as_secs_f64() > 30.0 {
+                *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime);
+            }
+            *lastPolled = std::time::Instant::now();
+        } else {
+            // going through the responses and handling them
+            let mut analyzer = rustAnalyzer.as_mut().unwrap().write();
+            while let Some(event) = analyzer.PopResponse() {
+                // todo!   handle the event
+            }
+        }
     }
 
     async fn HandleMixedEvents (&mut self, keyEvents: &KeyParser) {
@@ -2157,7 +2170,7 @@ fn main() {
         let mut termApp = TermRender::App::new();
 
         enableMouseCapture().await;
-        let _app_result = App::default().run(&mut termApp, clonedRuntime).await;
+        let _app_result = App::default().Run(&mut termApp, clonedRuntime).await;
         //app_result.unwrap();  // too lazy to make the runtime actually be able to output things....
         // (unwrapping stalls the thread; the result needs to be ignored to allow proper exiting/exit handling)
         disableMouseCapture().await;
