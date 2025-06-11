@@ -4,6 +4,7 @@ use futures;
 
 
 use std::io::Read;
+use std::ops::Sub;
 use vte::Parser;
 
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
@@ -109,8 +110,9 @@ impl <'a> App <'a> {
     pub async fn Run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
-        let mut lastPolled = std::time::Instant::now();
-        let mut rustAnalyzerInstance = self.CreateRustAnalyzerInterface(&runtime);
+        // making sure the lsp can immediately be connected without having to wait
+        let mut lastPolled = std::time::Instant::now() - std::time::Duration::new(30,0);
+        let mut rustAnalyzerInstance = None;//self.CreateRustAnalyzerInterface(&runtime);
 
         let terminalSize = app.GetTerminalSize()?;
         self.area = TermRender::Rect {
@@ -200,14 +202,24 @@ impl <'a> App <'a> {
                            runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>,
                            lastPolled: &mut std::time::Instant
     ) {
-        // trying to connect with the lsp (every 30 seconds)
+        if self.appState == AppState::Menu {
+            self.debugInfo = String::from("Waiting...");
+            // .*lastPolled = std::time::Instant::now();
+            return;
+        }
+        // trying to connect with the lsp (every 10 seconds)
         if rustAnalyzer.is_none() {
             let currentTime = std::time::Instant::now();  // once connected this will no longer be called
-            if currentTime.duration_since(*lastPolled).as_secs_f64() > 30.0 {
-                *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime);
+            if currentTime.duration_since(*lastPolled).as_secs_f64() > 15.0 {
+                self.debugInfo = String::from("Trying to connect...");
+                *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime, self.fileBrowser.fileTree.pathName.clone());
+                *lastPolled = std::time::Instant::now();
+            } else {
+                self.debugInfo = String::from("Waiting to connect...");
             }
-            *lastPolled = std::time::Instant::now();
         } else {
+            self.debugInfo = String::from("Connected");
+
             // going through the responses and handling them
             let mut analyzer = rustAnalyzer.as_mut().unwrap().write();
             while let Some(event) = analyzer.PopResponse() {
@@ -254,10 +266,11 @@ impl <'a> App <'a> {
     }
 
     fn CreateRustAnalyzerInterface (&mut self,
-                                    runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>
+                                    runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>,
+                                    filePath: String,
     ) -> Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>> {
         // only creating an instance if rust analyzer is found and able to be communicated with
-        let rustAnalyzer = RustAnalyzer::new();
+        let rustAnalyzer = RustAnalyzer::new(filePath);
         if let Some(rustAnalyzer) = rustAnalyzer {
             let rustAnalyzer = std::sync::Arc::new(parking_lot::RwLock::new(rustAnalyzer));
             let rustAnalyzerClone = rustAnalyzer.clone();
@@ -277,14 +290,20 @@ impl <'a> App <'a> {
                             // for now nothing is done.....
                             // todo! eventually maybe add tracking for the occurrence rate
                             //-- if the rate is too high than maybe figure out a way to try and
-                            // reestablish a connection or report the disconnection. Or maybe check
+                            // reestablish a connection or report the disconnection; a true disconnection
+                            // seems to throw an error which would be ExitStatus::Error? Or maybe check
                             // the type of event or something to try and diagnose or avoid the problem (
                             // or provide feedback to the user on where the issue is occurring)
 
                             // re-appending the event to ensure it will eventually be handled
                             // the event is pushed to the back of the queue incase it continues to fail
                             // so that hopefully it won't completely clog up the rest of the requests
+                            // the old event will finish being parsed async-safe-blocking further polling till then
                             rustAnalyzerClone.write().NewEventBack(event);
+                        },
+                        languageServer::ExitStatus::Error => {
+                            // maybe try to drop and recreate it?
+                            // for now not doing anything
                         },
                         _ => {}  // ignoring out responses (such as Valid)
                     }
