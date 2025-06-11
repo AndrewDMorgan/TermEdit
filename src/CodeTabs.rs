@@ -1,3 +1,4 @@
+use crate::languageServer::{RustAnalyzer, RustEvents};
 use crate::TermRender::*;
 use crate::TokenInfo::*;
 use crate::LuaScripts;
@@ -9,12 +10,22 @@ use crate::color;
 const SCROLL_BOUNDS: usize = 12;
 const CENTER_BOUNDS: usize = 0;
 
+pub type RustAnalyzerLsp <'a> = &'a Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>;
+
 
 pub mod Edits {
+    pub type RustAnalyzerLsp <'a> = &'a Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>;
+
     use crate::{CodeTab, LuaScripts};
+    use crate::languageServer::RustAnalyzer;
 
     // private sense it's not needed elsewhere (essentially just a modified copy of handleHighlights...)
-    async fn RemoveText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), luaSyntaxHighlightScripts: &LuaScripts) {
+    async fn RemoveText <'a> (tab: &mut CodeTab,
+                              start: (usize, usize),
+                              end: (usize, usize),
+                              luaSyntaxHighlightScripts: &LuaScripts,
+                              rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         if end.0 == start.0 {
             tab.lines[end.0].replace_range(end.1..start.1, "");
             tab.RecalcTokens(end.0, 0, luaSyntaxHighlightScripts).await;
@@ -39,12 +50,18 @@ pub mod Edits {
             tab.lineTokenFlags.write().remove(end.0 + 1);
         }
         
-        tab.CreateScopeThread();
+        tab.CreateScopeThread(start.0, end.0, rustAnalyzer);
         //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         tab.cursor = end;
     }
 
-    async fn AddText (tab: &mut CodeTab, start: (usize, usize), end: (usize, usize), text: &str, luaSyntaxHighlightScripts: &LuaScripts) {
+    async fn AddText <'a> (tab: &mut CodeTab,
+                           start: (usize, usize),
+                           end: (usize, usize),
+                           text: &str,
+                           luaSyntaxHighlightScripts: &LuaScripts,
+                           rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         let splitText = text.split('\n');
         //let splitLength = splitText.clone().count() - 1;
         for (i, line) in splitText.enumerate() {
@@ -71,7 +88,7 @@ pub mod Edits {
             }
         }
 
-        tab.CreateScopeThread();
+        tab.CreateScopeThread(start.0, end.0, rustAnalyzer);
         //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         tab.cursor = start;
     }
@@ -84,12 +101,20 @@ pub mod Edits {
     }
 
     impl Deletion {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
-            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
+        pub async fn Undo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
+            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts, rustAnalyzer).await;
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
-            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await
+        pub async fn Redo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
+            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts, rustAnalyzer).await
         }
     }
     
@@ -101,12 +126,20 @@ pub mod Edits {
     }
 
     impl Addition {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
-            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts).await;
+        pub async fn Undo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
+            RemoveText(tab, self.start, self.end, luaSyntaxHighlightScripts, rustAnalyzer).await;
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
-            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts).await;
+        pub async fn Redo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
+            AddText(tab, self.start, self.end, &self.text, luaSyntaxHighlightScripts, rustAnalyzer).await;
         }
     }
 
@@ -116,7 +149,11 @@ pub mod Edits {
     }
 
     impl NewLine {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
+        pub async fn Undo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.write().remove(self.position.0 + 1);
             tab.lineTokenFlags.write().remove(self.position.0 + 1);
@@ -125,11 +162,15 @@ pub mod Edits {
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
-            tab.CreateScopeThread();
+            tab.CreateScopeThread(self.position.0, self.position.0, rustAnalyzer);
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
+        pub async fn Redo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
@@ -142,7 +183,7 @@ pub mod Edits {
                 self.position.0 + 1,
                 0
             );
-            tab.CreateScopeThread();
+            tab.CreateScopeThread(self.position.0, self.position.0 + 1, rustAnalyzer);
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
@@ -153,7 +194,11 @@ pub mod Edits {
     }
 
     impl RemoveLine {
-        pub async fn Undo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
+        pub async fn Undo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
             let rightText = tab.lines[self.position.0]
                 .split_off(self.position.1);
             tab.lines.insert(self.position.0 + 1, rightText.to_string());
@@ -166,11 +211,15 @@ pub mod Edits {
                 self.position.0 + 1,
                 0
             );
-            tab.CreateScopeThread();
+            tab.CreateScopeThread(self.position.0, self.position.0 + 1, rustAnalyzer);
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
         
-        pub async fn Redo (&self, tab: &mut CodeTab, luaSyntaxHighlightScripts: &LuaScripts) {
+        pub async fn Redo <'a> (&self,
+                                tab: &mut CodeTab,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+        ) {
             let text = tab.lines.remove(self.position.0 + 1);
             tab.lineTokens.write().remove(self.position.0 + 1);
             tab.lineTokenFlags.write().remove(self.position.0 + 1);
@@ -179,7 +228,7 @@ pub mod Edits {
 
             tab.cursor.0 = self.position.0.saturating_sub(1);
             tab.cursor.1 = tab.lines[tab.cursor.0].len();
-            tab.CreateScopeThread();
+            tab.CreateScopeThread(self.position.0, self.position.0, rustAnalyzer);
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
@@ -257,7 +306,11 @@ impl CodeTab {
         self.mouseScrolled = self.mouseScrolledFlt as isize;
     }
 
-    pub fn CreateScopeThread (&mut self) {
+    pub fn CreateScopeThread (&mut self,
+                              start: usize,
+                              end: usize,
+                              rustAnalyzer: RustAnalyzerLsp
+    ) {
         // offsetting from existing calculations (staggering the computation (1/4 second per thread)
         // if there's at least 2, there should be one still queued and not running
         // so it shouldn't cause outdated information. This value may need adjustment?
@@ -278,9 +331,18 @@ impl CodeTab {
 
         let ending = self.fileName.split('.').next_back().unwrap_or("").to_string();
 
+        let rustAnalyzer = rustAnalyzer.clone();
+
         self.scopeGenerationHandles.push((
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(timeOffset));
+
+                // put in a request for a lsp update between start and end
+                // maybe poll this to make sure it doesn't block anything? idk
+                let completion = false;  // do something with this at some point
+                if rustAnalyzer.is_some() {
+                    rustAnalyzer.as_ref().unwrap().write().NewEvent(RustEvents::UpdatedLines(start, end, completion));
+                }
 
                 let (newScopes, newJumps, newLinear) =
                     Linters::GenerateScopes(&lineTokensClone, &lineFlagsClone, &outlineClone, &ending);
@@ -386,7 +448,10 @@ impl CodeTab {
         }  // lineTokensRead is naturally dropped
     }
 
-    pub async fn Undo (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn Undo <'a> (&mut self,
+                            luaSyntaxHighlightScripts: &LuaScripts,
+                            rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
             0
@@ -399,16 +464,16 @@ impl CodeTab {
             for edit in &edits {
                 match edit {
                     Edits::Edit::Addition (action) => {
-                        action.Undo( self, luaSyntaxHighlightScripts).await;
+                        action.Undo( self, luaSyntaxHighlightScripts, &rustAnalyzer).await;
                     },
                     Edits::Edit::Deletion (action) => {
-                        action.Undo(self, luaSyntaxHighlightScripts).await;
+                        action.Undo(self, luaSyntaxHighlightScripts, &rustAnalyzer).await;
                     },
                     Edits::Edit::RemoveLine (action) => {
-                        action.Undo(self, luaSyntaxHighlightScripts).await;
+                        action.Undo(self, luaSyntaxHighlightScripts, &rustAnalyzer).await;
                     },
                     Edits::Edit::NewLine (action) => {
-                        action.Undo(self, luaSyntaxHighlightScripts).await;
+                        action.Undo(self, luaSyntaxHighlightScripts, &rustAnalyzer).await;
                     },
                 }
             }
@@ -416,7 +481,10 @@ impl CodeTab {
         }
     }
 
-    pub async fn Redo (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn Redo <'a> (&mut self,
+                            luaSyntaxHighlightScripts: &LuaScripts,
+                            rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         // resetting a bunch of things
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -430,16 +498,16 @@ impl CodeTab {
             for edit in &edits {
                 match edit {
                     Edits::Edit::Addition (action)      => {
-                        action.Redo(self, luaSyntaxHighlightScripts).await;
+                        action.Redo(self, luaSyntaxHighlightScripts, rustAnalyzer).await;
                     },
                     Edits::Edit::Deletion (action)      => {
-                        action.Redo(self, luaSyntaxHighlightScripts).await;
+                        action.Redo(self, luaSyntaxHighlightScripts, rustAnalyzer).await;
                     },
                     Edits::Edit::RemoveLine (action) => {
-                        action.Redo(self, luaSyntaxHighlightScripts).await;
+                        action.Redo(self, luaSyntaxHighlightScripts, rustAnalyzer).await;
                     },
                     Edits::Edit::NewLine (action)       => {
-                        action.Redo(self, luaSyntaxHighlightScripts).await;
+                        action.Redo(self, luaSyntaxHighlightScripts, rustAnalyzer).await;
                     },
                 }
             }
@@ -631,12 +699,16 @@ impl CodeTab {
         );
     }
 
-    pub async fn InsertChars (&mut self, chs: String, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn InsertChars <'a> (&mut self,
+                                   chs: String,
+                                   luaSyntaxHighlightScripts: &LuaScripts,
+                                   rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         self.redoneBuffer.clear();
         let mut changeBuff = vec!();
 
         // doesn't need to exit bc/ chars should still be added
-        self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts).await;
+        self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts, rustAnalyzer).await;
 
         let preCursor = self.cursor;
 
@@ -677,11 +749,14 @@ impl CodeTab {
 
         self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-        self.CreateScopeThread();
+        self.CreateScopeThread(self.cursor.0, self.cursor.0, rustAnalyzer);
         //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }
 
-    pub async fn UnIndent (&mut self, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn UnIndent <'a> (&mut self,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         self.redoneBuffer.clear();
         self.scrolled = std::cmp::max(
             self.mouseScrolledFlt as isize + self.scrolled as isize,
@@ -707,7 +782,7 @@ impl CodeTab {
 
                 self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-                self.CreateScopeThread();
+                self.CreateScopeThread(self.cursor.0, self.cursor.0, rustAnalyzer);
                 //(self.scopes, self.scopeJumps, self.linearScopes) =
                 //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
             }
@@ -784,7 +859,11 @@ impl CodeTab {
         );
     }
 
-    pub async fn LineBreakIn (&mut self, highlight: bool, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn LineBreakIn <'a> (&mut self,
+                                   highlight: bool,
+                                   luaSyntaxHighlightScripts: &LuaScripts,
+                                   rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         self.redoneBuffer.clear();
         self.changeBuffer.push(
             vec![
@@ -810,7 +889,7 @@ impl CodeTab {
             drop(lineTokensWrite);  // the .write is dropped (writes can back up all the reads)
             self.lineTokenFlags.write().insert(self.cursor.0, vec!());
 
-            self.CreateScopeThread();
+            self.CreateScopeThread(self.cursor.0, self.cursor.0 + 1, rustAnalyzer);
             //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
             self.cursor.1 = 0;
@@ -839,12 +918,16 @@ impl CodeTab {
         self.cursor.1 = 0;
         self.CursorDown(highlight);
 
-        self.CreateScopeThread();
+        self.CreateScopeThread(self.cursor.0, self.cursor.0 + 1, rustAnalyzer);
         //(self.scopes, self.scopeJumps, self.linearScopes) = GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
     }
 
-    pub async fn HandleHighlight (&mut self, changeBuff: &mut Vec <Edits::Edit>, luaSyntaxHighlightScripts: &LuaScripts) -> bool {
+    pub async fn HandleHighlight <'a> (&mut self,
+                                       changeBuff: &mut Vec <Edits::Edit>,
+                                       luaSyntaxHighlightScripts: &LuaScripts,
+                                       rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) -> bool {
         self.redoneBuffer.clear();
         if !self.highlighting || self.cursorEnd == self.cursor {  return false;  }
         if self.cursorEnd.0 < self.cursor.0 ||
@@ -920,7 +1003,7 @@ impl CodeTab {
 
             self.highlighting = false;
             self.cursor = self.cursorEnd;
-            self.CreateScopeThread();
+            self.CreateScopeThread(self.cursor.0, self.cursorEnd.0, rustAnalyzer);
             //(self.scopes, self.scopeJumps, self.linearScopes) =
             //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
             true
@@ -928,7 +1011,7 @@ impl CodeTab {
             // swapping the cursor and ending points so the other calculations work
             (self.cursor, self.cursorEnd) = (self.cursorEnd, self.cursor);
             Box::pin(async move {
-                self.HandleHighlight(changeBuff, luaSyntaxHighlightScripts).await
+                self.HandleHighlight(changeBuff, luaSyntaxHighlightScripts, rustAnalyzer).await
             }).await
         }
     }
@@ -990,12 +1073,17 @@ impl CodeTab {
     // cursorOffset can be used to delete in multiple directions
     // if the cursorOffset is equal to numDel, it'll delete to the right
     // cursorOffset = 0 is default and dels to the left
-    pub async fn DelChars (&mut self, numDel: usize, cursorOffset: usize, luaSyntaxHighlightScripts: &LuaScripts) {
+    pub async fn DelChars <'a> (&mut self,
+                                numDel: usize,
+                                cursorOffset: usize,
+                                luaSyntaxHighlightScripts: &LuaScripts,
+                                rustAnalyzer: RustAnalyzerLsp<'a>,
+    ) {
         self.redoneBuffer.clear();
 
         // deleting characters from scrolling
         let mut changeBuff = vec!();
-        if self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts).await {
+        if self.HandleHighlight(&mut changeBuff, luaSyntaxHighlightScripts, rustAnalyzer).await {
             self.changeBuffer.push(changeBuff);
             return;
         }
@@ -1049,7 +1137,7 @@ impl CodeTab {
                 changeBuff
             );
 
-            self.CreateScopeThread();
+            self.CreateScopeThread(self.cursor.0, self.cursor.0, rustAnalyzer);
             //self.linearScopes) =
             //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
 
@@ -1105,7 +1193,7 @@ impl CodeTab {
 
         self.RecalcTokens(self.cursor.0, 0, luaSyntaxHighlightScripts).await;
 
-        self.CreateScopeThread();
+        self.CreateScopeThread(self.cursor.0, self.cursor.0, rustAnalyzer);
         //(self.scopes, self.scopeJumps, self.linearScopes) =
         //    GenerateScopes(&self.lineTokens, &self.lineTokenFlags, &mut self.outlineKeywords);
     }

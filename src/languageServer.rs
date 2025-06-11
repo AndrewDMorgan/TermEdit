@@ -76,12 +76,24 @@ pub struct RustAnalyzer {
     responses: Vec <RustResponse>,
     responseHandler: ResponseHandle,
     backgroundThreadStatus: std::sync::Arc <parking_lot::RwLock <ThreadStatus>>,
+    pub filePath: String,
+    dropped: bool,
 }
 
 impl Drop for RustAnalyzer {
     // seems to actually exit....
     fn drop(&mut self) {
-        // waiting till x time or till the LSP's status is no longer busy
+        if !self.dropped {
+            self.DropConnection();
+        }
+    }
+}
+
+impl RustAnalyzer {
+    /// drops the connection (used in .drop)
+    pub fn DropConnection (&mut self) {
+        self.dropped = true;
+        // waiting till x time or till the LSPs status is no longer busy
         // this is just to make sure the lsp isn't current busy doing work
         // this would be called after the executor called .join so blocking tasks are safe
         let start = std::time::Instant::now();
@@ -97,9 +109,9 @@ impl Drop for RustAnalyzer {
         // Now sending the exit notification
         let _ = self.PromptLsp(r#"{"jsonrpc":"2.0","method":"exit","params":null}"#);
     }
-}
-
-impl RustAnalyzer {
+    
+    /// Prompts the LSP with a given message -- ik, crazy, who could've guessed?
+    /// Throws an error if stdin is invalid (or another fault within write! or flush).
     fn PromptLsp (&mut self, message: &str) -> Result <(), std::io::Error> {
         write!(self.stdin, "Content-Length: {}\r\n\r\n{}", message.as_bytes().len(), message)?;
         self.stdin.flush()?;
@@ -107,9 +119,7 @@ impl RustAnalyzer {
     }
 
     /// pops a response (allows lsp responses to actually be acted upon by the proper code)
-    pub fn PopResponse (&mut self) -> Option <RustResponse> {
-        self.responses.pop()
-    }
+    pub fn PopResponse (&mut self) -> Option <RustResponse> {  self.responses.pop()  }
 
     /// this should only be used before or after core execution.
     fn GetResponse (&mut self) -> std::borrow::Cow <str> {
@@ -133,7 +143,10 @@ impl RustAnalyzer {
     /// initializes rust-analyzer (can only be called once; it is already called in RustAnalyzer::new())
     pub fn Initialize (&mut self, filePath: String) -> Result <(), std::io::Error> {
         // initializing the lsp
-        let msg = format!("{}{}{}", r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params": {"capabilities": {},"rootUri": "file://"#, filePath, r#""}}"#);
+        let msg = format!(
+            "{}{}{}", r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params": {"capabilities": {},"rootUri": "file://"#,
+            filePath, r#""}}"#
+        );
         self.PromptLsp(&msg)?;
         let _ = self.GetResponse();
         self.PromptLsp(r#"{"jsonrpc":"2.0","method":"initialized","params":{}}"#)?;
@@ -171,7 +184,7 @@ impl RustAnalyzer {
         }
     }
 
-    pub fn new(filePath: String) -> Option <Self> {
+    pub fn new (filePath: String) -> Option <Self> {
         // https://rust-analyzer.github.io/book/rust_analyzer_binary.html
         if let Ok(mut child) = Command::new(RUST_ANALYZER_PATH)
             .stdin(Stdio::piped())
@@ -204,6 +217,8 @@ impl RustAnalyzer {
                 responses: Vec::new(),
                 responseHandler: (backgroundThread, taskSender, completionReceiver),
                 backgroundThreadStatus: status,
+                filePath: filePath.clone(),
+                dropped: false,
             };
             let status = instance.Initialize(filePath);
             if status.is_err() {  return None;  }  // something went wrong somewhere
@@ -283,8 +298,8 @@ impl RustAnalyzer {
     async fn ListenForResponse (&mut self) -> Option <String> {
         // waiting for the background thread to be free
         // this shouldn't ever be an issue unless there was a timeout
-        // this is non-blocking which ensures a safe exit is still possible
-        // the listener thread doesn't require a soft exit so blocking tasks there are safe
+        // this is non-blocking block which ensures a safe exit is still possible
+        // the listener thread doesn't require a soft exit so blocking tasks there are safe (note; this part isn't in the listener's runtime)
         loop {
             // waiting for the thread to be idle
             if *self.backgroundThreadStatus.read() == ThreadStatus::Idle {

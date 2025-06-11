@@ -66,6 +66,7 @@ pub enum MenuState {
 }
 
 type LuaScripts = std::sync::Arc<parking_lot::Mutex<std::collections::HashMap <Languages, mlua::Function>>>;
+pub type RustAnalyzerLsp <'a> = &'a Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>;
 
 #[derive(Debug, Default)]
 pub struct App <'a> {
@@ -107,12 +108,15 @@ pub struct App <'a> {
 
 impl <'a> App <'a> {
     /// runs the application's main loop until the user quits
-    pub async fn Run (&mut self, app: &mut TermRender::App, runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>) -> Result<(), std::io::Error> {
+    pub async fn Run (&mut self,
+                      app: &mut TermRender::App,
+                      runtime: std::sync::Arc <parking_lot::RwLock <Runtime>>
+    ) -> Result<(), std::io::Error> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         // making sure the lsp can immediately be connected without having to wait
         let mut lastPolled = std::time::Instant::now() - std::time::Duration::new(30,0);
-        let mut rustAnalyzerInstance = None;//self.CreateRustAnalyzerInterface(&runtime);
+        let mut rustAnalyzerInstance = None;
 
         let terminalSize = app.GetTerminalSize()?;
         self.area = TermRender::Rect {
@@ -163,7 +167,7 @@ impl <'a> App <'a> {
 
             self.codeTabs.CheckScopeThreads();  // no sure how this went missing....
 
-            let _updates = self.RenderFrame(app);
+            let _updates = self.RenderFrame(app);  // ignoring the redraw count (mostly used/needed for debugging)
 
             let termSize = app.GetTerminalSize()?;
             self.area = TermRender::Rect {
@@ -173,9 +177,9 @@ impl <'a> App <'a> {
 
             // the .read is ugly, but whatever. It's probably fine if polling stops while
             // processing the events
-            self.HandleKeyEvents(&keyParser.read(), &mut clipboard).await;
+            self.HandleKeyEvents(&keyParser.read(), &mut clipboard, &rustAnalyzerInstance).await;
             self.HandleMouseEvents(&keyParser.read()).await;  // not sure if this will be delayed, but I think it should work? idk
-            self.HandleMixedEvents(&keyParser.read()).await;
+            self.HandleMixedEvents(&keyParser.read(), &rustAnalyzerInstance).await;
             keyParser.write().ClearEvents();
 
             let end = std::time::SystemTime::now();
@@ -189,7 +193,7 @@ impl <'a> App <'a> {
             // so regardless of the sleep function, a blocking or non-blocking sleep call
             // won't impact the executor's ability to poll other futures.
             std::thread::sleep(std::time::Duration::from_secs_f64(difference));
-            if self.codeTabs.tabs.is_empty() {  continue;  }
+            //if self.codeTabs.tabs.is_empty() {  continue;  }
             //self.debugInfo = format!("{}; {} | {} | {}", _updates, self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
         }
 
@@ -198,7 +202,8 @@ impl <'a> App <'a> {
         Ok(())
     }
 
-    fn HandleRustAnalyzer (&mut self, rustAnalyzer: &mut Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
+    fn HandleRustAnalyzer (&mut self,
+                           rustAnalyzer: &mut Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
                            runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>,
                            lastPolled: &mut std::time::Instant
     ) {
@@ -212,7 +217,8 @@ impl <'a> App <'a> {
             let currentTime = std::time::Instant::now();  // once connected this will no longer be called
             if currentTime.duration_since(*lastPolled).as_secs_f64() > 15.0 {
                 self.debugInfo = String::from("Trying to connect...");
-                *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime, self.fileBrowser.fileTree.pathName.clone());
+                let pathway = self.fileBrowser.fileTree.pathName.clone();
+                *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime, pathway);
                 *lastPolled = std::time::Instant::now();
             } else {
                 self.debugInfo = String::from("Waiting to connect...");
@@ -222,14 +228,14 @@ impl <'a> App <'a> {
 
             // going through the responses and handling them
             let mut analyzer = rustAnalyzer.as_mut().unwrap().write();
-            while let Some(event) = analyzer.PopResponse() {
+            while let Some(_event) = analyzer.PopResponse() {
                 // todo!   handle the event
             }
         }
     }
 
-    async fn HandleMixedEvents (&mut self, keyEvents: &KeyParser) {
-        self.PressedLoadFile(keyEvents).await;
+    async fn HandleMixedEvents<'b> (&mut self, keyEvents: &KeyParser, rustAnalyzer: RustAnalyzerLsp<'b>) {
+        self.PressedLoadFile(keyEvents, rustAnalyzer).await;
     }
 
     fn GetEventHandlerHandle (&mut self,
@@ -275,9 +281,11 @@ impl <'a> App <'a> {
             let rustAnalyzer = std::sync::Arc::new(parking_lot::RwLock::new(rustAnalyzer));
             let rustAnalyzerClone = rustAnalyzer.clone();
             // creating a unique runtime for the lsp (communication will be done through the Arc <rustAnalyzer>)
+            let HandleLspErrors = Self::HandleLspErrors;
             runtime.write().AddTask(Box::pin(async move {
 
                 // the runtime to manage/handle all lsp communication
+                let mut errorCount: Vec <std::time::Instant> = vec![];
                 let mut iterationCount = 0;
                 loop {
                     if iterationCount > languageServer::SYNCHRONIZE_COUNT {
@@ -294,6 +302,7 @@ impl <'a> App <'a> {
                             // seems to throw an error which would be ExitStatus::Error? Or maybe check
                             // the type of event or something to try and diagnose or avoid the problem (
                             // or provide feedback to the user on where the issue is occurring)
+                            // errors seem to be separate though? Do I need to track this?
 
                             // re-appending the event to ensure it will eventually be handled
                             // the event is pushed to the back of the queue incase it continues to fail
@@ -302,10 +311,12 @@ impl <'a> App <'a> {
                             rustAnalyzerClone.write().NewEventBack(event);
                         },
                         languageServer::ExitStatus::Error => {
-                            // maybe try to drop and recreate it?
-                            // for now not doing anything
+                            // handling the error; this may be a blocking task, but everything
+                            // is handled safely to do such. Safe connection drops are still ensured
+                            // regardless of its blocking status
+                            HandleLspErrors(&mut errorCount, &rustAnalyzerClone).await;
                         },
-                        _ => {}  // ignoring out responses (such as Valid)
+                        _ => {}  // ignoring other responses (such as Valid)
                     }
                     // the lsp will be updated every 1/10 of a second to avoid excessive cpu usage
                     // blocking the async task is safe using this runtime; it won't block other futures from executing
@@ -317,6 +328,44 @@ impl <'a> App <'a> {
             }));
             return Some(rustAnalyzer);
         } None
+    }
+
+    // this actually seems to properly disconnect and reconnect, wow
+    async fn HandleLspErrors(errorCount: &mut Vec <std::time::Instant>,
+                             rustAnalyzer: &std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>,
+    ) {
+        let currentTime = std::time::Instant::now();
+        errorCount.push(currentTime.clone());
+        for _ in 0..errorCount.len() {
+            if currentTime.duration_since(errorCount[0]).as_secs_f64() > 45.0 {
+                errorCount.remove(0);
+            }
+        }
+
+        // if there are 5 errors over 45 seconds, then restart the lsp connection
+        // hopefully this will ensure it's actually a prolonged outage and not short term drop
+        if errorCount.len() >= 5 {
+            // replacing the instance and dropping the old one
+            // this should re-initialize a new instance of the rust-analyzer binary
+            let filePath = rustAnalyzer.read().filePath.clone();
+            // because this is dropped, this thread doesn't require a clean shutdown during this
+            // therefor, blocking tasks are safe
+            rustAnalyzer.write().DropConnection();  // dropping the connection to ensure safety
+            let mut newInstance = None;
+            while newInstance.is_none() {
+                // waiting 5.0 seconds between each attempt to prevent excessive cpu usage
+                // the long wait is safe because of the runtime manager and because the connection
+                // was already safely dropped using .DropConnection
+                std::thread::sleep(std::time::Duration::from_millis(5000));
+                // creating the instance after waiting so if a valid instance is created as
+                // the application is closed or crashes, it should still safely drop the connection
+                newInstance = RustAnalyzer::new(filePath.clone());
+                futures::pending!();  // awaiting anyway (even though blocking tasks are safe in this context)
+            }
+            // replacing the instance; in .drop .DropConnection shouldn't be called because it already was
+            let mut lock = rustAnalyzer.write();
+            *lock = newInstance.unwrap();
+        }
     }
 
     async fn HandleMainLoop (&mut self,
@@ -739,7 +788,11 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn TypeCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn TypeCode<'b> (&mut self,
+                           keyEvents: &KeyParser,
+                           _clipBoard: &mut Clipboard,
+                           rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         // making sure command + s or other commands aren't being pressed
         if !(keyEvents.ContainsModifier(&KeyModifiers::Command) ||
             keyEvents.ContainsModifier(&KeyModifiers::Control) ||
@@ -748,29 +801,33 @@ impl <'a> App <'a> {
             for chr in &keyEvents.charEvents {
                 if *chr == '(' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("()".to_string(), &self.luaSyntaxHighlightScripts).await;
+                        .InsertChars("()".to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '{' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("{}".to_string(), &self.luaSyntaxHighlightScripts).await;
+                        .InsertChars("{}".to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '[' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("[]".to_string(), &self.luaSyntaxHighlightScripts).await;
+                        .InsertChars("[]".to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else if *chr == '\"' {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars("\"\"".to_string(), &self.luaSyntaxHighlightScripts).await;
+                        .InsertChars("\"\"".to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
                     self.codeTabs.tabs[self.lastTab].cursor.1 -= 1;
                 } else {
                     self.codeTabs.tabs[self.lastTab]
-                        .InsertChars(chr.to_string(), &self.luaSyntaxHighlightScripts).await;
+                        .InsertChars(chr.to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
                 }
             }
         }
     }
 
-    async fn DeleteCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn DeleteCode<'b> (&mut self,
+                             keyEvents: &KeyParser,
+                             _clipBoard: &mut Clipboard,
+                             rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         let mut numDel = 1;
         let mut offset = 0;
 
@@ -796,7 +853,7 @@ impl <'a> App <'a> {
 
         self.codeTabs.tabs[
             self.lastTab
-        ].DelChars(numDel, offset, &self.luaSyntaxHighlightScripts).await;
+        ].DelChars(numDel, offset, &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
     }
 
     fn CloseCodePane (&mut self) {
@@ -912,23 +969,31 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn HandleCodeTabPress (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn HandleCodeTabPress<'b> (&mut self,
+                                     keyEvents: &KeyParser,
+                                     _clipBoard: &mut Clipboard,
+                                     rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         if keyEvents.ContainsModifier(&KeyModifiers::Shift) {
-            self.codeTabs.tabs[self.lastTab].UnIndent(&self.luaSyntaxHighlightScripts).await;
+            self.codeTabs.tabs[self.lastTab].UnIndent(&self.luaSyntaxHighlightScripts, rustAnalyzer).await;
         } else {
             if self.suggested.is_empty() || !keyEvents.ContainsModifier(&KeyModifiers::Option) {
                 self.codeTabs.tabs[self.lastTab]
-                    .InsertChars("    ".to_string(), &self.luaSyntaxHighlightScripts).await;
+                    .InsertChars("    ".to_string(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
             } else {
                 self.codeTabs.tabs[self.lastTab]
                     .RemoveCurrentToken_NonUpdate();
                 self.codeTabs.tabs[self.lastTab]
-                    .InsertChars(self.suggested.clone(), &self.luaSyntaxHighlightScripts).await;
+                    .InsertChars(self.suggested.clone(), &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
             }
         }
     }
 
-    async fn CutCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn CutCode<'b> (&mut self,
+                          _keyEvents: &KeyParser,
+                          clipBoard: &mut Clipboard,
+                          rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         // get the highlighted section of text.... or the line if none
         let tab = &mut self.codeTabs.tabs[self.lastTab];
         let text = tab.GetSelection();
@@ -936,21 +1001,25 @@ impl <'a> App <'a> {
 
         // clearing the rest of the selection
         if tab.highlighting {
-            tab.DelChars(0, 0, &self.luaSyntaxHighlightScripts).await;
+            tab.DelChars(0, 0, &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
         } else {
             tab.lines[tab.cursor.0].clear();
             tab.RecalcTokens(tab.cursor.0, 0, &self.luaSyntaxHighlightScripts).await;
-            tab.CreateScopeThread();
+            tab.CreateScopeThread(tab.cursor.0, tab.cursor.0, rustAnalyzer);
             //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
         }
     }
 
-    async fn PasteCodeLoop (&mut self, splitLength: usize, i: usize) {
+    async fn PasteCodeLoop<'b> (&mut self,
+                                splitLength: usize,
+                                i: usize,
+                                rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         let tab = &mut self.codeTabs.tabs[self.lastTab];
 
         if i < splitLength {
             // why does highlight need to be set to true?????? This makes noooo sense??? I give up
-            tab.LineBreakIn(true, &self.luaSyntaxHighlightScripts).await;
+            tab.LineBreakIn(true, &self.luaSyntaxHighlightScripts, rustAnalyzer).await;
             // making sure all actions occur on the same iteration
         }
         if i >0 && i < splitLength {
@@ -963,7 +1032,11 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn PasteCode (&mut self, _keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn PasteCode<'b> (&mut self,
+                            _keyEvents: &KeyParser,
+                            clipBoard: &mut Clipboard,
+                            rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         // pasting in the text
         if let Ok(text) = clipBoard.get_text() {
             let splitText = text.split('\n');
@@ -971,9 +1044,10 @@ impl <'a> App <'a> {
             for (i, line) in splitText.enumerate() {
                 if line.is_empty() {  continue;  }
                 self.codeTabs.tabs[self.lastTab].InsertChars(
-                    line.to_string(), &self.luaSyntaxHighlightScripts
+                    line.to_string(), &self.luaSyntaxHighlightScripts,
+                    rustAnalyzer
                 ).await;
-                self.PasteCodeLoop(splitLength, i).await;
+                self.PasteCodeLoop(splitLength, i, rustAnalyzer).await;
             }
         }
     }
@@ -1001,16 +1075,24 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn HandleUndoRedoCode (&mut self, keyEvents: &KeyParser, _clipBoard: &mut Clipboard) {
+    async fn HandleUndoRedoCode<'b> (&mut self,
+                                     keyEvents: &KeyParser,
+                                     _clipBoard: &mut Clipboard,
+                                     rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         if keyEvents.ContainsModifier(&KeyModifiers::Shift) ||
             keyEvents.charEvents.contains(&'r') {  // common/control + r | z+shift = redo
-            self.codeTabs.tabs[self.lastTab].Redo(&self.luaSyntaxHighlightScripts).await;
+            self.codeTabs.tabs[self.lastTab].Redo(&self.luaSyntaxHighlightScripts, rustAnalyzer).await;
         } else {
-            self.codeTabs.tabs[self.lastTab].Undo(&self.luaSyntaxHighlightScripts).await;
+            self.codeTabs.tabs[self.lastTab].Undo(&self.luaSyntaxHighlightScripts, rustAnalyzer).await;
         }
     }
 
-    async fn HandleCodeCommands (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn HandleCodeCommands<'b> (&mut self,
+                                     keyEvents: &KeyParser,
+                                     clipBoard: &mut Clipboard,
+                                     rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.ContainsChar('s')
         {
@@ -1025,7 +1107,7 @@ impl <'a> App <'a> {
                 keyEvents.charEvents.contains(&'u') ||  // control/command u = undo
                 keyEvents.charEvents.contains(&'r'))  // control/command + r = redo
         {
-            self.HandleUndoRedoCode(keyEvents, clipBoard).await;
+            self.HandleUndoRedoCode(keyEvents, clipBoard, rustAnalyzer).await;
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'c')
         {
@@ -1035,19 +1117,23 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'x')
         {
-            self.CutCode(keyEvents, clipBoard).await;
+            self.CutCode(keyEvents, clipBoard, rustAnalyzer).await;
         } else if keyEvents.ContainsModifier(&self.preferredCommandKeybind) &&
             keyEvents.charEvents.contains(&'v')
         {
-            self.PasteCode(keyEvents, clipBoard).await;
+            self.PasteCode(keyEvents, clipBoard, rustAnalyzer).await;
         }
     }
 
-    async fn HandleCodeKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
-        self.TypeCode(keyEvents, clipBoard).await;
+    async fn HandleCodeKeyEvents<'b> (&mut self,
+                                      keyEvents: &KeyParser,
+                                      clipBoard: &mut Clipboard,
+                                      rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
+        self.TypeCode(keyEvents, clipBoard, rustAnalyzer).await;
 
         if keyEvents.ContainsKeyCode(KeyCode::Delete) {
-            self.DeleteCode(keyEvents, clipBoard).await;
+            self.DeleteCode(keyEvents, clipBoard, rustAnalyzer).await;
         } else if keyEvents.ContainsChar('w') &&
             keyEvents.ContainsModifier(&KeyModifiers::Option)
         {
@@ -1061,9 +1147,10 @@ impl <'a> App <'a> {
         } else if keyEvents.ContainsKeyCode(KeyCode::Down) {
             self.MoveCodeCursorDown(keyEvents, clipBoard);
         } else if keyEvents.ContainsKeyCode(KeyCode::Tab) {
-            self.HandleCodeTabPress(keyEvents, clipBoard).await;
+            self.HandleCodeTabPress(keyEvents, clipBoard, rustAnalyzer).await;
         } else if keyEvents.ContainsKeyCode(KeyCode::Return) {
-            self.codeTabs.tabs[self.lastTab].LineBreakIn(false, &self.luaSyntaxHighlightScripts).await;  // can't be highlighting if breaking?
+            self.codeTabs.tabs[self.lastTab]
+                .LineBreakIn(false, &self.luaSyntaxHighlightScripts, rustAnalyzer).await;  // can't be highlighting if breaking?
         } else if
             keyEvents.charEvents.contains(&'a') &&
             keyEvents.ContainsModifier(&KeyModifiers::Control)
@@ -1077,7 +1164,7 @@ impl <'a> App <'a> {
             tab.cursor = newCursor;
             tab.highlighting = true;
         } else {
-            self.HandleCodeCommands(keyEvents, clipBoard).await;
+            self.HandleCodeCommands(keyEvents, clipBoard, rustAnalyzer).await;
         }
     }
 
@@ -1220,14 +1307,18 @@ impl <'a> App <'a> {
         }
     }
 
-    async fn HandleKeyEvents (&mut self, keyEvents: &KeyParser, clipBoard: &mut Clipboard) {
+    async fn HandleKeyEvents<'b> (&mut self,
+                                  keyEvents: &KeyParser,
+                                  clipBoard: &mut Clipboard,
+                                  rustAnalyzer: RustAnalyzerLsp<'b>
+    ) {
         match self.appState {
             AppState::CommandPrompt => {
                 self.HandleCommandPromptKeyEvents(keyEvents);
             },
             AppState::Tabs => {
                 if !self.codeTabs.tabs.is_empty() {
-                    self.HandleCodeKeyEvents(keyEvents, clipBoard).await;
+                    self.HandleCodeKeyEvents(keyEvents, clipBoard, rustAnalyzer).await;
                 }
                 if self.tabState != TabState::Code {
                     self.tabState = TabState::Code
@@ -2179,6 +2270,10 @@ make the larger context and recalculation of scopes & specific variables be calc
 multi-line parameters on functions/methods aren't correctly read
 multi-line comments aren't updated properly when just pressing return (on empty lines)
     it may not be storing anything on empty lines?
+
+
+! whenever loading into a workspace, the lsp initialization seems to cause a brief freeze; figure that out
+! it may be due to some .write/.read or i/o limits or something else, idk. It should be all on multiple other threads
 
 */
 

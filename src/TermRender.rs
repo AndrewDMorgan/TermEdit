@@ -1206,14 +1206,12 @@ impl App {
         // this should reduce CPU usage by a fair bit and allow a fast refresh rate if needed
         let mut updated = false;
         for window in &self.activeWindows {
-            if window.0.wasUpdated {  continue;  }  //. !window.0.updated.contains(&false)
+            if window.0.wasUpdated {  continue;  }
             updated = true;
             break;
         }
-        if !updated {  return 0;  }  // Ok(());  }
-
-        // sorting the windows based on the horizontal position (replaced by the sorting on the background thread)
-
+        if !updated {  return 0;  }
+        
         // stores the draw calls
         let mut drawCalls = vec![];
 

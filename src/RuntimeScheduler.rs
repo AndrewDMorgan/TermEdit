@@ -12,14 +12,17 @@ impl Drop for Runtime {
     fn drop(&mut self) {
         // does nothing, lets the os clean up the threads so nothing is blocked
         // unfortunately threads can't be manually killed so no manual clean up
-        // is possible
+        // isn't possible
+        // the os cleans up the threads, right? I think it does
     }
 }
 
 impl Runtime {
-    /// does a soft shutdown. This will only conclude once all future tasks return as pending. A
-    /// blocking operation like std::time::sleep(...) will block this operation until concluded. A
-    /// soft blocking operation like .await will not block the shutdown.
+    /// does a soft shutdown. This will conclude once all future tasks return as pending or get timed out. A
+    /// blocking operation like std::time::sleep(...), if longer than the timeout duration, will be left
+    /// dangling for the os to clean up (and as such .drop would never be called, so be careful). A
+    /// soft blocking operation like .await will be properly shutdown assuming it yields to the executor at
+    /// least once during the specified period.
     pub fn SoftShutdown (&mut self) {
         for _ in 0..self.threadPool.len() {
             let (thread, sender, receiver) = self.threadPool.remove(0);
@@ -74,7 +77,7 @@ impl Runtime {
             loop {
                 if let Ok(_exitCode) = exitReceiver.try_recv() {
                     let _ = completionSender.send(true);
-                    break;  // does matter if the exit code is true or false
+                    break;  // doesn't matter if the exit code is true or false
                 }
 
                 match task.as_mut().poll(&mut cx) {

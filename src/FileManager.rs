@@ -159,6 +159,7 @@ use crate::{AppState, TabState};
 use crate::App as MainApp;
 use crate::CodeTabs::CodeTab;
 use crate::eventHandler::{KeyCode, KeyParser, MouseEvent, MouseEventType, MouseState};
+use crate::languageServer::RustAnalyzer;
 
 static VALID_EXTENSIONS: [&str; 13] = [
     "txt",
@@ -435,7 +436,10 @@ impl <'a> MainApp <'a> {
         }
     }
 
-    pub(crate) async fn PressedLoadFile (&mut self, events: &KeyParser) {
+    pub(crate) async fn PressedLoadFile (&mut self,
+                                         events: &KeyParser,
+                                         rustAnalyzer: &Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
+    ) {
         if self.fileBrowser.fileOptions.selectedOptionsTab != OptionTabs::Null {
             self.HandleOptionsKeycodes(events);
         }
@@ -462,10 +466,14 @@ impl <'a> MainApp <'a> {
         // making sure it's not out of range
         if !onFiles {  return;  }
 
-        self.HandleFilesMousePress(event, height).await;
+        self.HandleFilesMousePress(event, height, rustAnalyzer).await;
     }
 
-    async fn HandleFilesMousePress (&mut self, _event: &MouseEvent, height: usize) {
+    async fn HandleFilesMousePress (&mut self,
+                                    _event: &MouseEvent,
+                                    height: usize,
+                                    rustAnalyzer: &Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
+    ) {
         // getting the file, and checking if it's a directory or not
         let fileInfo = &self.allFiles[height];
         if fileInfo.fileType == FileType::Directory {
@@ -526,7 +534,7 @@ impl <'a> MainApp <'a> {
             tab.lineTokenFlags.write().push(vec!());
             tab.lineTokens.write().push(value);
         }
-        tab.CreateScopeThread();
+        tab.CreateScopeThread(0, tab.lines.len(), rustAnalyzer);
         //(tab.scopes, tab.scopeJumps, tab.linearScopes) = GenerateScopes(&tab.lineTokens, &tab.lineTokenFlags, &mut tab.outlineKeywords);
 
         self.codeTabs.tabs.push(tab);
