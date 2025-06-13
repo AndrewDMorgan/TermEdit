@@ -332,6 +332,7 @@ impl CodeTab {
         let ending = self.fileName.split('.').next_back().unwrap_or("").to_string();
 
         let rustAnalyzer = rustAnalyzer.clone();
+        let charIndex = self.cursor.1;
 
         self.scopeGenerationHandles.push((
             std::thread::spawn(move || {
@@ -339,9 +340,13 @@ impl CodeTab {
 
                 // put in a request for a lsp update between start and end
                 // maybe poll this to make sure it doesn't block anything? idk
-                let completion = false;  // do something with this at some point
+                //let completion = false;  // do something with this at some point
                 if rustAnalyzer.is_some() {
-                    rustAnalyzer.as_ref().unwrap().write().NewEvent(RustEvents::UpdatedLines(start, end, completion));
+                    rustAnalyzer.as_ref()
+                                .unwrap()
+                                .write()
+                                .NewEvent(RustEvents::UpdatedLines(start, end, charIndex, String::from(""))
+                    );
                 }
 
                 let (newScopes, newJumps, newLinear) =

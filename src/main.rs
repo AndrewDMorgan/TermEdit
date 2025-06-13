@@ -1,10 +1,13 @@
 // snake case is just bad
 #![allow(non_snake_case)]
+
+//#![feature(buf_read_has_data_left)]
+
 use futures;
 
 
+use std::time::{Duration, Instant, SystemTime};
 use std::io::Read;
-use std::ops::Sub;
 use vte::Parser;
 
 use crossterm::terminal::{enable_raw_mode, disable_raw_mode};
@@ -52,7 +55,7 @@ pub enum TabState {
     Tabs,
 }
 
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub enum AppState {
     Tabs,
     CommandPrompt,
@@ -66,7 +69,7 @@ pub enum MenuState {
 }
 
 type LuaScripts = std::sync::Arc<parking_lot::Mutex<std::collections::HashMap <Languages, mlua::Function>>>;
-pub type RustAnalyzerLsp <'a> = &'a Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>;
+pub type RustAnalyzerLsp<'a> = &'a Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>;
 
 #[derive(Debug, Default)]
 pub struct App <'a> {
@@ -115,7 +118,7 @@ impl <'a> App <'a> {
         enable_raw_mode()?; // Enable raw mode for direct input handling
 
         // making sure the lsp can immediately be connected without having to wait
-        let mut lastPolled = std::time::Instant::now() - std::time::Duration::new(30,0);
+        let mut lastPolled = Instant::now() - Duration::new(30,0);
         let mut rustAnalyzerInstance = None;
 
         let terminalSize = app.GetTerminalSize()?;
@@ -156,7 +159,7 @@ impl <'a> App <'a> {
         let exit = self.exit.clone();
 
         loop {
-            let start = std::time::SystemTime::now();
+            let start = SystemTime::now();
 
             let exitRead = *exit.read();
             if exitRead {  break;  }
@@ -182,7 +185,7 @@ impl <'a> App <'a> {
             self.HandleMixedEvents(&keyParser.read(), &rustAnalyzerInstance).await;
             keyParser.write().ClearEvents();
 
-            let end = std::time::SystemTime::now();
+            let end = SystemTime::now();
             let elapsedTime = end.duration_since(start).unwrap().as_micros() as f64 * 0.000001;  // in seconds
             const FPS_AIM: f64 = 1f64 / 60f64;  // the target fps (forces it to stall to this to ensure low CPU usage)
             let difference = (FPS_AIM - elapsedTime).max(0f64) * 0.9;
@@ -192,7 +195,7 @@ impl <'a> App <'a> {
             // The custom async runtime manager assigns a unique thread to each async task,
             // so regardless of the sleep function, a blocking or non-blocking sleep call
             // won't impact the executor's ability to poll other futures.
-            std::thread::sleep(std::time::Duration::from_secs_f64(difference));
+            std::thread::sleep(Duration::from_secs_f64(difference));
             //if self.codeTabs.tabs.is_empty() {  continue;  }
             //self.debugInfo = format!("{}; {} | {} | {}", _updates, self.codeTabs.tabs[self.lastTab].resetCache.len(), self.codeTabs.tabs[self.lastTab].scrollCache.len(), self.codeTabs.tabs[self.lastTab].shiftCache);
         }
@@ -205,7 +208,7 @@ impl <'a> App <'a> {
     fn HandleRustAnalyzer (&mut self,
                            rustAnalyzer: &mut Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>>,
                            runtime: &std::sync::Arc <parking_lot::RwLock <Runtime>>,
-                           lastPolled: &mut std::time::Instant
+                           lastPolled: &mut Instant
     ) {
         if self.appState == AppState::Menu {
             self.debugInfo = String::from("Waiting...");
@@ -214,12 +217,12 @@ impl <'a> App <'a> {
         }
         // trying to connect with the lsp (every 10 seconds)
         if rustAnalyzer.is_none() {
-            let currentTime = std::time::Instant::now();  // once connected this will no longer be called
+            let currentTime = Instant::now();  // once connected this will no longer be called
             if currentTime.duration_since(*lastPolled).as_secs_f64() > 15.0 {
                 self.debugInfo = String::from("Trying to connect...");
                 let pathway = self.fileBrowser.fileTree.pathName.clone();
                 *rustAnalyzer = self.CreateRustAnalyzerInterface(&runtime, pathway);
-                *lastPolled = std::time::Instant::now();
+                *lastPolled = Instant::now();
             } else {
                 self.debugInfo = String::from("Waiting to connect...");
             }
@@ -227,10 +230,16 @@ impl <'a> App <'a> {
             self.debugInfo = String::from("Connected");
 
             // going through the responses and handling them
-            let mut analyzer = rustAnalyzer.as_mut().unwrap().write();
+            // handling timeouts incase the polling process uses the instance for too long; this should prevent frame stutters
+            let analyzer = rustAnalyzer.as_mut().unwrap().try_write_for(Duration::from_millis(25));
+            if analyzer.is_none() {  return;  }  // incase a timeout happens to prevent stalling
+            let mut analyzer = analyzer.unwrap();
             while let Some(_event) = analyzer.PopResponse() {
                 // todo!   handle the event
             }
+            // updating the filepath to ensure events are correctly handled
+            if self.codeTabs.tabs.is_empty() {  return;  }
+            *analyzer.filePath.1.write() = self.codeTabs.tabs[self.lastTab].path.clone();
         }
     }
 
@@ -276,16 +285,19 @@ impl <'a> App <'a> {
                                     filePath: String,
     ) -> Option <std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>> {
         // only creating an instance if rust analyzer is found and able to be communicated with
-        let rustAnalyzer = RustAnalyzer::new(filePath);
+
+
+        // this is what's causing the stalling upon opening a file
+        let rustAnalyzer = RustAnalyzer::new(filePath);  // this will block the main thread until completion....
+
         if let Some(rustAnalyzer) = rustAnalyzer {
             let rustAnalyzer = std::sync::Arc::new(parking_lot::RwLock::new(rustAnalyzer));
             let rustAnalyzerClone = rustAnalyzer.clone();
             // creating a unique runtime for the lsp (communication will be done through the Arc <rustAnalyzer>)
             let HandleLspErrors = Self::HandleLspErrors;
             runtime.write().AddTask(Box::pin(async move {
-
                 // the runtime to manage/handle all lsp communication
-                let mut errorCount: Vec <std::time::Instant> = vec![];
+                let mut errorCount: Vec <Instant> = vec![];
                 let mut iterationCount = 0;
                 loop {
                     if iterationCount > languageServer::SYNCHRONIZE_COUNT {
@@ -316,11 +328,14 @@ impl <'a> App <'a> {
                             // regardless of its blocking status
                             HandleLspErrors(&mut errorCount, &rustAnalyzerClone).await;
                         },
+                        languageServer::ExitStatus::ReadingBlockedTimeOut => {
+                            // do something or not, idk
+                        },
                         _ => {}  // ignoring other responses (such as Valid)
                     }
                     // the lsp will be updated every 1/10 of a second to avoid excessive cpu usage
                     // blocking the async task is safe using this runtime; it won't block other futures from executing
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(100));
                     futures::pending!();  // should yield the task at some point...
                     iterationCount += 1;
                 }
@@ -331,10 +346,10 @@ impl <'a> App <'a> {
     }
 
     // this actually seems to properly disconnect and reconnect, wow
-    async fn HandleLspErrors(errorCount: &mut Vec <std::time::Instant>,
+    async fn HandleLspErrors(errorCount: &mut Vec <Instant>,
                              rustAnalyzer: &std::sync::Arc <parking_lot::RwLock <RustAnalyzer>>,
     ) {
-        let currentTime = std::time::Instant::now();
+        let currentTime = Instant::now();
         errorCount.push(currentTime.clone());
         for _ in 0..errorCount.len() {
             if currentTime.duration_since(errorCount[0]).as_secs_f64() > 45.0 {
@@ -347,7 +362,7 @@ impl <'a> App <'a> {
         if errorCount.len() >= 5 {
             // replacing the instance and dropping the old one
             // this should re-initialize a new instance of the rust-analyzer binary
-            let filePath = rustAnalyzer.read().filePath.clone();
+            let filePath = rustAnalyzer.read().filePath.0.clone();
             // because this is dropped, this thread doesn't require a clean shutdown during this
             // therefor, blocking tasks are safe
             rustAnalyzer.write().DropConnection();  // dropping the connection to ensure safety
@@ -356,7 +371,7 @@ impl <'a> App <'a> {
                 // waiting 5.0 seconds between each attempt to prevent excessive cpu usage
                 // the long wait is safe because of the runtime manager and because the connection
                 // was already safely dropped using .DropConnection
-                std::thread::sleep(std::time::Duration::from_millis(5000));
+                std::thread::sleep(Duration::from_millis(5000));
                 // creating the instance after waiting so if a valid instance is created as
                 // the application is closed or crashes, it should still safely drop the connection
                 newInstance = RustAnalyzer::new(filePath.clone());
@@ -399,7 +414,7 @@ impl <'a> App <'a> {
             );
 
             self.codeTabs.tabs[tabIndex].UpdateScroll(events.scrollAccumulate * self.dtScalar);
-            let currentTime = std::time::SystemTime::now()
+            let currentTime = SystemTime::now()
                 .duration_since(std::time::SystemTime::UNIX_EPOCH)
                 .expect("Time went backwards...")
                 .as_millis();
@@ -413,8 +428,8 @@ impl <'a> App <'a> {
             event.position.0 as usize,
             &mut self.lastTab
         );
-        let currentTime = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        let currentTime = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
             .expect("Time went backwards...")
             .as_millis();
         self.codeTabs.tabs[self.lastTab].pauseScroll = currentTime;
@@ -609,8 +624,8 @@ impl <'a> App <'a> {
 
             match event.eventType {
                 MouseEventType::Down if !self.codeTabs.tabs.is_empty() => {
-                    let currentTime = std::time::SystemTime::now()
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    let currentTime = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
                         .expect("Time went backwards...")
                         .as_millis();
                     if currentTime.saturating_sub(self.lastScrolled) < 8
@@ -618,8 +633,8 @@ impl <'a> App <'a> {
                     self.HandleScrollEvent(event, events);
                 },
                 MouseEventType::Up if !self.codeTabs.tabs.is_empty() => {
-                    let currentTime = std::time::SystemTime::now()
-                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    let currentTime = SystemTime::now()
+                        .duration_since(SystemTime::UNIX_EPOCH)
                         .expect("Time went backwards...")
                         .as_millis();
                     if currentTime.saturating_sub(self.lastScrolled) < 8
@@ -1332,29 +1347,28 @@ impl <'a> App <'a> {
         
         // handling escape (switching tabs)
         if keyEvents.ContainsKeyCode(KeyCode::Escape) &&
-            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null &&
-            !self.codeTabs.tabs.is_empty()
+            self.fileBrowser.fileOptions.selectedOptionsTab == OptionTabs::Null
         {
             self.appState = match self.appState {
-                AppState::Tabs => {
+                AppState::Tabs if !self.codeTabs.tabs.is_empty() => {
                     self.tabState = TabState::Files;
 
                     AppState::CommandPrompt
                 },
-                AppState::CommandPrompt => {
+                AppState::CommandPrompt if !self.codeTabs.tabs.is_empty() => {
                     if matches!(self.tabState, TabState::Files | TabState::Tabs) {
                         self.tabState = TabState::Code;
                     }
 
                     AppState::Tabs
                 },
-                _ => {
+                AppState::Menu => {
                     if self.menuState == MenuState::Settings {
                         self.menuState = MenuState::Welcome;
                     }
-
                     AppState::Menu
                 },
+                _ => {  self.appState.clone()  },
             }
         }
     }
@@ -2278,8 +2292,10 @@ multi-line comments aren't updated properly when just pressing return (on empty 
 */
 
 fn main() {
+    // this runtime is implemented in a way where blocking tasks/blocking thread sleeps don't block others tasks from running
+    // each task gets its own thread so blocking is safe unless the section requires a safe/soft exit instead of a hard drop
     let runtime = std::sync::Arc::new(parking_lot::RwLock::new(Runtime::default()));
-    let clonedRuntime = runtime.clone();
+    let clonedRuntime = runtime.clone();  // creating a clone of the runtime manager (each task gets a unique thread)
     runtime.write().AddTask(Box::pin(async {
         let mut termApp = TermRender::App::new();
 
@@ -2294,7 +2310,7 @@ fn main() {
         if completed || runtime.read().is_empty() {  break;  }
         // waiting to reduce cpu usage (this doesn't directly poll the futures; it polls the threads to check if they can be cleaned up)
         // this won't prevent anything from running. It will only cause a slight delay in when threads get joined.
-        std::thread::sleep(std::time::Duration::from_millis(250));
+        std::thread::sleep(Duration::from_millis(250));
     }
 
     // softly shutting down any non-blocked tasks (literally only being used to ensure rust-analyzer
